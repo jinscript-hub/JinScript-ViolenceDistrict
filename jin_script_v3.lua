@@ -924,7 +924,9 @@ end
 ----------------------------------------------------------------------
 -- UI: WINDOW
 ----------------------------------------------------------------------
-local gui = Instance.new("ScreenGui")
+local gui, HEAD, PADL, PADR, curSize, curRatio, isOpen, setOpen, applyLayout, tabHolder, content
+do -- scope window (limit 200 local per chunk)
+gui = Instance.new("ScreenGui")
 gui.Name = "JinScript"
 gui.ResetOnSpawn = false
 gui.IgnoreGuiInset = true
@@ -935,13 +937,13 @@ local ICON = loadLogo()
 local cam = workspace.CurrentCamera
 local vp = cam and cam.ViewportSize or Vector2.new(844, 390)
 local SB = 46                         -- lebar sidebar (ikon doang)
-local HEAD = 38                       -- tinggi header
-local PADL, PADR = 12, 14
+HEAD = 38                       -- tinggi header
+PADL, PADR = 12, 14
 
 -- ukuran + rasio (preset). Angka rasio = ukuran desain sebelum diskala
 local SIZES = {Kecil = 0.7, Sedang = 0.85, Besar = 1.0, Jumbo = 1.15}
 local RATIOS = {["4:3"] = {500, 375}, ["16:10"] = {560, 350}, ["16:9"] = {600, 338}, ["21:9"] = {680, 291}}
-local curSize, curRatio = "Sedang", "16:9"
+curSize, curRatio = "Sedang", "16:9"
 local function layoutScale()
     local r = RATIOS[curRatio]
     local c = workspace.CurrentCamera
@@ -958,8 +960,8 @@ grad(main, T.bg0, T.bg1, 35)
 grad(outline(main, WHITE, 1), T.acc0, T.stroke, 45)
 local uiScale = new("UIScale", {Scale = layoutScale()}, main)
 
-local isOpen = false
-local function setOpen(v)
+isOpen = false
+function setOpen(v)
     isOpen = v
     if v then
         main.Visible = true
@@ -971,7 +973,7 @@ local function setOpen(v)
     end
 end
 -- ganti ukuran / rasio dengan transisi halus
-local function applyLayout()
+function applyLayout()
     local r = RATIOS[curRatio]
     local info = TweenInfo.new(0.35, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
     TS:Create(main, info, {Size = UDim2.fromOffset(r[1], r[2])}):Play()
@@ -998,12 +1000,12 @@ else
     j.Size = UDim2.new(1, 0, 0, HEAD)
 end
 
-local tabHolder = new("Frame", {Size = UDim2.new(1, 0, 1, -(HEAD + 8)), Position = UDim2.fromOffset(0, HEAD + 6), BackgroundTransparency = 1}, side)
+tabHolder = new("Frame", {Size = UDim2.new(1, 0, 1, -(HEAD + 8)), Position = UDim2.fromOffset(0, HEAD + 6), BackgroundTransparency = 1}, side)
 new("UIListLayout", {Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder,
     HorizontalAlignment = Enum.HorizontalAlignment.Center}, tabHolder)
 
 -- area isi
-local content = new("Frame", {Size = UDim2.new(1, -SB - 1, 1, 0), Position = UDim2.new(0, SB + 1, 0, 0), BackgroundTransparency = 1}, main)
+content = new("Frame", {Size = UDim2.new(1, -SB - 1, 1, 0), Position = UDim2.new(0, SB + 1, 0, 0), BackgroundTransparency = 1}, main)
 local header = new("Frame", {Size = UDim2.new(1, 0, 0, HEAD), BackgroundTransparency = 1, Active = true}, content)
 new("Frame", {Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = T.stroke, BorderSizePixel = 0}, header)
 local ttl = mkLabel(header, "JÌN SCRIPT", 12, T.text, F_BOLD)
@@ -1068,6 +1070,7 @@ else
         TextStrokeTransparency = 0.4, AutoButtonColor = false}, gui)
 end
 draggable(fab, fab, function() setOpen(not isOpen) end)
+end -- /scope window
 
 notify = function(t, c)
     local f = new("Frame", {Size = UDim2.fromOffset(240, 42), AnchorPoint = Vector2.new(0.5, 0),
@@ -1358,9 +1361,11 @@ local tSC = addTab("Skill Check", "target")
 local tMisc = addTab("Misc", "sliders")
 local tSet = addTab("Settings", "gear")
 
+local curFps, refreshDash
+do -- scope dashboard (limit 200 local per chunk)
 local homeCol = tHome.cols[1]
 local selectedUid = lp.UserId
-local curFps = 0
+curFps = 0
 local chipSig = ""
 local avatarTag = {}
 
@@ -1495,7 +1500,7 @@ local function rebuildChips(list)
     end
 end
 
-local function refreshDash()
+function refreshDash()
     local players = Players:GetPlayers()
     table.sort(players, function(a, b)
         if a == b then return false end
@@ -1566,6 +1571,7 @@ local function refreshDash()
     setStat(rGrid[2][2], "Hooks", tostring(cnt("hook")))
     setStat(rGrid[2][3], "Windows", tostring(cnt("window")))
 end
+end -- /scope dashboard
 
 ----------------------------------------------------------------------
 -- HALAMAN: ESP / SKILL CHECK / MISC / SETTINGS
