@@ -1,4 +1,4 @@
--- Jìn Script v3.2 | Violence District
+-- Jìn Script v3.3 | Violence District
 -- Menu: RightShift (PC) / tap logo (HP) | F6 = skill check on/off
 -- Semua file (logo, ikon, config) ada di workspace/jin_hub/
 
@@ -85,11 +85,12 @@ end)
 -- STATE
 ----------------------------------------------------------------------
 local CATS = {
-    {key = "survivor",  label = "Survivor",  color = {0, 255, 120},   on = true,  player = true},
-    {key = "killer",    label = "Killer",    color = {255, 50, 50},   on = true,  player = true},
-    {key = "chased",    label = "Chased",    color = {255, 140, 0},   on = true,  player = true},
-    {key = "knocked",   label = "Knocked",   color = {255, 235, 0},   on = true,  player = true},
-    {key = "hooked",    label = "Hooked",    color = {200, 0, 0},     on = true,  player = true},
+    {key = "survivor",  label = "Survivor (sehat)", color = {0, 255, 80}, on = true,  player = true},
+    {key = "injured",   label = "Kena hit",  color = {255, 235, 0},   on = true,  player = true},
+    {key = "knocked",   label = "Jatuh",     color = {255, 40, 40},   on = true,  player = true},
+    {key = "hooked",    label = "Digantung", color = {130, 0, 0},     on = true,  player = true},
+    {key = "chased",    label = "Chased (!)", color = {255, 140, 0},  on = true,  player = true},
+    {key = "killer",    label = "Killer",    color = {0, 150, 255},   on = true,  player = true},
     {key = "generator", label = "Generator", color = {170, 80, 255},  on = true},
     {key = "pallet",    label = "Pallet",    color = {0, 230, 255},   on = false},
     {key = "window",    label = "Window",    color = {255, 235, 0},   on = false},
@@ -101,6 +102,7 @@ for _, c in ipairs(CATS) do CAT[c.key] = c end
 
 local S = {
     cat = {}, names = true, dist = true, textSize = 13, maxDist = 600, chaseDist = 40,
+    cone = {on = true, range = 70, angle = 100, color = Color3.fromRGB(255, 60, 60), transp = 0.75},
     sc = {enabled = true, mode = "Perfect"},
     fov = {on = false, val = 70},
     fb = {on = false, bright = 2},
@@ -188,7 +190,7 @@ end
 ----------------------------------------------------------------------
 local STATE_KEYS = {
     hooked  = {"hook", "sacrific", "caged"},
-    knocked = {"knock", "downed", "isdown", "dying", "crawl", "incap"},
+    knocked = {"knock", "downed", "isdown", "dying", "crawl", "incap", "carried"},
     chased  = {"chase", "pursu"},
 }
 local ANIM_KEYS = {
@@ -196,7 +198,7 @@ local ANIM_KEYS = {
     knocked = {"crawl", "knock", "downed", "dying", "incap"},
 }
 local STATE_ORDER = {"hooked", "knocked", "chased"}
-local TAG = {hooked = "HOOK", knocked = "DOWN", chased = "CHASE"}
+local TAG = {hooked = "HOOK", knocked = "DOWN", injured = "HIT"}
 
 local function hasKey(s, list)
     for _, k in ipairs(list) do
@@ -205,6 +207,7 @@ local function hasKey(s, list)
     return false
 end
 local function mark(text, st)
+    if text:find("unhook", 1, true) then return end
     for _, s in ipairs(STATE_ORDER) do
         if hasKey(text, STATE_KEYS[s]) then st[s] = true end
     end
@@ -265,12 +268,6 @@ local function survivorState(plr, char, hum, hrp, killers)
     scanObj(plr, st)
     scanObj(char, st)
     scanAnims(hum, st)
-    if not st.hooked and hrp.AssemblyLinearVelocity.Magnitude < 1.5 then
-        for inst in pairs(found.hook) do
-            local ok, p = pcall(function() return inst:GetPivot().Position end)
-            if ok and (p - hrp.Position).Magnitude < 4 then st.hooked = true break end
-        end
-    end
     if not st.chased and S.chaseDist > 0 then
         for _, k in ipairs(killers) do
             local delta = hrp.Position - k.hrp.Position
@@ -283,10 +280,12 @@ local function survivorState(plr, char, hum, hrp, killers)
             end
         end
     end
-    for _, s in ipairs(STATE_ORDER) do
-        if st[s] then return s end
-    end
-    return "survivor"
+    -- warna: hooked > knocked > kena hit (HP < max) > sehat. chased = icon "!" terpisah
+    local key = "survivor"
+    if st.hooked then key = "hooked"
+    elseif st.knocked then key = "knocked"
+    elseif hum.Health < hum.MaxHealth - 0.5 then key = "injured" end
+    return key, st.chased and true or false
 end
 
 local espFolder = Instance.new("Folder")
@@ -294,9 +293,9 @@ espFolder.Name = "JinESP"
 attach(espFolder)
 local pvis, ovis = {}, {}
 
-local function makeBB(part, offsetY)
+local function makeBB(part, offsetY, h)
     local bb = Instance.new("BillboardGui")
-    bb.Size = UDim2.fromOffset(200, 24)
+    bb.Size = UDim2.fromOffset(200, h or 24)
     bb.StudsOffset = Vector3.new(0, offsetY, 0)
     bb.AlwaysOnTop = true
     bb.Adornee = part
@@ -315,7 +314,7 @@ local function setLabel(bb, lbl, text, color, size)
 end
 local function destroyPlayerVis(plr)
     local v = pvis[plr]
-    if v then pcall(function() v.hl:Destroy() v.nameBB:Destroy() v.distBB:Destroy() end) pvis[plr] = nil end
+    if v then pcall(function() v.hl:Destroy() v.nameBB:Destroy() v.distBB:Destroy() v.chaseBB:Destroy() end) pvis[plr] = nil end
 end
 local function destroyObj(inst)
     local o = ovis[inst]
@@ -370,9 +369,9 @@ local function update()
             local hum = char and char:FindFirstChildOfClass("Humanoid")
             local role = roleOf(plr)
             local alive = hrp and hum and hum.Health > 0
-            local key = role
+            local key, chased = role, false
             if alive and role == "survivor" then
-                key = survivorState(plr, char, hum, hrp, killers)
+                key, chased = survivorState(plr, char, hum, hrp, killers)
                 if not S.cat[key].on then key = "survivor" end
             end
             if alive and S.cat[key].on then
@@ -387,7 +386,9 @@ local function update()
                     hl.Parent = espFolder
                     local nbb, nlbl = makeBB(hrp, 3.4)
                     local dbb, dlbl = makeBB(hrp, -3.8)
-                    v = {hl = hl, nameBB = nbb, nameLbl = nlbl, distBB = dbb, distLbl = dlbl, char = char}
+                    local cbb, clbl = makeBB(hrp, 6.6, 44)
+                    v = {hl = hl, nameBB = nbb, nameLbl = nlbl, distBB = dbb, distLbl = dlbl,
+                         chaseBB = cbb, chaseLbl = clbl, char = char}
                     pvis[plr] = v
                 end
                 local c = S.cat[key].color
@@ -397,6 +398,17 @@ local function update()
                 local nameTxt = plr.DisplayName .. (tag and (" [" .. tag .. "]") or "")
                 setLabel(v.nameBB, v.nameLbl, S.names and nameTxt or "", c, ts)
                 setLabel(v.distBB, v.distLbl, (S.dist and dist) and ("%dm"):format(dist) or "", c, ts)
+                -- chase: ! / !! / !!! makin deket killer makin banyak
+                local bang = ""
+                if chased and S.cat.chased.on then
+                    local base = S.chaseDist > 0 and S.chaseDist or 40
+                    local dk = math.huge
+                    for _, k in ipairs(killers) do
+                        dk = math.min(dk, (hrp.Position - k.hrp.Position).Magnitude)
+                    end
+                    bang = string.rep("!", dk <= base * 0.4 and 3 or (dk <= base * 0.75 and 2 or 1))
+                end
+                setLabel(v.chaseBB, v.chaseLbl, bang, S.cat.chased.color, ts + 16)
             else
                 destroyPlayerVis(plr)
             end
@@ -430,6 +442,79 @@ local function update()
             end
         end
     end
+end
+
+----------------------------------------------------------------------
+-- AREA LIAT KILLER: sektor di tanah, arah dari Char.CamLook (kamera POV killer)
+-- dibuat dari WedgePart lokal (ga replicate), ga butuh Drawing
+----------------------------------------------------------------------
+local CONE_N = 12
+local coneFolder = Instance.new("Folder")
+coneFolder.Name = tostring(math.random(1000000, 9999999))
+local coneW = {}
+for i = 1, CONE_N * 2 do
+    local w = Instance.new("WedgePart")
+    w.Anchored, w.CanCollide, w.CanQuery, w.CanTouch, w.CastShadow = true, false, false, false, false
+    w.Material = Enum.Material.Neon
+    w.Size = Vector3.new(0.05, 1, 1)
+    w.Parent = coneFolder
+    coneW[i] = w
+end
+local coneRP = RaycastParams.new()
+coneRP.FilterType = Enum.RaycastFilterType.Exclude
+
+local function tri3(a, b, c, w1, w2)
+    local ab, ac, bc = b - a, c - a, c - b
+    local abd, acd, bcd = ab:Dot(ab), ac:Dot(ac), bc:Dot(bc)
+    if abd > acd and abd > bcd then c, a = a, c
+    elseif acd > bcd and acd > abd then a, b = b, a end
+    ab, ac, bc = b - a, c - a, c - b
+    if ac:Cross(ab).Magnitude < 1e-3 then return end
+    local right = ac:Cross(ab).Unit
+    local up = bc:Cross(right).Unit
+    local back = bc.Unit
+    local h = math.abs(ab:Dot(up))
+    w1.Size = Vector3.new(0.05, h, math.abs(ab:Dot(back)))
+    w1.CFrame = CFrame.fromMatrix((a + b) / 2, right, up, back)
+    w2.Size = Vector3.new(0.05, h, math.abs(ac:Dot(back)))
+    w2.CFrame = CFrame.fromMatrix((a + c) / 2, -right, up, -back)
+end
+local function groundAt(p, fy)
+    local r = workspace:Raycast(p + Vector3.new(0, 6, 0), Vector3.new(0, -40, 0), coneRP)
+    return r and (r.Position + Vector3.new(0, 0.12, 0)) or Vector3.new(p.X, fy, p.Z)
+end
+local function updateCone()
+    if not S.cone.on or roleOf(lp) == "killer" then coneFolder.Parent = nil return end
+    local ks = getKillers()
+    local k = ks[1]
+    if not k then coneFolder.Parent = nil return end
+    local ex = {coneFolder}
+    for _, p in ipairs(Players:GetPlayers()) do if p.Character then ex[#ex + 1] = p.Character end end
+    coneRP.FilterDescendantsInstances = ex
+
+    local cl = k.char:GetAttribute("CamLook")
+    local look = (typeof(cl) == "Vector3") and cl or k.hrp.CFrame.LookVector
+    look = Vector3.new(look.X, 0, look.Z)
+    if look.Magnitude < 0.01 then
+        local lv = k.hrp.CFrame.LookVector
+        look = Vector3.new(lv.X, 0, lv.Z)
+    end
+    look = look.Unit
+
+    local o = groundAt(k.hrp.Position, k.hrp.Position.Y - 3)
+    local half = math.rad(S.cone.angle / 2)
+    local pts = {}
+    for i = 0, CONE_N do
+        local dir = CFrame.Angles(0, -half + 2 * half * (i / CONE_N), 0):VectorToWorldSpace(look)
+        pts[i] = groundAt(o + dir * S.cone.range, o.Y)
+    end
+    for i = 1, CONE_N do
+        local w1, w2 = coneW[i * 2 - 1], coneW[i * 2]
+        w1.Color, w2.Color = S.cone.color, S.cone.color
+        w1.Transparency, w2.Transparency = S.cone.transp, S.cone.transp
+        tri3(o, pts[i - 1], pts[i], w1, w2)
+    end
+    coneFolder.Parent = workspace
 end
 
 ----------------------------------------------------------------------
@@ -1499,6 +1584,9 @@ cDisp:Toggle("ESP_Names", "Nama (di atas)", true, function(v) S.names = v end)
 cDisp:Toggle("ESP_Dist", "Jarak (di bawah)", true, function(v) S.dist = v end)
 cDisp:Slider("ESP_TextSize", "Ukuran teks", 10, 24, 13, 1, function(v) S.textSize = v end)
 cDisp:Slider("ESP_MaxDist", "Jarak max objek (0 = bebas)", 0, 3000, 600, 50, function(v) S.maxDist = v end, "m")
+cDisp:Toggle("Cone_On", "Area liat killer (tanah)", true, function(v) S.cone.on = v end)
+cDisp:Slider("Cone_Angle", "Sudut area killer", 40, 180, 100, 5, function(v) S.cone.angle = v end)
+cDisp:Slider("Cone_Range", "Jarak area killer", 20, 150, 70, 5, function(v) S.cone.range = v end, "m")
 cDisp:Slider("ESP_ChaseDist", "Jarak deteksi chase (0 = off)", 0, 120, 40, 5, function(v) S.chaseDist = v end, "m")
 
 local cSC = tSC:Group("Auto skill check", 1)
@@ -1664,6 +1752,7 @@ task.spawn(function()
     end
 end)
 track(RS.RenderStepped:Connect(function(dt)
+    pcall(updateCone)
     fpsAcc, fpsN = fpsAcc + dt, fpsN + 1
     local c = workspace.CurrentCamera
     if c and S.fov.on then c.FieldOfView = S.fov.val end
@@ -1689,6 +1778,7 @@ function cleanup()
     for plr in pairs(pvis) do destroyPlayerVis(plr) end
     for inst in pairs(ovis) do destroyObj(inst) end
     pcall(function() espFolder:Destroy() end)
+    pcall(function() coneFolder:Destroy() end)
     S.fb.on, S.al.shadows = false, false
     pcall(fbRestore) pcall(shadowsRestore) pcall(particlesRestore) pcall(postRestore)
     pcall(setQuality, false)
