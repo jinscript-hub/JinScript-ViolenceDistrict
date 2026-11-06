@@ -61,10 +61,15 @@ local function findFile(name)
         if ok and has then return p end
     end
 end
+local ASSET_BASE = "https://raw.githubusercontent.com/jinscript-hub/JinScript-ViolenceDistrict/refs/heads/main/assets/"
 local function assetOf(id, file)
     if id ~= "" then return id end
     if not getcustomasset then return nil end
     local p = findFile(file)
+    if not p and writefile then
+        pcall(function() writefile(BASE .. file, game:HttpGet(ASSET_BASE .. file)) end)
+        p = findFile(file)
+    end
     if not p then return nil end
     local ok, a = pcall(getcustomasset, p)
     if ok and a and a ~= "" then return a end
