@@ -1,4 +1,4 @@
--- Jìn Script v3 | Violence District
+-- Jìn Script v3.2 | Violence District
 -- Menu: RightShift (PC) / tap logo (HP) | F6 = skill check on/off
 -- Semua file (logo, ikon, config) ada di workspace/jin_hub/
 
@@ -61,15 +61,10 @@ local function findFile(name)
         if ok and has then return p end
     end
 end
-local ASSET_BASE = "https://raw.githubusercontent.com/jinscript-hub/JinScript-ViolenceDistrict/refs/heads/main/assets/"
 local function assetOf(id, file)
     if id ~= "" then return id end
     if not getcustomasset then return nil end
     local p = findFile(file)
-    if not p and writefile then
-        pcall(function() writefile(BASE .. file, game:HttpGet(ASSET_BASE .. file)) end)
-        p = findFile(file)
-    end
     if not p then return nil end
     local ok, a = pcall(getcustomasset, p)
     if ok and a and a ~= "" then return a end
@@ -92,6 +87,9 @@ end)
 local CATS = {
     {key = "survivor",  label = "Survivor",  color = {0, 255, 120},   on = true,  player = true},
     {key = "killer",    label = "Killer",    color = {255, 50, 50},   on = true,  player = true},
+    {key = "chased",    label = "Chased",    color = {255, 140, 0},   on = true,  player = true},
+    {key = "knocked",   label = "Knocked",   color = {255, 235, 0},   on = true,  player = true},
+    {key = "hooked",    label = "Hooked",    color = {200, 0, 0},     on = true,  player = true},
     {key = "generator", label = "Generator", color = {170, 80, 255},  on = true},
     {key = "pallet",    label = "Pallet",    color = {0, 230, 255},   on = false},
     {key = "window",    label = "Window",    color = {255, 235, 0},   on = false},
@@ -102,7 +100,7 @@ local CAT = {}
 for _, c in ipairs(CATS) do CAT[c.key] = c end
 
 local S = {
-    cat = {}, names = true, dist = true, textSize = 13, maxDist = 600,
+    cat = {}, names = true, dist = true, textSize = 13, maxDist = 600, chaseDist = 40,
     sc = {enabled = true, mode = "Perfect"},
     fov = {on = false, val = 70},
     fb = {on = false, bright = 2},
@@ -181,6 +179,116 @@ local function classify(i)
     end
 end
 
+----------------------------------------------------------------------
+-- ESP: STATUS SURVIVOR (hooked > knocked > chased)
+-- urutan cek: attribute / Value di Player+Character -> animasi yang lagi jalan -> fallback jarak
+--   hooked  fallback: diem (<1.5 stud/s) dalam 4 stud dari model Hook
+--   chased  fallback: killer dalam S.chaseDist stud dan ga ketutup tembok (raycast)
+-- kalau game pake nama lain, edit STATE_KEYS / ANIM_KEYS (cek namanya: Settings > Scan status pemain)
+----------------------------------------------------------------------
+local STATE_KEYS = {
+    hooked  = {"hook", "sacrific", "caged"},
+    knocked = {"knock", "downed", "isdown", "dying", "crawl", "incap"},
+    chased  = {"chase", "pursu"},
+}
+local ANIM_KEYS = {
+    hooked  = {"hook", "hang"},
+    knocked = {"crawl", "knock", "downed", "dying", "incap"},
+}
+local STATE_ORDER = {"hooked", "knocked", "chased"}
+local TAG = {hooked = "HOOK", knocked = "DOWN", chased = "CHASE"}
+
+local function hasKey(s, list)
+    for _, k in ipairs(list) do
+        if s:find(k, 1, true) then return true end
+    end
+    return false
+end
+local function mark(text, st)
+    for _, s in ipairs(STATE_ORDER) do
+        if hasKey(text, STATE_KEYS[s]) then st[s] = true end
+    end
+end
+local function isStateName(n)
+    return n:find("state", 1, true) or n:find("status", 1, true) or n:find("condition", 1, true)
+end
+local function scanObj(inst, st)
+    if not inst then return end
+    for k, v in pairs(inst:GetAttributes()) do
+        local kl = k:lower()
+        if type(v) == "boolean" then
+            if v then mark(kl, st) end
+        elseif type(v) == "string" and isStateName(kl) then
+            mark(v:lower(), st)
+        end
+    end
+    for _, c in ipairs(inst:GetChildren()) do
+        if c:IsA("BoolValue") then
+            if c.Value then mark(c.Name:lower(), st) end
+        elseif c:IsA("StringValue") then
+            if isStateName(c.Name:lower()) then mark(c.Value:lower(), st) end
+        end
+    end
+end
+local function scanAnims(hum, st)
+    local an = hum:FindFirstChildOfClass("Animator")
+    if not an then return end
+    local ok, tracks = pcall(function() return an:GetPlayingAnimationTracks() end)
+    if not ok then return end
+    for _, t in ipairs(tracks) do
+        local n = t.Name:lower()
+        if not n:find("unhook", 1, true) then
+            for s, keys in pairs(ANIM_KEYS) do
+                if hasKey(n, keys) then st[s] = true end
+            end
+        end
+    end
+end
+
+local chaseRP = RaycastParams.new()
+chaseRP.FilterType = Enum.RaycastFilterType.Exclude
+
+local function getKillers()
+    local list = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if roleOf(p) == "killer" then
+            local kc = p.Character
+            local kh = kc and kc:FindFirstChild("HumanoidRootPart")
+            if kh then list[#list + 1] = {char = kc, hrp = kh} end
+        end
+    end
+    return list
+end
+
+local function survivorState(plr, char, hum, hrp, killers)
+    local st = {}
+    scanObj(plr, st)
+    scanObj(char, st)
+    scanAnims(hum, st)
+    if not st.hooked and hrp.AssemblyLinearVelocity.Magnitude < 1.5 then
+        for inst in pairs(found.hook) do
+            local ok, p = pcall(function() return inst:GetPivot().Position end)
+            if ok and (p - hrp.Position).Magnitude < 4 then st.hooked = true break end
+        end
+    end
+    if not st.chased and S.chaseDist > 0 then
+        for _, k in ipairs(killers) do
+            local delta = hrp.Position - k.hrp.Position
+            if delta.Magnitude <= S.chaseDist then
+                chaseRP.FilterDescendantsInstances = {k.char, char}
+                if not workspace:Raycast(k.hrp.Position, delta, chaseRP) then
+                    st.chased = true
+                    break
+                end
+            end
+        end
+    end
+    for _, s in ipairs(STATE_ORDER) do
+        if st[s] then return s end
+    end
+    return "survivor"
+end
+
 local espFolder = Instance.new("Folder")
 espFolder.Name = "JinESP"
 attach(espFolder)
@@ -253,6 +361,7 @@ local function update()
     local lhrp = lc and lc:FindFirstChild("HumanoidRootPart")
     local maxD = S.maxDist > 0 and S.maxDist or math.huge
     local ts = S.textSize
+    local killers = getKillers()
 
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr ~= lp then
@@ -260,7 +369,13 @@ local function update()
             local hrp = char and char:FindFirstChild("HumanoidRootPart")
             local hum = char and char:FindFirstChildOfClass("Humanoid")
             local role = roleOf(plr)
-            if hrp and hum and hum.Health > 0 and S.cat[role].on then
+            local alive = hrp and hum and hum.Health > 0
+            local key = role
+            if alive and role == "survivor" then
+                key = survivorState(plr, char, hum, hrp, killers)
+                if not S.cat[key].on then key = "survivor" end
+            end
+            if alive and S.cat[key].on then
                 local v = pvis[plr]
                 if not v or v.char ~= char or not v.hl.Parent then
                     destroyPlayerVis(plr)
@@ -275,10 +390,12 @@ local function update()
                     v = {hl = hl, nameBB = nbb, nameLbl = nlbl, distBB = dbb, distLbl = dlbl, char = char}
                     pvis[plr] = v
                 end
-                local c = S.cat[role].color
+                local c = S.cat[key].color
                 v.hl.FillColor, v.hl.OutlineColor = c, c
                 local dist = lhrp and math.floor((hrp.Position - lhrp.Position).Magnitude)
-                setLabel(v.nameBB, v.nameLbl, S.names and plr.DisplayName or "", c, ts)
+                local tag = TAG[key]
+                local nameTxt = plr.DisplayName .. (tag and (" [" .. tag .. "]") or "")
+                setLabel(v.nameBB, v.nameLbl, S.names and nameTxt or "", c, ts)
                 setLabel(v.distBB, v.distLbl, (S.dist and dist) and ("%dm"):format(dist) or "", c, ts)
             else
                 destroyPlayerVis(plr)
@@ -806,7 +923,7 @@ local header = new("Frame", {Size = UDim2.new(1, 0, 0, HEAD), BackgroundTranspar
 new("Frame", {Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = T.stroke, BorderSizePixel = 0}, header)
 local ttl = mkLabel(header, "JÌN SCRIPT", 12, T.text, F_BOLD)
 ttl.Position = UDim2.fromOffset(14, 0); ttl.Size = UDim2.fromOffset(78, HEAD - 1)
-local ver = mkLabel(header, "v3.1", 10, T.dim)
+local ver = mkLabel(header, "v3.2", 10, T.dim)
 ver.Position = UDim2.fromOffset(92, 1); ver.Size = UDim2.fromOffset(30, HEAD - 1)
 
 local closeBtn = new("TextButton", {Size = UDim2.fromOffset(24, 24), AnchorPoint = Vector2.new(1, 0.5),
@@ -826,14 +943,15 @@ local SOC_RECT = {                      -- x, y, w, h di jin_social.png
     WhatsApp = {272, 0, 102, 108}, Discord = {374, 0, 138, 108},
 }
 local SOC_TXT = {YouTube = "YT", TikTok = "TT", WhatsApp = "WA", Discord = "DC"}
-local socRow = new("Frame", {Size = UDim2.fromOffset(#SOC_ORDER * 22, 20), AnchorPoint = Vector2.new(1, 0.5),
+local SOC_W, SOC_H, SOC_STEP = 26, 20, 31   -- ukuran tiap logo + jarak antar logo
+local socRow = new("Frame", {Size = UDim2.fromOffset(#SOC_ORDER * SOC_STEP, 26), AnchorPoint = Vector2.new(1, 0.5),
     Position = UDim2.new(1, -38, 0.5, -1), BackgroundTransparency = 1}, header)
 for idx, nameKey in ipairs(SOC_ORDER) do
     local hasLink = LINKS[nameKey] ~= nil and LINKS[nameKey] ~= ""
     local b
     if SOCIAL then
         local r = SOC_RECT[nameKey]
-        b = new("ImageButton", {Size = UDim2.fromOffset(17, 14), Position = UDim2.fromOffset((idx - 1) * 22, 3),
+        b = new("ImageButton", {Size = UDim2.fromOffset(SOC_W, SOC_H), Position = UDim2.fromOffset((idx - 1) * SOC_STEP, 3),
             BackgroundTransparency = 1, Image = SOCIAL, ImageRectOffset = Vector2.new(r[1], r[2]),
             ImageRectSize = Vector2.new(r[3], r[4]), ScaleType = Enum.ScaleType.Fit,
             ImageTransparency = hasLink and 0.15 or 0.6, AutoButtonColor = false}, socRow)
@@ -842,8 +960,8 @@ for idx, nameKey in ipairs(SOC_ORDER) do
             track(b.MouseLeave:Connect(function() tw(b, 0.12, {ImageTransparency = 0.15}) end))
         end
     else
-        b = new("TextButton", {Size = UDim2.fromOffset(17, 14), Position = UDim2.fromOffset((idx - 1) * 22, 3),
-            BackgroundTransparency = 1, Text = SOC_TXT[nameKey], TextSize = 10, Font = F_BOLD,
+        b = new("TextButton", {Size = UDim2.fromOffset(SOC_W, SOC_H), Position = UDim2.fromOffset((idx - 1) * SOC_STEP, 3),
+            BackgroundTransparency = 1, Text = SOC_TXT[nameKey], TextSize = 13, Font = F_BOLD,
             TextColor3 = hasLink and T.text or T.dim, AutoButtonColor = false}, socRow)
     end
     track(b.MouseButton1Click:Connect(function()
@@ -1239,7 +1357,7 @@ end
 local function collectStats(plr)
     local list, seen = {}, {}
     local function add(n, v)
-        if #list >= 7 or seen[n] then return end
+        if #list >= 6 or seen[n] then return end
         seen[n] = true
         list[#list + 1] = {n, fmt(v)}
     end
@@ -1327,8 +1445,13 @@ local function refreshDash()
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     local lhrp = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
     local role = roleOf(plr)
+    local sKey = role
+    if role == "survivor" and hum and hrp and hum.Health > 0 then
+        sKey = survivorState(plr, char, hum, hrp, getKillers())
+    end
     local lines = {
         {"Role", CAT[role].label, S.cat[role].color},
+        {"Status", CAT[sKey].label, S.cat[sKey].color},
         {"Health", hum and ("%d/%d"):format(math.floor(hum.Health), math.floor(hum.MaxHealth)) or "-"},
         {"Distance", (plr ~= lp and hrp and lhrp) and ("%dm"):format(math.floor((hrp.Position - lhrp.Position).Magnitude)) or "-"},
         {"Team", plr.Team and plr.Team.Name or "-"},
@@ -1376,6 +1499,7 @@ cDisp:Toggle("ESP_Names", "Nama (di atas)", true, function(v) S.names = v end)
 cDisp:Toggle("ESP_Dist", "Jarak (di bawah)", true, function(v) S.dist = v end)
 cDisp:Slider("ESP_TextSize", "Ukuran teks", 10, 24, 13, 1, function(v) S.textSize = v end)
 cDisp:Slider("ESP_MaxDist", "Jarak max objek (0 = bebas)", 0, 3000, 600, 50, function(v) S.maxDist = v end, "m")
+cDisp:Slider("ESP_ChaseDist", "Jarak deteksi chase (0 = off)", 0, 120, 40, 5, function(v) S.chaseDist = v end, "m")
 
 local cSC = tSC:Group("Auto skill check", 1)
 cSC:Toggle("SC_Enabled", "Enabled (F6)", true, function(v) S.sc.enabled = v end)
@@ -1440,6 +1564,55 @@ local function dumpData()
     end)
 end
 
+-- scan status semua pemain (attribute, Value, animasi yang lagi jalan) -> jin_hub/jin_players.txt
+-- jalanin pas ada survivor yang lagi chased / knocked / hooked, biar kelihatan nama aslinya
+local function dumpPlayers()
+    notify("Scan", "Nyari status pemain...")
+    task.spawn(function()
+        local out = {}
+        local function add(x) if #out < 800 then out[#out + 1] = x end end
+        local function str(v) local ok, r = pcall(tostring, v) return ok and r or "?" end
+        local function dumpInst(tag, inst)
+            if not inst then return end
+            for k, v in pairs(inst:GetAttributes()) do add(("  [attr] %s.%s = %s"):format(tag, k, str(v))) end
+            for _, c in ipairs(inst:GetChildren()) do
+                if c:IsA("ValueBase") then add(("  [value] %s.%s = %s"):format(tag, c.Name, str(c.Value))) end
+            end
+        end
+        local killers = getKillers()
+        for _, plr in ipairs(Players:GetPlayers()) do
+            local role = roleOf(plr)
+            local char = plr.Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            local st = "-"
+            if role == "survivor" and hum and hrp and hum.Health > 0 then
+                st = survivorState(plr, char, hum, hrp, killers)
+            end
+            add(("== %s | role=%s | detected=%s | team=%s"):format(plr.Name, role, st, plr.Team and plr.Team.Name or "nil"))
+            dumpInst("Player", plr)
+            dumpInst("Char", char)
+            if hum then
+                add(("  [hum] health=%d/%d walkspeed=%s state=%s"):format(
+                    math.floor(hum.Health), math.floor(hum.MaxHealth), str(hum.WalkSpeed), str(hum:GetState())))
+                local an = hum:FindFirstChildOfClass("Animator")
+                if an then
+                    local ok, tracks = pcall(function() return an:GetPlayingAnimationTracks() end)
+                    if ok then
+                        for _, t in ipairs(tracks) do
+                            add(("  [anim] %s | %s"):format(t.Name, str(t.Animation and t.Animation.AnimationId)))
+                        end
+                    end
+                end
+            end
+        end
+        local txt = table.concat(out, "\n")
+        if writefile then pcall(writefile, BASE .. "jin_players.txt", txt) end
+        warn("[jin] scan pemain selesai: " .. #out .. " baris")
+        notify("Scan", writefile and "Selesai, cek jin_hub/jin_players.txt" or "Selesai, liat F9")
+    end)
+end
+
 local cleanup
 local cUI = tSet:Group("Tampilan", 1)
 cUI:Dropdown("UI_Size", "Ukuran", {"Kecil", "Sedang", "Besar", "Jumbo"}, "Sedang", function(v) curSize = v applyLayout() end)
@@ -1447,6 +1620,7 @@ cUI:Dropdown("UI_Ratio", "Rasio", {"4:3", "16:10", "16:9", "21:9"}, "16:9", func
 cUI:Label("4:3 = tinggi, 21:9 = lebar dan gepeng.")
 local cMenu = tSet:Group("Menu", 2)
 cMenu:Button("Scan data game (buat stats)", dumpData)
+cMenu:Button("Scan status pemain (chase/down/hook)", dumpPlayers)
 cMenu:Button("Reset config", function()
     local p = findFile(CFG_FILE)
     if p and delfile then pcall(delfile, p) end
@@ -1529,4 +1703,4 @@ loading = false
 pcall(refreshDash)
 setOpen(true)
 notify("Jìn Script", "Loaded")
-warn("[jin] v3.1 loaded")
+warn("[jin] v3.2 loaded")
