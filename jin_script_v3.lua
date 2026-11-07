@@ -1838,7 +1838,7 @@ cSC:Dropdown("SC_Mode", "Mode", {"Instant", "Perfect", "Great", "Random"}, "Perf
 -- Tiap tembakan DIVERIFIKASI: Char.Parry harus nyala <= 0.3 dtk, kalau ngga coba metode berikutnya (1 remote, 2 StopEmote+remote, 3 tool:Activate)
 -- dan dicatat di baris Status. BELUM dites di game.
 do
-    S.parry = {on = false, aggr = false, dist = 9, last = 0, busy = false, method = 1, circle = false, color = Color3.fromRGB(170, 0, 255), detect = true, learn = true, block = 0, cdLo = 0, nl = 0}
+    S.parry = {on = false, aggr = false, dist = 9, last = 0, busy = false, method = 1, circle = false, color = Color3.fromRGB(170, 0, 255), detect = true, learn = true, block = 0, cdLo = 0, nl = 0, face = false}
     -- id animasi ayun killer. Slasher dari scan2 (2 anim ini muncul <0.2 dtk sebelum HP turun). FILL: killer lain, liat "anim" di baris Status pas dia ayun
     local ATTACK_ANIMS = {["135002183282873"] = true, ["121216847022485"] = true}
     local cPar = tSC:Group("Auto parry (Dagger)", 2)
@@ -1846,19 +1846,23 @@ do
     cPar:Toggle("PAR_Aggr", "Auto Parry Aggressive (Predict)", false, function(v) S.parry.aggr = v end)
     cPar:Toggle("PAR_Detect", "Deteksi anim serang semua killer", true, function(v) S.parry.detect = v end)
     cPar:Toggle("PAR_Learn", "Auto-learn anim serang dari hit", true, function(v) S.parry.learn = v end)
+    cPar:Toggle("PAR_Face", "Hadap killer pas parry (tes: parry depan doang?)", false, function(v) S.parry.face = v end)
     cPar:Slider("PAR_Dist", "Parry Distance", 4, 20, 9, 0.5, function(v) S.parry.dist = v end, "m")
     cPar:Toggle("PAR_Circle", "Show Parry Circle", false, function(v) S.parry.circle = v end,
         {id = "PAR_CircleCol", default = S.parry.color, cb = function(c) S.parry.color = c end})
     local stLbl = cPar:Label("Status: OFF")
-    -- anim serang hasil auto-learn, disimpen ke file biar kebawa antar sesi
-    local learned, recent = {}, {}
+    -- learned = anim serang hasil auto-learn. nopar = anim yang TEMBUS parry dari depan (skill killer yg ga bisa di-parry), di-skip.
+    -- stats[id] = {pf,bf = tembus/ketahan dari depan, po,bo = tembus/ketahan dari sisi/belakang}. Semua disimpen ke jin_parry.json
+    -- (bisa diedit manual: tambahin id ke "nopar" buat skill yg kamu tau ga bisa di-parry)
+    local learned, recent, nopar, stats = {}, {}, {}, {}
     local PFILE = BASE .. "jin_parry.json"
     local function saveP()
         if not writefile then return end
         pcall(function()
-            local a = {}
+            local a, n = {}, {}
             for id in pairs(learned) do a[#a + 1] = id end
-            writefile(PFILE, HttpService:JSONEncode({anims = a}))
+            for id in pairs(nopar) do n[#n + 1] = id end
+            writefile(PFILE, HttpService:JSONEncode({anims = a, nopar = n, stats = stats}))
         end)
     end
     local function addLearn(id, why)
@@ -1869,10 +1873,10 @@ do
     end
     pcall(function()
         if isfile and readfile and isfile(PFILE) then
-            for _, id in ipairs(HttpService:JSONDecode(readfile(PFILE)).anims or {}) do
-                learned[tostring(id)] = true
-                S.parry.nl = S.parry.nl + 1
-            end
+            local d = HttpService:JSONDecode(readfile(PFILE))
+            for _, id in ipairs(d.anims or {}) do learned[tostring(id)] = true S.parry.nl = S.parry.nl + 1 end
+            for _, id in ipairs(d.nopar or {}) do nopar[tostring(id)] = true end
+            if type(d.stats) == "table" then stats = d.stats end
         end
     end)
     local function render(base)
@@ -1881,6 +1885,7 @@ do
         if P.res and os.clock() - P.resT < 6 then t = t .. " | " .. P.res end
         if P.anim then t = t .. " | anim killer: " .. P.anim end
         t = t .. " | learned " .. P.nl
+        if P.why and os.clock() - (P.whyT or 0) < 6 then t = t .. " | skip: " .. P.why end
         if P.cdAttr then t = t .. " | " .. P.cdAttr end
         if P.stat ~= t then P.stat = t stLbl.Text = t end
     end
@@ -1956,10 +1961,48 @@ do
         end
         return nil
     end
+    -- hasil tiap parry yang KITA tembak: tembus (kena hit <= 0.8 dtk) atau ketahan. Dari sini nopar & statistik depan/belakang keisi sendiri.
+    local function resolvePending(pd)
+        if pd.done then return end
+        pd.done = true
+        local id = pd.pid or pd.id
+        if not id then return end
+        local st = stats[id]
+        if not st then st = {pf = 0, bf = 0, po = 0, bo = 0} stats[id] = st end
+        local key = (pd.pierced and "p" or "b") .. (pd.front and "f" or "o")
+        st[key] = (st[key] or 0) + 1
+        local arah = pd.front and "depan" or "samping/belakang"
+        if pd.pierced then
+            S.parry.res = ("KENA walau parry (%s) anim %s"):format(arah, id)
+            S.parry.resT = os.clock()
+            if pd.front and st.pf >= 2 and st.pf > st.bf and not nopar[id] then
+                nopar[id] = true
+                notify("Auto parry", "anim " .. id .. " tembus parry dari depan -> di-skip (ga bisa di-parry)")
+            end
+        end
+        saveP()
+    end
+    -- killer lagi ngerjain objek (gen / pallet / window) = bukan nyerang kita: killer ngadep objek lebih lurus daripada ngadep kita
+    local function nearInteract(k, toUs)
+        local kp, look = k.hrp.Position, k.hrp.CFrame.LookVector
+        local ours = look:Dot(toUs)
+        for _, cat in ipairs({"generator", "pallet", "window"}) do
+            for o in pairs(found[cat]) do
+                if o.Parent then
+                    local ok, pos = pcall(function() return o:GetPivot().Position end)
+                    if ok then
+                        local v = pos - kp
+                        local dist = v.Magnitude
+                        if dist > 0 and dist <= 8 and look:Dot(v.Unit) > ours then return cat end
+                    end
+                end
+            end
+        end
+    end
     -- cooldown dagger ga ada datanya -> diukur sendiri. okT = kapan terakhir parry NYALA, cdLo = batas bawah cooldown (dibuktiin dari tembakan gagal).
     -- gagal pas jarak dari okT = x -> cooldown > x -> cdLo = x + 0.25, tembak lagi nunggu segitu (ga spam 3 metode).
     -- sukses pas jarak x < cdLo -> cdLo turun ke x. Konvergen dalam 2-3 parry.
-    local function tryFire(reason)
+    local function tryFire(reason, k, id)
         local P = S.parry
         if P.busy then return end
         local ch, hum = ready()
@@ -1968,6 +2011,18 @@ do
         local t0 = os.clock()
         P.block = t0 + 0.35
         task.spawn(function()
+            local hrp = ch:FindFirstChild("HumanoidRootPart")
+            if P.face and hrp and k and k.hrp.Parent then
+                -- opsi: puter badan ke killer dulu (kalau parry ternyata cuma kena dari depan). CFrame client -> ke-replicate
+                local kp = k.hrp.Position
+                hrp.CFrame = CFrame.lookAt(hrp.Position, Vector3.new(kp.X, hrp.Position.Y, kp.Z))
+                task.wait(0.05)
+            end
+            local front = false
+            if hrp and k and k.hrp.Parent then
+                local dir = k.hrp.Position - hrp.Position
+                front = dir.Magnitude > 0 and hrp.CFrame.LookVector:Dot(dir.Unit) >= 0.5
+            end
             local m = attempt(ch, hum)
             P.busy = false
             local since = P.okT and t0 - P.okT
@@ -1976,8 +2031,11 @@ do
                 if since and since < P.cdLo then P.cdLo = since end
                 P.okT = t0
                 P.block = t0 + math.max(P.cdLo, 0.8)
-                P.res = ("parry NYALA via metode %d (%s) | cd>=%.1fs"):format(m, reason, P.cdLo)
+                P.res = ("parry NYALA via metode %d (%s, killer di %s) | cd>=%.1fs"):format(m, reason, front and "depan" or "samping/belakang", P.cdLo)
                 notify("Auto parry", "Parry nyala (" .. reason .. ")")
+                local pd = {id = id, front = front, t = os.clock()}
+                P.pending = pd
+                task.delay(0.9, function() resolvePending(pd) end)
             else
                 if since then
                     P.cdLo = math.max(P.cdLo, since + 0.25)
@@ -2026,16 +2084,25 @@ do
             if d > 14 or d == 0 then return end
             P.anim = ("%s %.2fs %.0fm %s"):format(id, tr.Length, d, tr.Looped and "loop" or "once")
             if not P.on then return end
-            -- arah KITA ga dicek (parry 360, depan/belakang/samping sama aja); cuma killer harus ngadep ke arah kita (<= 90 derajat)
+            -- alasan skip ditulis ke Status (skip: ...) biar keliatan kenapa ga nembak
+            local toUs = off.Unit
             local known = ATTACK_ANIMS[id] or learned[id]
-            if (known or (P.detect and looksLikeSwing(tr))) and d <= P.dist * 1.3
-                and k.hrp.CFrame.LookVector:Dot(off.Unit) >= 0 then
-                tryFire(known and "ayunan" or "ayunan (tebakan)")
+            local why
+            if not (known or (P.detect and looksLikeSwing(tr))) then why = "anim " .. id .. " ga dikenal sbg serangan"
+            elseif nopar[id] then why = "anim " .. id .. " ga bisa di-parry"
+            elseif d > P.dist * 1.3 then why = ("killer %.0fm, di luar jarak"):format(d)
+            elseif k.hrp.CFrame.LookVector:Dot(toUs) < 0 then why = "killer ga ngadep kita"   -- arah KITA ga dicek, cuma arah killer (<= 90 derajat)
+            else
+                local near = nearInteract(k, toUs)
+                if near then why = "killer lagi ngerjain " .. near end
             end
+            if why then P.why, P.whyT = why, os.clock() return end
+            tryFire(known and "ayunan" or "ayunan (tebakan)", k, id)
         end))
     end
-    -- auto-learn: HP survivor mana pun turun -> anim non-loop killer terakhir (<= 0.6 dtk, killer <= 16 stud dari korban) = anim serang.
-    -- korban = kita / anim lolos heuristik -> langsung kepelajar; selain itu nunggu 2 hit biar ga salah ambil anim non-serang
+    -- auto-learn: HP survivor mana pun turun -> anim non-loop killer yang MULAI paling awal dalam jendela 0.03-0.6 dtk sebelum hit
+    -- (killer <= 16 stud dari korban; yang lolos heuristik swing didahulukan) = anim serang. Ambil yang paling awal, bukan yang terakhir,
+    -- soalnya anim recovery / lanjutan main SETELAH ayunan. korban = kita / lolos heuristik -> langsung kepelajar; selain itu nunggu 2 hit.
     local hits, watched = {}, setmetatable({}, {__mode = "k"})
     local function watchHum(hum, mine)
         if watched[hum] then return end
@@ -2044,19 +2111,28 @@ do
         track(hum.HealthChanged:Connect(function(h)
             local drop = h < last - 0.5
             last = h
-            if not (drop and S.parry.learn) then return end
+            if not drop then return end
             local vh = hum.Parent and hum.Parent:FindFirstChild("HumanoidRootPart")
             if not vh then return end
             local now = os.clock()
-            for i = #recent, 1, -1 do
+            local best
+            for i = 1, #recent do
                 local e = recent[i]
-                if now - e.t <= 0.6 and (vh.Position - e.pos).Magnitude <= 16 then
-                    if not (learned[e.id] or ATTACK_ANIMS[e.id]) then
-                        hits[e.id] = (hits[e.id] or 0) + 1
-                        if mine or e.swing or hits[e.id] >= 2 then addLearn(e.id, mine and "hit kita" or "hit survivor lain") end
-                    end
-                    break
+                local dt = now - e.t
+                if dt <= 0.6 and dt >= 0.03 and (vh.Position - e.pos).Magnitude <= 16 then
+                    if not best or (e.swing and not best.swing) then best = e end
                 end
+            end
+            if mine then
+                local pd = S.parry.pending   -- kena hit pas parry kita lagi aktif = tembus
+                if pd and not pd.done and now - pd.t <= 0.8 then
+                    pd.pierced, pd.pid = true, best and best.id
+                    resolvePending(pd)
+                end
+            end
+            if best and S.parry.learn and not (learned[best.id] or ATTACK_ANIMS[best.id]) then
+                hits[best.id] = (hits[best.id] or 0) + 1
+                if mine or best.swing or hits[best.id] >= 2 then addLearn(best.id, mine and "hit kita" or "hit survivor lain") end
             end
         end))
     end
@@ -2085,7 +2161,7 @@ do
                 if P.aggr and d <= P.dist * 1.6 and k.char:GetAttribute("IsChasing") and k.char:GetAttribute("ChaseTargetUserId") == lp.UserId then
                     local u = off.Unit
                     local closing = (k.hrp.AssemblyLinearVelocity - hrp.AssemblyLinearVelocity):Dot(u)
-                    if closing > 4 and k.hrp.CFrame.LookVector:Dot(u) >= 0 and d / closing <= 0.4 + ping / 2 then tryFire("predict") end
+                    if closing > 4 and k.hrp.CFrame.LookVector:Dot(u) >= 0 and d / closing <= 0.4 + ping / 2 then tryFire("predict", k) end
                 end
             end
         end
@@ -2353,6 +2429,10 @@ LAGI DIKERJAIN (belum diverifikasi di game)
     v3.1: auto-learn sekarang dari hit SEMUA survivor (bukan cuma kita) + disimpen ke jin_parry.json (kebawa antar sesi). Cooldown dagger ga ada datanya ->
     diukur sendiri (tembakan gagal = cooldown, interval naik 0.25 dtk, ga spam metode); Status nampilin attribute bernama "cool" kalau ada di karakter/tool.
     Cek arah cuma ke arah killer (<= 90 derajat), arah kita ga dicek. BELUM dites di game.
+    v3.2: (1) killer ngerjain gen/pallet/window ga dihitung nyerang (killer ngadep objek lebih lurus dari ngadep kita). (2) Status "skip: ..." ngasih tau
+    kenapa ga nembak. (3) learn ambil anim yang mulai PALING AWAL sebelum hit (bukan yang terakhir: anim recovery bisa ke-ambil). (4) skill ga bisa di-parry:
+    tiap parry dicek tembus/ketahan; tembus dari depan >= 2x dan lebih banyak dari ketahan -> masuk nopar (di-skip), disimpen di jin_parry.json.
+    (5) toggle "Hadap killer pas parry" buat tes kalau parry cuma kena dari depan; Status nulis killer ada di depan / samping-belakang pas nembak. BELUM dites.
   - PERFECT VAULT: BELUM ditulis. jin_remotes.txt ga ada satupun event vault (isinya cuma UpdateCharacterLook, PushRemote,
     GetPing, EmoteHandler, parry, anim idle/run/walk). Yang ada di dump: remote Window.VaultEvent / fastvault / VaultCommit /
     VaultReject / VaultCompleteEvent (argumen ga diketahui) dan attribute karakter isvaulting, VaultTier (medium), VaultReason (pace),
