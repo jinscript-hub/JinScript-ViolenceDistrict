@@ -1832,6 +1832,58 @@ local cSC = tSC:Group("Auto skill check", 1)
 cSC:Toggle("SC_Enabled", "Enabled (F6)", true, function(v) S.sc.enabled = v end)
 cSC:Dropdown("SC_Mode", "Mode", {"Instant", "Perfect", "Great", "Random"}, "Perfect", function(v) S.sc.mode = v end)
 
+-- AUTO PARRY (default OFF). Log: Items["Parrying Dagger"].parry:FireServer(karakter sendiri) -> Char.Parry=true ~0.8 dtk (mulai ~0.1 dtk setelah fire), abis itu Char.ParrySpent=true.
+-- Log scan2: ayun killer -> damage cuma ~0.12-0.17 dtk, lebih pendek dari ping, jadi ga bisa nunggu animasi. Ditembak PREDIKTIF:
+-- killer yang IsChasing + ChaseTargetUserId == kita, masuk S.parry.dist stud, dan ngadep ke kita. BELUM dites; parry salah timing = kepake (ParrySpent).
+do
+    S.parry = {on = false, dist = 9, face = 0.5, last = 0}
+    local cPar = tSC:Group("Auto parry", 2)
+    cPar:Toggle("PAR_On", "Enabled", false, function(v) S.parry.on = v end)
+    cPar:Slider("PAR_Dist", "Jarak tembak", 4, 20, 9, 1, function(v) S.parry.dist = v end, "m")
+    cPar:Label("Parrying Dagger harus ke-equip. Nembak pas killer yang ngejar kamu masuk jarak ini dan ngadep ke kamu. Kemungkinan sekali pakai per ronde, tes dulu pelan-pelan.")
+    local function attr(k)
+        local v = lp:GetAttribute(k)
+        if v == nil and lp.Character then v = lp.Character:GetAttribute(k) end
+        return v
+    end
+    local remote
+    local function parryTick()
+        if not (running and S.parry.on) or S.lobby then return end
+        local ch = lp.Character
+        local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+        local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+        if not (hrp and hum and hum.Health > 0) then return end
+        if attr("EquippedItem") ~= "Parrying Dagger" then return end
+        if ch:GetAttribute("ParrySpent") or ch:GetAttribute("Parry") or ch:GetAttribute("Knocked") then return end
+        if os.clock() - S.parry.last < 2 then return end
+        for _, k in ipairs(getKillers()) do
+            if k.char:GetAttribute("IsChasing") and k.char:GetAttribute("ChaseTargetUserId") == lp.UserId then
+                local off = hrp.Position - k.hrp.Position
+                local d = off.Magnitude
+                if d > 0 and d <= S.parry.dist and k.hrp.CFrame.LookVector:Dot(off.Unit) >= S.parry.face then
+                    if not (remote and remote.Parent) then
+                        local r = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
+                        local it = r and r:FindFirstChild("Items")
+                        local pd = it and it:FindFirstChild("Parrying Dagger")
+                        remote = pd and pd:FindFirstChild("parry")
+                    end
+                    if remote then
+                        S.parry.last = os.clock()
+                        pcall(function() remote:FireServer(ch) end)
+                    end
+                    return
+                end
+            end
+        end
+    end
+    task.spawn(function()
+        while running do
+            pcall(parryTick)
+            task.wait(0.05)
+        end
+    end)
+end
+
 local cView = tMisc:Group("View", 1)
 cView:Toggle("FOV_On", "Custom FOV", false, function(v)
     S.fov.on = v
@@ -1849,6 +1901,48 @@ cAL:Toggle("AL_PostFX", "Matiin bloom / blur / DOF", false,
 cAL:Toggle("AL_Shadows", "Matiin shadow", false,
     function(v) S.al.shadows = v if v then shadowsSave() else shadowsRestore() end end)
 cAL:Toggle("AL_Quality", "Render quality terendah", false, function(v) S.al.quality = v setQuality(v) end)
+
+-- PREDIKSI KILLER: attribute KillerChance (dump jin_objs: ada di data pemain) dianggap bobot undian killer berikutnya.
+-- BELUM dites di pemain lain; arti AllowKiller=false (ga mau jadi killer) juga tebakan. Map: dari Remotes.Messages.Mapinfo
+do
+    local cPred = tMisc:Group("Prediksi killer berikutnya", 2)
+    local mlbl = cPred:Label("Map: nunggu pengumuman server...")
+    local lbl = cPred:Label("Nunggu data...")
+    -- Remotes.Messages.Mapinfo(namaMap, 1) dari scan2: masuk pas lobby (sebelum ronde), jadi dianggap map berikutnya. Argumen ke-2 belum jelas artinya
+    task.spawn(function()
+        pcall(function()
+            local r = game:GetService("ReplicatedStorage"):WaitForChild("Remotes", 15):WaitForChild("Messages", 15):WaitForChild("Mapinfo", 15)
+            track(r.OnClientEvent:Connect(function(name) S.mapName = tostring(name) end))
+        end)
+    end)
+    local function attr(pl, k)
+        local v = pl:GetAttribute(k)
+        if v == nil and pl.Character then v = pl.Character:GetAttribute(k) end
+        return v
+    end
+    S.predUpdate = function()
+        if S.mapName then
+            local inRound = game:GetService("ReplicatedStorage"):GetAttribute("RoundInProgress")
+            mlbl.Text = (inRound and "Map sekarang: " or "Map berikutnya: ") .. S.mapName
+        end
+        local list = {}
+        for _, pl in ipairs(Players:GetPlayers()) do
+            local v = attr(pl, "KillerChance")
+            if type(v) == "number" then list[#list + 1] = {pl = pl, v = v, off = attr(pl, "AllowKiller") == false} end
+        end
+        if #list == 0 then lbl.Text = "KillerChance ga kebaca di pemain manapun" return end
+        table.sort(list, function(a, b)
+            if a.off ~= b.off then return not a.off end
+            return a.v > b.v
+        end)
+        local out = {}
+        for i = 1, math.min(#list, 6) do
+            local e = list[i]
+            out[i] = ("%d. %s  %s%s"):format(i, e.pl.DisplayName, tostring(math.floor(e.v * 10 + 0.5) / 10), e.off and "  (AllowKiller off)" or "")
+        end
+        lbl.Text = table.concat(out, "\n")
+    end
+end
 
 local cleanup
 local cUI = tSet:Group("Tampilan", 1)
@@ -1895,6 +1989,7 @@ task.spawn(function()
         curFps = math.floor(fpsN / math.max(fpsAcc, 0.001) + 0.5)
         fpsAcc, fpsN = 0, 0
         if isOpen then pcall(refreshDash) end
+        if isOpen and S.predUpdate then pcall(S.predUpdate) end
         task.wait(1)
     end
 end)
@@ -1996,6 +2091,14 @@ LAGI DIKERJAIN (belum diverifikasi di game)
     CanCollide, Parent) sebelum dan sesudah pallet dijatuhin.
   - ESP Exit Gate: MATCH.gate sekarang ngenain Model "ExitLever" (Workspace.Map.Gate.ExitLever) + Model bernama gate.
     LeftGate = MeshPart dan Map.gate = Part, ga ke-match (Model only). Status kebuka belum ada datanya. Default OFF.
+  - PREDIKSI KILLER (tab Misc): baca KillerChance semua pemain, urut terbesar. Belum dites di pemain lain.
+    Dari scan2: KillerChance punya user 30 -> 31 pas ronde jalan (naik tiap ronde ga jadi killer, cocok sama undian berbobot).
+  - PREDIKSI MAP (tab Misc): dengerin Remotes.Messages.Mapinfo(nama, 1). Di scan2 masuk sebelum RoundInProgress=true (re4 masuk ~17 dtk sebelum ronde),
+    jadi dianggap map berikutnya; pas RoundInProgress=true ditulis "Map sekarang". Event pertama pas join bisa jadi map lama. Arg ke-2 ("1") artinya belum jelas.
+  - AUTO PARRY (tab Skill Check, default OFF): PREDIKTIF, bukan reaktif. Scan2: ayun killer -> damage cuma 0.12-0.17 dtk (anim 135002183282873 pas 5.2 stud,
+    121216847022485 pas 2.2 stud, HP turun 0.12 dtk setelahnya), lebih pendek dari ping 237ms, jadi nunggu anim = telat. Trigger: killer IsChasing kita
+    (ChaseTargetUserId == UserId), dalam S.parry.dist stud, ngadep >= 0.5. Parry window 0.8 dtk jadi nembak agak awal masih nutup. BELUM dites,
+    log scan2 ga ada parry yang kena killer (parry-nya kebuang pas killer 85 stud). Kalau EquippedItem ternyata bukan attribute Player/Character, ga bakal nembak.
   - PERFECT VAULT: BELUM ditulis. jin_remotes.txt ga ada satupun event vault (isinya cuma UpdateCharacterLook, PushRemote,
     GetPing, EmoteHandler, parry, anim idle/run/walk). Yang ada di dump: remote Window.VaultEvent / fastvault / VaultCommit /
     VaultReject / VaultCompleteEvent (argumen ga diketahui) dan attribute karakter isvaulting, VaultTier (medium), VaultReason (pace),
