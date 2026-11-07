@@ -1369,6 +1369,41 @@ function Tab:Group(titleText, col)
     return setmetatable({body = card, tab = self, order = 0}, Card)
 end
 
+-- SUB-TAB: strip tombol di bawah judul halaman (Player | World | ...). tab:Sub("Nama") balikin objek yang bisa dipanggil :Group() kayak Tab biasa
+function Tab:SelectSub(sub)
+    for _, o in ipairs(self.subs) do
+        local sel = (o == sub)
+        o.frame.Visible = sel
+        tw(o.btn, 0.15, {BackgroundTransparency = sel and 0 or 1, TextColor3 = sel and T.text or T.dim})
+    end
+    self.scroll.CanvasPosition = Vector2.new(0, 0)
+end
+function Tab:Sub(name)
+    if not self.subs then
+        self.subs = {}
+        self.cols[1].Parent.Visible = false   -- frame kolom bawaan tab ini ga dipake kalau pake sub-tab
+        self.strip = new("Frame", {Size = UDim2.new(1, -PADL, 0, 26), Position = UDim2.fromOffset(PADL, 34), BackgroundTransparency = 1}, self.page)
+        vlist(self.strip, 6, Enum.FillDirection.Horizontal)
+        self.scroll.Position = UDim2.fromOffset(0, 66)
+        self.scroll.Size = UDim2.new(1, 0, 1, -66)
+    end
+    local frame = new("Frame", {Size = UDim2.new(1, -PADR, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Visible = false}, self.scroll)
+    vlist(frame, 8, Enum.FillDirection.Horizontal)
+    local c1 = new("Frame", {Size = UDim2.new(0.5, -4, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, LayoutOrder = 1}, frame)
+    vlist(c1, 10)
+    local c2 = new("Frame", {Size = UDim2.new(0.5, -4, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, LayoutOrder = 2}, frame)
+    vlist(c2, 10)
+    local btn = new("TextButton", {Size = UDim2.fromOffset(#name * 7 + 24, 24), BackgroundColor3 = T.sel, BackgroundTransparency = 1,
+        Text = name, TextSize = 12, Font = F_BOLD, TextColor3 = T.dim, AutoButtonColor = false, LayoutOrder = #self.subs + 1}, self.strip)
+    round(btn, 12)
+    local sub = setmetatable({cols = {c1, c2}, nextCol = 1, frame = frame, btn = btn}, Tab)
+    self.subs[#self.subs + 1] = sub
+    local owner = self
+    track(btn.MouseButton1Click:Connect(function() owner:SelectSub(sub) end))
+    if #self.subs == 1 then self:SelectSub(sub) end
+    return sub
+end
+
 function Card:nextOrder()
     self.order = self.order + 2
     return self.order
@@ -1767,28 +1802,31 @@ end -- /scope dashboard
 ----------------------------------------------------------------------
 -- HALAMAN: ESP / SKILL CHECK / MISC / SETTINGS
 ----------------------------------------------------------------------
-local cPlayers = tESP:Group("Players", 1)
-local cObj = tESP:Group("Objek", 1)
-for _, c in ipairs(CATS) do
-    local key = c.key
-    local target = c.player and cPlayers or cObj
-    target:Toggle("T_" .. key, c.label, c.on,
-        function(v) S.cat[key].on = v end,
-        key ~= "chased" and {id = "C_" .. key, default = S.cat[key].color, cb = function(col) S.cat[key].color = col end} or nil)
+-- ESP dipisah jadi sub-tab. Hide spectator / gen progress / gen beres / pallet jatuh = selalu ON (default di S), ga ada tombolnya
+do
+    local sP, sW = tESP:Sub("Player"), tESP:Sub("World")
+    local sD, sK = tESP:Sub("Tampilan"), tESP:Sub("Area Killer")
+    local cPlayers, cObj = sP:Group("Players", 1), sW:Group("Objek", 1)
+    for _, c in ipairs(CATS) do
+        local key = c.key
+        local target = c.player and cPlayers or cObj
+        target:Toggle("T_" .. key, c.label, c.on,
+            function(v) S.cat[key].on = v end,
+            key ~= "chased" and {id = "C_" .. key, default = S.cat[key].color, cb = function(col) S.cat[key].color = col end} or nil)
+    end
+    local cChase = sP:Group("Chase", 2)
+    cChase:Slider("ESP_ChaseDist", "Jarak deteksi chase (0 = off)", 0, 120, 40, 5, function(v) S.chaseDist = v end, "m")
+    local cRange = sW:Group("Jarak", 2)
+    cRange:Slider("ESP_MaxDist", "Jarak max objek (0 = bebas)", 0, 3000, 600, 50, function(v) S.maxDist = v end, "m")
+    local cLbl = sD:Group("Label", 1)
+    cLbl:Toggle("ESP_Names", "Nama (di atas)", true, function(v) S.names = v end)
+    cLbl:Toggle("ESP_Dist", "Jarak (di bawah)", true, function(v) S.dist = v end)
+    cLbl:Slider("ESP_TextSize", "Ukuran teks", 10, 24, 13, 1, function(v) S.textSize = v end)
+    local cCone = sK:Group("Area liat killer (tanah)", 1)
+    cCone:Toggle("Cone_On", "Aktif", true, function(v) S.cone.on = v end)
+    cCone:Slider("Cone_Angle", "Sudut area killer", 40, 180, 100, 5, function(v) S.cone.angle = v end)
+    cCone:Slider("Cone_Range", "Jarak area killer", 20, 150, 70, 5, function(v) S.cone.range = v end, "m")
 end
-local cDisp = tESP:Group("Tampilan", 2)
-cDisp:Toggle("ESP_Names", "Nama (di atas)", true, function(v) S.names = v end)
-cDisp:Toggle("ESP_Dist", "Jarak (di bawah)", true, function(v) S.dist = v end)
-cDisp:Toggle("ESP_HideSpec", "ESP mati pas spectator / lobby", true, function(v) S.hideSpec = v end)
-cDisp:Toggle("ESP_GenProg", "Generator: warna ijo + % progress", true, function(v) S.genProgCol = v end)
-cDisp:Toggle("ESP_GenDone", "Generator beres = ESP ilang", true, function(v) S.genHideDone = v end)
-cDisp:Toggle("ESP_PalDown", "Pallet jatuh = ESP ilang", true, function(v) S.palHideDown = v end)
-cDisp:Slider("ESP_TextSize", "Ukuran teks", 10, 24, 13, 1, function(v) S.textSize = v end)
-cDisp:Slider("ESP_MaxDist", "Jarak max objek (0 = bebas)", 0, 3000, 600, 50, function(v) S.maxDist = v end, "m")
-cDisp:Toggle("Cone_On", "Area liat killer (tanah)", true, function(v) S.cone.on = v end)
-cDisp:Slider("Cone_Angle", "Sudut area killer", 40, 180, 100, 5, function(v) S.cone.angle = v end)
-cDisp:Slider("Cone_Range", "Jarak area killer", 20, 150, 70, 5, function(v) S.cone.range = v end, "m")
-cDisp:Slider("ESP_ChaseDist", "Jarak deteksi chase (0 = off)", 0, 120, 40, 5, function(v) S.chaseDist = v end, "m")
 
 local cSC = tSC:Group("Auto skill check", 1)
 cSC:Toggle("SC_Enabled", "Enabled (F6)", true, function(v) S.sc.enabled = v end)
@@ -1941,6 +1979,9 @@ SUDAH JADI
   - Generator: warna lerp dari warna asli ke ijo sesuai progress, label + "%", ESP ilang kalau beres.
   - ESP mati total kalau lagi spectator atau lobby (ga ada Generator di workspace). Toggle: "ESP mati pas spectator / lobby".
   - Auto skill check (mode Instant / Perfect / Great / Random), fullbright, FOV, anti lag, dashboard.
+
+  - UI: tab ESP dipecah sub-tab (Player / World / Tampilan / Area Killer) lewat Tab:Sub(). Fitur survivor/killer nanti pake pola sama.
+    Hide spectator, gen progress, gen beres, pallet jatuh = selalu ON (S default true), tombolnya dihapus.
 
 SUDAH DIVERIFIKASI DI GAME (dikonfirmasi user)
   - Progress generator = attribute RepairProgress (0..100) di model Generator, selesai = attribute Completed (bool).
