@@ -102,6 +102,7 @@ for _, c in ipairs(CATS) do CAT[c.key] = c end
 
 local S = {
     cat = {}, names = true, dist = true, textSize = 13, maxDist = 600, chaseDist = 40, hookNear = 10,
+    hideSpec = true, genHideDone = true, genProgCol = true, genDoneCol = Color3.fromRGB(0, 255, 80), lobby = false,
     chaseCol = {Color3.fromRGB(0, 255, 80), Color3.fromRGB(255, 235, 0), Color3.fromRGB(255, 40, 40)}, -- ! ijo, !! kuning, !!! merah
     cone = {on = true, range = 70, angle = 100, color = Color3.fromRGB(255, 60, 60), transp = 0.75},
     sc = {enabled = true, mode = "Perfect"},
@@ -139,6 +140,29 @@ local function roleOf(plr)
         if t:find("survivor") then return "survivor" end
     end
     return attrRole(plr) or attrRole(plr.Character) or "survivor"
+end
+
+-- spectator / nunggu ronde: team atau attribute bernama spectat / lobby / waiting dst.
+-- FILL: kalau game pake nama lain, tambahin ke SPEC_WORDS (cek: Settings > Scan status pemain pas lagi spectator)
+local SPEC_WORDS = {"spectat", "lobby", "waiting", "queue", "intermission", "dead", "eliminat"}
+local function specWord(str)
+    str = str:lower()
+    for _, w in ipairs(SPEC_WORDS) do
+        if str:find(w, 1, true) then return true end
+    end
+    return false
+end
+local function isSpectator(plr)
+    if plr.Team and specWord(plr.Team.Name) then return true end
+    local ch = plr.Character
+    for _, inst in ipairs({plr, ch}) do
+        for k, v in pairs(inst:GetAttributes()) do
+            local kl = k:lower()
+            if type(v) == "boolean" and v and (kl:find("spectat", 1, true) or kl:find("lobby", 1, true)) then return true end
+            if type(v) == "string" and ROLE_KEYS[kl] and specWord(v) then return true end
+        end
+    end
+    return false
 end
 
 ----------------------------------------------------------------------
@@ -372,6 +396,71 @@ local function createObj(cat, inst)
     return o
 end
 
+-- PROGRESS GENERATOR: nyari attribute / NumberValue bernama mirip "progress" di dalam model Generator (dicache per generator)
+-- FILL: kalau ga kedetek, jalanin Settings > Scan generator (hasil: jin_hub/jin_gens.txt), terus isi GEN_PROG_KEYS / GEN_DONE_KEYS
+local GEN_PROG_KEYS = {"progress", "percent", "repair", "completion"}
+local GEN_DONE_KEYS = {"complete", "finish", "repaired", "fixed", "done", "powered"}
+local GEN_SKIP_KEYS = {"max", "speed", "rate", "skill", "time", "count", "player"}
+local genCache = setmetatable({}, {__mode = "k"})
+local function keyHit(name, list)
+    name = name:lower()
+    for _, k in ipairs(list) do
+        if name:find(k, 1, true) then return true end
+    end
+    return false
+end
+local function genScan(inst)
+    local c = {at = os.clock()}   -- c.prog / c.done = {objek, namaAttribute|nil}
+    local list = {inst}
+    for _, d in ipairs(inst:GetDescendants()) do list[#list + 1] = d end
+    for _, o in ipairs(list) do
+        for k, v in pairs(o:GetAttributes()) do
+            if type(v) == "number" and not c.prog and keyHit(k, GEN_PROG_KEYS) and not keyHit(k, GEN_SKIP_KEYS) then
+                c.prog = {o, k}
+            elseif type(v) == "boolean" and not c.done and keyHit(k, GEN_DONE_KEYS) then
+                c.done = {o, k}
+            end
+        end
+        if o:IsA("NumberValue") or o:IsA("IntValue") then
+            if not c.prog and keyHit(o.Name, GEN_PROG_KEYS) and not keyHit(o.Name, GEN_SKIP_KEYS) then c.prog = {o} end
+        elseif o:IsA("BoolValue") then
+            if not c.done and keyHit(o.Name, GEN_DONE_KEYS) then c.done = {o} end
+        end
+    end
+    return c
+end
+local function genRead(ref)
+    local o, k = ref[1], ref[2]
+    if not o.Parent then return nil end
+    if k then return o:GetAttribute(k) end
+    return o.Value
+end
+-- return: progress 0..1 (nil kalau ga kedetek), selesai (bool)
+local function genProgress(inst)
+    local c = genCache[inst]
+    if not c or (not c.prog and not c.done and os.clock() - c.at > 3) then
+        c = genScan(inst)
+        genCache[inst] = c
+    end
+    local done, prog = false, nil
+    if c.done then
+        local v = genRead(c.done)
+        if v == nil then genCache[inst] = nil elseif v == true then done = true end
+    end
+    if c.prog then
+        local v = genRead(c.prog)
+        if v == nil then
+            genCache[inst] = nil
+        elseif type(v) == "number" then
+            local name = c.prog[2] or c.prog[1].Name
+            if v > 1 or name:lower():find("percent", 1, true) then v = v / 100 end   -- 0..100 -> 0..1
+            prog = math.clamp(v, 0, 1)
+            if prog >= 0.995 then done = true end
+        end
+    end
+    return prog, done
+end
+
 local function update()
     local lc = lp.Character
     local lhrp = lc and lc:FindFirstChild("HumanoidRootPart")
@@ -379,13 +468,30 @@ local function update()
     local ts = S.textSize
     local killers = getKillers()
 
+    -- spectator atau lobby (ga ada Generator di map) -> semua ESP dimatiin, hemat fps
+    local lobby = false
+    if S.hideSpec then
+        local live = false
+        for g in pairs(found.generator) do
+            if g.Parent and g:IsDescendantOf(workspace) then live = true break end
+        end
+        lobby = (not live) or isSpectator(lp)
+    end
+    S.lobby = lobby
+    if lobby then
+        for plr in pairs(pvis) do destroyPlayerVis(plr) end
+        for inst in pairs(ovis) do destroyObj(inst) end
+        if selfBB.bb then selfBB.bb.Enabled = false end
+        return
+    end
+
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr ~= lp then
             local char = plr.Character
             local hrp = char and char:FindFirstChild("HumanoidRootPart")
             local hum = char and char:FindFirstChildOfClass("Humanoid")
             local role = roleOf(plr)
-            local alive = hrp and hum and hum.Health > 0
+            local alive = hrp and hum and hum.Health > 0 and not (S.hideSpec and isSpectator(plr))
             local key = role
             if alive and role == "survivor" then
                 key = survivorState(plr, char, hum, hrp, killers)
@@ -450,15 +556,19 @@ local function update()
             if not inst:IsDescendantOf(workspace) then
                 set[inst] = nil
                 destroyObj(inst)
+            elseif enabled and cat == "generator" and S.genHideDone and select(2, genProgress(inst)) then
+                destroyObj(inst)   -- generator udah beres -> ESP dihilangin
             elseif enabled then
                 local o = ovis[inst] or createObj(cat, inst)
+                local prog = (cat == "generator" and S.genProgCol) and genProgress(inst) or nil
                 local dist = lhrp and (inst:GetPivot().Position - lhrp.Position).Magnitude
                 if (not dist) or dist <= maxD then
                     local c = S.cat[cat].color
+                    if prog then c = c:Lerp(S.genDoneCol, prog) end   -- 0% = warna asli, 100% = ijo
                     o.box.Adornee = inst
                     o.box.Color3, o.box.SurfaceColor3 = c, c
                     if o.nameBB then
-                        setLabel(o.nameBB, o.nameLbl, S.names and CAT[cat].label or "", c, ts)
+                        setLabel(o.nameBB, o.nameLbl, S.names and (CAT[cat].label .. (prog and (" " .. math.floor(prog * 100 + 0.5) .. "%") or "")) or "", c, ts)
                         setLabel(o.distBB, o.distLbl, (S.dist and dist) and ("%dm"):format(math.floor(dist)) or "", c, ts)
                     end
                 else
@@ -515,7 +625,7 @@ local function groundAt(p, fy)
     return Vector3.new(p.X, fy + 0.12, p.Z)
 end
 local function updateCone()
-    if not S.cone.on or roleOf(lp) == "killer" then coneFolder.Parent = nil return end
+    if S.lobby or not S.cone.on or roleOf(lp) == "killer" then coneFolder.Parent = nil return end
     local ks = getKillers()
     local k = ks[1]
     if not k then coneFolder.Parent = nil return end
@@ -1599,7 +1709,7 @@ function refreshDash()
 
     local surv, killer = 0, "-"
     for _, p in ipairs(players) do
-        if roleOf(p) == "killer" then killer = p.DisplayName else surv = surv + 1 end
+        if roleOf(p) == "killer" then killer = p.DisplayName elseif not isSpectator(p) then surv = surv + 1 end
     end
     setStat(rGrid[1][1], "Survivors", tostring(surv))
     setStat(rGrid[1][2], "Generators", tostring(cnt("generator")))
@@ -1625,6 +1735,9 @@ end
 local cDisp = tESP:Group("Tampilan", 2)
 cDisp:Toggle("ESP_Names", "Nama (di atas)", true, function(v) S.names = v end)
 cDisp:Toggle("ESP_Dist", "Jarak (di bawah)", true, function(v) S.dist = v end)
+cDisp:Toggle("ESP_HideSpec", "ESP mati pas spectator / lobby", true, function(v) S.hideSpec = v end)
+cDisp:Toggle("ESP_GenProg", "Generator: warna ijo + % progress", true, function(v) S.genProgCol = v end)
+cDisp:Toggle("ESP_GenDone", "Generator beres = ESP ilang", true, function(v) S.genHideDone = v end)
 cDisp:Slider("ESP_TextSize", "Ukuran teks", 10, 24, 13, 1, function(v) S.textSize = v end)
 cDisp:Slider("ESP_MaxDist", "Jarak max objek (0 = bebas)", 0, 3000, 600, 50, function(v) S.maxDist = v end, "m")
 cDisp:Toggle("Cone_On", "Area liat killer (tanah)", true, function(v) S.cone.on = v end)
@@ -1744,6 +1857,35 @@ local function dumpPlayers()
     end)
 end
 
+-- scan semua Generator: attribute + Value + hasil deteksi progress -> jin_hub/jin_gens.txt
+-- jalanin pas di dalam ronde, idealnya pas ada generator yang lagi dibenerin
+local function dumpGens()
+    notify("Scan", "Nyari data generator...")
+    task.spawn(function()
+        local out = {}
+        local function add(x) if #out < 700 then out[#out + 1] = x end end
+        local function str(v) local ok, r = pcall(tostring, v) return ok and r or "?" end
+        for inst in pairs(found.generator) do
+            if inst.Parent then
+                local base = inst:GetFullName()
+                local pr, dn = genProgress(inst)
+                add(("== %s | detected progress=%s done=%s"):format(base, str(pr), str(dn)))
+                local list = {inst}
+                for _, d in ipairs(inst:GetDescendants()) do list[#list + 1] = d end
+                for _, o in ipairs(list) do
+                    local rel = (o == inst) and "." or o:GetFullName():sub(#base + 2)
+                    for k, v in pairs(o:GetAttributes()) do add(("  [attr] %s.%s = %s"):format(rel, k, str(v))) end
+                    if o:IsA("ValueBase") then add(("  [value] %s = %s"):format(rel, str(o.Value))) end
+                end
+            end
+        end
+        local txt = table.concat(out, "\n")
+        if writefile then pcall(writefile, BASE .. "jin_gens.txt", txt) end
+        warn("[jin] scan generator selesai: " .. #out .. " baris")
+        notify("Scan", writefile and "Selesai, cek jin_hub/jin_gens.txt" or "Selesai, liat F9")
+    end)
+end
+
 local cleanup
 local cUI = tSet:Group("Tampilan", 1)
 cUI:Dropdown("UI_Size", "Ukuran", {"Kecil", "Sedang", "Besar", "Jumbo"}, "Sedang", function(v) curSize = v applyLayout() end)
@@ -1752,6 +1894,7 @@ cUI:Label("4:3 = tinggi, 21:9 = lebar dan gepeng.")
 local cMenu = tSet:Group("Menu", 2)
 cMenu:Button("Scan data game (buat stats)", dumpData)
 cMenu:Button("Scan status pemain (chase/down/hook)", dumpPlayers)
+cMenu:Button("Scan generator (progress)", dumpGens)
 cMenu:Button("Reset config", function()
     local p = findFile(CFG_FILE)
     if p and delfile then pcall(delfile, p) end
@@ -1837,3 +1980,54 @@ pcall(refreshDash)
 setOpen(true)
 notify("Jìn Script", "Loaded")
 warn("[jin] v3.2 loaded")
+
+--[==[
+======================================================================
+CATATAN BUAT AI / DEV BERIKUTNYA (baca ini dulu sebelum edit)
+======================================================================
+PROYEK : Jin Script, ESP + auto skill check buat Roblox "Violence District" (mirip Dead by Daylight)
+RUN DI : Delta executor (HP) / PC, Luau. Menu: RightShift (PC) / tap logo (HP). F6 = skill check on/off
+SIFAT  : script satu file (~2000 baris), UI bikin sendiri (ga pake lib). Config JSON di workspace/jin_hub/
+
+PETA FILE (urutan, cari banner "-----" + judulnya)
+  config atas -> state S + CATS -> ESP role -> ESP objek (MATCH/found/classify) -> status survivor
+  -> ESP update() -> area liat killer (cone) -> skill check -> fullbright/anti lag -> UI helper
+  -> config save/load -> window (do-block) -> Tab/Card -> Dashboard (do-block) -> tab ESP/SC/Misc/Settings
+  -> scan helper (dumpData / dumpPlayers / dumpGens) -> loop + cleanup
+
+ATURAN KERAS
+  1. LIMIT 200 LOCAL per chunk. Kalau kelewat, loadstring balikin nil dan loader error
+     "attempt to call a nil value" di Line 1. Saat ini ~172 di main chunk. Bagian window dan Dashboard
+     sudah dibungkus do ... end (variabel yang dipake di luar di-predeclare). Fitur baru: bungkus pakai
+     do-block atau taruh di table, JANGAN nambah local top-level sembarangan.
+  2. Sandbox AI ga punya Lua/Luau, jadi hasil edit belum pernah dijalanin. Cek pakai pasangan do/end/kurung
+     + hitung local, dan bilang jujur "belum dites di game".
+  3. Edit kecil (str_replace / patch per baris). Jangan tulis ulang file. Selalu kerja dari file TERBARU,
+     bukan dari upload lama, dan jangan timpa file output tanpa baca isinya dulu.
+  4. Semua fitur ada toggle di menu, ga ada yang jalan otomatis tanpa toggle.
+
+SUDAH JADI
+  - ESP pemain: highlight, nama, jarak. Status: sehat / kena hit / jatuh / digantung / killer.
+  - Hooked vs jatuh: dianggap "digantung" cuma kalau dalam S.hookNear (10 stud) dari model Hook,
+    kalau jauh = jatuh (merangkak). Kalau model Hook ga ketemu, status dari game dipercaya.
+  - Tanda chase !/!!/!!! (ijo/kuning/merah makin dekat killer), muncul di atas karakter KITA sendiri.
+  - Area liat killer (cone merah di tanah): arah dihaluskan, raycast cuma ke lantai, wedge rusak disembunyiin.
+  - ESP objek: generator, pallet, window, hook, pumpkin.
+  - Generator: warna lerp dari warna asli ke ijo sesuai progress, label + "%", ESP ilang kalau beres.
+  - ESP mati total kalau lagi spectator atau lobby (ga ada Generator di workspace). Toggle: "ESP mati pas spectator / lobby".
+  - Auto skill check (mode Instant / Perfect / Great / Random), fullbright, FOV, anti lag, dashboard.
+
+BELUM DIVERIFIKASI DI GAME (butuh data dari user)
+  - Progress generator: nama attribute/Value-nya ditebak lewat GEN_PROG_KEYS / GEN_DONE_KEYS.
+    Kalau di game % ga muncul atau warna ga berubah: minta user jalanin Settings > "Scan generator (progress)"
+    pas ada generator yang lagi dibenerin, lalu kirim isi workspace/jin_hub/jin_gens.txt. Isi key yang bener.
+  - Deteksi spectator: berdasarkan nama Team / attribute (SPEC_WORDS). Kalau masih ke-ESP pas spectator:
+    minta user jalanin "Scan status pemain" pas lagi spectator, kirim jin_players.txt, tambah kata ke SPEC_WORDS.
+  - Heuristik lobby = "ga ada model Generator". Kalau di mode lain game ga ada generator, matiin toggle itu.
+
+IDE LANJUTAN (belum dikerjain)
+  - Rapihin versi (header v3.3, label UI dan warn masih tulis v3.2).
+  - Picker warna "Chased (!)" di menu sekarang ga dipake (warna tanda chase pakai S.chaseCol).
+  - Config simpen S.hookNear / S.chaseCol kalau mau bisa diatur dari menu.
+======================================================================
+]==]
