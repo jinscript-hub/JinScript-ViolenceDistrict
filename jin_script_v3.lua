@@ -1,4 +1,4 @@
--- Jìn Script v3.7 | Violence District
+-- Jìn Script v3.8 | Violence District
 -- Menu: RightShift (PC) / tap logo (HP) | F6 = skill check on/off
 -- Semua file (logo, ikon, config) ada di workspace/jin_hub/
 
@@ -2032,9 +2032,46 @@ do local function parryInit()
             end)
         end
     end
-    -- coba 3 metode, urutan mulai dari yang terakhir berhasil. Berhasil = Char.Parry nyala <= 0.3 dtk
+    -- HANDLER ASLI (v3.8, dari jin_recon.txt): tombol parry HP = PlayerGui.Survivor-mob.Controls.Gui-mob. MouseButton1Down-nya disambung ke module
+    -- ReplicatedStorage.Modules.Items.ParryingDagger.ParryClient (Activated / yang lain cuma UI). Kita panggil function itu langsung (pola sama kayak
+    -- skill check), jadi yang jalan kode client asli: animasi, berhenti, gate recharge, baru remote. Remote-doang (metode lama) ga ngelewatin itu semua.
+    local function parryBtn()
+        local pgui = lp:FindFirstChild("PlayerGui")
+        local m = pgui and pgui:FindFirstChild("Survivor-mob")
+        local c = m and m:FindFirstChild("Controls")
+        return c and c:FindFirstChild("Gui-mob")
+    end
+    -- return jumlah handler yang dipanggil (0 = ga ketemu), alasan
+    local function pressHandler()
+        local b = parryBtn()
+        if not b then return 0, "tombol Survivor-mob.Controls.Gui-mob ga ada" end
+        if not getconnections then return 0, "getconnections ga ada" end
+        local pos = b.AbsolutePosition + b.AbsoluteSize / 2
+        local n = 0
+        local ok, cs = pcall(getconnections, b.MouseButton1Down)
+        if not ok then return 0, "getconnections error" end
+        for _, c in ipairs(cs) do
+            local f = c.Function
+            local okS, sc = pcall(function() return getfenv(f).script end)
+            if f and okS and sc and sc.Name == "ParryClient" then
+                local ok2, err = pcall(f, pos.X, pos.Y)
+                n = n + 1
+                plog("  HANDLER ParryClient dipanggil | ok", ok2, err or "")
+            end
+        end
+        return n, n == 0 and "ParryClient ga nyambung ke Gui-mob.MouseButton1Down" or nil
+    end
+    -- coba handler asli dulu; kalau ga ketemu baru metode remote lama. Berhasil (remote) = Char.Parry nyala <= 0.3 dtk
     local function attempt(ch, hum)
         local P = S.parry
+        local hn, hwhy = pressHandler()
+        if hn > 0 then
+            task.delay(0.3, function()
+                plog("  +0.3s setelah handler | Parry attr", tostring(ch:GetAttribute("Parry")), "| ParrySpent", tostring(ch:GetAttribute("ParrySpent")), "| WalkSpeed", hum.WalkSpeed)
+            end)
+            return 0   -- 0 = handler asli (ga diverifikasi lewat attr Parry: belum ada bukti attr itu nyala di jalur asli)
+        end
+        plog("  handler asli ga bisa:", hwhy)
         local function on()
             local t0 = os.clock()
             repeat
@@ -2142,8 +2179,8 @@ do local function parryInit()
                 if since and since < P.cdLo then P.cdLo = since end
                 P.okT = t0
                 P.block = t0 + math.max(P.cdLo, 0.8)
-                P.res = ("parry NYALA via metode %d (%s, killer di %s) | cd>=%.1fs"):format(m, reason, front and "depan" or "samping/belakang", P.cdLo)
-                notify("Auto parry", "Parry nyala (" .. reason .. ")")
+                P.res = ("parry DITEKAN via %s (%s, killer di %s) | cd>=%.1fs"):format(m == 0 and "handler asli" or ("remote metode " .. m), reason, front and "depan" or "samping/belakang", P.cdLo)
+                if m ~= 0 then notify("Auto parry", "Parry nyala (" .. reason .. ")") end   -- handler asli: ga ada bukti nyala, cek log
                 local pd = {id = id, front = front, t = os.clock()}
                 P.pending = pd
                 task.delay(0.9, function() resolvePending(pd) end)
@@ -2663,6 +2700,13 @@ LAGI DIKERJAIN (belum diverifikasi di game)
     dari log), tembak kalau jarak prediksi <= hitReach (default 6m, slider) dan dot bidik >= hitDot (0.55). Auto-kalibrasi: kena hit yang tadinya diprediksi meleset ->
     hitReach / hitDot dilebarin ke angka prediksi itu (hitReach max 14). Toggle "Parry cuma kalau ayunan bakal KENA" buat balik ke perilaku lama. Log: baris EVAL (angka prediksi +
     keputusan) dan KALIBRASI. Nilai hasil kalibrasi ga disimpen antar sesi. BELUM dites di game; default 6m itu tebakan, cek baris EVAL vs HIT KITA buat nyetel.
+    v3.8 (dari jin_recon.txt, Delta): parry sekarang MANGGIL HANDLER ASLI tombol HP: Survivor-mob.Controls.Gui-mob.MouseButton1Down -> function dari module
+    ReplicatedStorage.Modules.Items.ParryingDagger.ParryClient (getconnections, filter script.Name == "ParryClient"). Remote yang ditembak handler itu =
+    ReplicatedStorage.Remotes.Items["Parrying Dagger"].parry:FireServer(karakter), argumen SAMA kayak metode remote lama; bedanya remote-doang ngelewatin
+    animasi / berhenti / gate client. Di recon: ~20 pencetan tombol -> cuma 1 remote, jadi client ngegate (recharge; ada module ItemRechargeClock) dan
+    metode remote-spam lama nembus gate itu. Metode remote cuma dipake kalau handler ga ketemu. Hasil handler ga diverifikasi lewat attr Parry (di recon attr Parry
+    GA nyala sama sekali, ANIM useanim 81793464499285 juga ga kerekam) -> cek baris "+0.3s setelah handler" di log. BELUM dites di game.
+    Info dagger: Model (bukan Tool) di karakter; attr useanim=81793464499285, parriedanim=72219761917132; LocalScript "parrying dagger" + "animation".
   - PERFECT VAULT: BELUM ditulis. jin_remotes.txt ga ada satupun event vault (isinya cuma UpdateCharacterLook, PushRemote,
     GetPing, EmoteHandler, parry, anim idle/run/walk). Yang ada di dump: remote Window.VaultEvent / fastvault / VaultCommit /
     VaultReject / VaultCompleteEvent (argumen ga diketahui) dan attribute karakter isvaulting, VaultTier (medium), VaultReason (pace),
