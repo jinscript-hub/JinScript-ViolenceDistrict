@@ -1837,7 +1837,8 @@ cSC:Dropdown("SC_Mode", "Mode", {"Instant", "Perfect", "Great", "Random"}, "Perf
 -- Aggressive: PREDIKTIF, killer yang lagi ngejar KITA (IsChasing + ChaseTargetUserId), waktu tabrakan <= 0.4 dtk + ping/2.
 -- Tiap tembakan DIVERIFIKASI: Char.Parry harus nyala <= 0.3 dtk, kalau ngga coba metode berikutnya (1 remote, 2 StopEmote+remote, 3 tool:Activate)
 -- dan dicatat di baris Status. BELUM dites di game.
-do
+-- Dibungkus fungsi: batas Lua 200 local per fungsi utama kelewat kalau semua local parry ditaruh di scope file (error "attempt to call a nil value" pas load).
+do local function parryInit()
     S.parry = {on = false, aggr = false, dist = 9, last = 0, busy = false, method = 1, circle = false, color = Color3.fromRGB(170, 0, 255), detect = true, learn = true, block = 0, cdLo = 0, nl = 0, face = false}
     -- id animasi ayun killer. Slasher dari scan2 (2 anim ini muncul <0.2 dtk sebelum HP turun). FILL: killer lain, liat "anim" di baris Status pas dia ayun
     local ATTACK_ANIMS = {["135002183282873"] = true, ["121216847022485"] = true}
@@ -2272,7 +2273,7 @@ do
             end
         end)
     end))
-end
+end parryInit() end
 
 local cView = tMisc:Group("View", 1)
 cView:Toggle("FOV_On", "Custom FOV", false, function(v)
