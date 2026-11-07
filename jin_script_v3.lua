@@ -1,4 +1,4 @@
--- Jìn Script v3.4 | Violence District
+-- Jìn Script v3.5 | Violence District
 -- Menu: RightShift (PC) / tap logo (HP) | F6 = skill check on/off
 -- Semua file (logo, ikon, config) ada di workspace/jin_hub/
 
@@ -1883,6 +1883,30 @@ do local function parryInit()
             if type(d.key) == "string" then S.parry.key = Enum.KeyCode[d.key] end
         end
     end)
+    -- LOG (v3.5): tiap tembakan / hit / skip ditulis ke jin_parry_log.txt (200 baris terakhir) buat diagnosa "notif muncul tapi dagger ga kepake"
+    local LOGF = BASE .. "jin_parry_log.txt"
+    local logbuf = {}
+    local function plog(...)
+        local a = table.pack(...)
+        for i = 1, a.n do a[i] = tostring(a[i]) end
+        logbuf[#logbuf + 1] = ("[%.2f] %s"):format(os.clock(), table.concat(a, " ", 1, a.n))
+        if #logbuf > 200 then table.remove(logbuf, 1) end
+        if writefile then pcall(writefile, LOGF, table.concat(logbuf, "\n")) end
+    end
+    local function attrDump(inst)
+        local o = {}
+        if inst then
+            for k, v in pairs(inst:GetAttributes()) do o[#o + 1] = k .. "=" .. tostring(v) end
+        end
+        table.sort(o)
+        return table.concat(o, ",")
+    end
+    local function toolLoc(ch)
+        local bp = lp:FindFirstChild("Backpack")
+        if ch:FindFirstChild("Parrying Dagger") then return "char" end
+        if bp and bp:FindFirstChild("Parrying Dagger") then return "backpack" end
+        return "ga ada"
+    end
     local function render(base)
         local P = S.parry
         local t = base
@@ -2024,8 +2048,10 @@ do local function parryInit()
         local order = {P.method}
         for i = 1, #steps do if i ~= P.method then order[#order + 1] = i end end
         for _, i in ipairs(order) do
-            pcall(steps[i])
-            if on() then P.method = i return i end
+            local okc, err = pcall(steps[i])
+            local good = on()
+            plog("  step", i, "pcall", okc, err or "", "-> Parry nyala:", good, "| EquippedItem", attr("EquippedItem"), "| dagger di", toolLoc(ch), "| ParrySpent", ch:GetAttribute("ParrySpent"))
+            if good then P.method = i return i end
         end
         return nil
     end
@@ -2077,6 +2103,7 @@ do local function parryInit()
         if not ch then return end
         P.busy = true
         local t0 = os.clock()
+        plog("FIRE", reason, "id", id, "| sejak anim mulai", P.animT and ("%.3fs"):format(t0 - P.animT) or "-", "| ping", pcall(function() return lp:GetNetworkPing() end) and ("%.3f"):format(lp:GetNetworkPing()) or "?", "| char:", attrDump(ch))
         P.block = t0 + 0.35
         P.firedT = t0
         task.spawn(function()
@@ -2191,6 +2218,7 @@ do local function parryInit()
             local d = off.Magnitude
             if d > math.max(14, P.dist * 1.3) or d == 0 then return end   -- v3.3: cap 14 bikin slider > 10.8m ga ngefek
             P.anim = ("%s %.2fs %.0fm %s"):format(id, tr.Length, d, tr.Looped and "loop" or "once")
+            P.animT = os.clock()
             if not P.on then return end
             -- alasan skip ditulis ke Status (skip: ...) biar keliatan kenapa ga nembak
             local toUs = off.Unit
@@ -2207,7 +2235,11 @@ do local function parryInit()
                     if near then why = "killer lagi ngerjain " .. near end
                 end
             end
-            if why then P.why, P.whyT = why, os.clock() return end
+            if why then
+                P.why, P.whyT = why, os.clock()
+                if known then plog("SKIP anim", id, "|", why) end
+                return
+            end
             tryFire(known and "ayunan" or "ayunan (tebakan)", k, id)
         end))
     end
@@ -2235,6 +2267,7 @@ do local function parryInit()
                 end
             end
             if mine then
+                plog("HIT KITA | anim", best and best.id or "?", "| Parry", tostring(hum.Parent and hum.Parent:GetAttribute("Parry")), "| sejak FIRE", S.parry.firedT and ("%.3fs"):format(now - S.parry.firedT) or "-")
                 local pd = S.parry.pending   -- kena hit pas parry kita lagi aktif = tembus
                 if pd and not pd.done and now - pd.t <= 0.8 then
                     pd.pierced, pd.pid = true, best and best.id
@@ -2554,6 +2587,9 @@ LAGI DIKERJAIN (belum diverifikasi di game)
     (3) auto-learn 1 hit cuma cukup kalau anim lolos heuristik swing, selain itu 2 hit (sebelumnya "hit kita" langsung belajar -> anim random bisa kepelajar permanen).
     (4) bug: cap jarak 14 stud ngabaikan slider Parry Distance > 10.8m, sekarang max(14, dist*1.3). (5) Aggressive juga skip kalau killer lagi ngerjain gen/pallet/window.
     Kalau jin_parry.json lama udah keracunan anim salah: hapus id-nya dari "anims" (atau hapus file-nya). BELUM dites di game.
+    v3.5: logger diagnosa -> workspace/jin_hub/jin_parry_log.txt (200 baris terakhir): FIRE (jeda sejak anim mulai, ping, semua attribute karakter),
+    tiap step metode (pcall ok?, Parry nyala?, EquippedItem, dagger di char/backpack), SKIP (alasan), HIT KITA (Parry aktif ga, berapa lama setelah FIRE).
+    Buat nyari kenapa "notif muncul tapi dagger ga kepake" (lagi lari / telat / ga ke-press).
   - PERFECT VAULT: BELUM ditulis. jin_remotes.txt ga ada satupun event vault (isinya cuma UpdateCharacterLook, PushRemote,
     GetPing, EmoteHandler, parry, anim idle/run/walk). Yang ada di dump: remote Window.VaultEvent / fastvault / VaultCommit /
     VaultReject / VaultCompleteEvent (argumen ga diketahui) dan attribute karakter isvaulting, VaultTier (medium), VaultReason (pace),
