@@ -1833,48 +1833,71 @@ cSC:Toggle("SC_Enabled", "Enabled (F6)", true, function(v) S.sc.enabled = v end)
 cSC:Dropdown("SC_Mode", "Mode", {"Instant", "Perfect", "Great", "Random"}, "Perfect", function(v) S.sc.mode = v end)
 
 -- AUTO PARRY (default OFF). Log: Items["Parrying Dagger"].parry:FireServer(karakter sendiri) -> Char.Parry=true ~0.8 dtk (mulai ~0.1 dtk setelah fire), abis itu Char.ParrySpent=true.
--- Log scan2: ayun killer -> damage cuma ~0.12-0.17 dtk, lebih pendek dari ping, jadi ga bisa nunggu animasi. Ditembak PREDIKTIF:
--- killer yang IsChasing + ChaseTargetUserId == kita, masuk S.parry.dist stud, dan ngadep ke kita. BELUM dites; parry salah timing = kepake (ParrySpent).
+-- Normal  : killer dalam S.parry.dist stud dan ngadep ke kita -> tembak.
+-- Aggressive (predict): waktu tabrakan = jarak / kecepatan mendekat; nembak kalau <= 0.4 dtk + ping/2 (ayun killer -> damage cuma ~0.12-0.17 dtk, lebih pendek dari ping).
+-- Baris "Status" di menu nyebut kenapa ga nembak (item, ParrySpent, jarak). BELUM dites; parry salah timing = kepake (ParrySpent).
 do
-    S.parry = {on = false, dist = 9, face = 0.5, last = 0}
-    local cPar = tSC:Group("Auto parry", 2)
-    cPar:Toggle("PAR_On", "Enabled", false, function(v) S.parry.on = v end)
-    cPar:Slider("PAR_Dist", "Jarak tembak", 4, 20, 9, 1, function(v) S.parry.dist = v end, "m")
-    cPar:Label("Parrying Dagger harus ke-equip. Nembak pas killer yang ngejar kamu masuk jarak ini dan ngadep ke kamu. Kemungkinan sekali pakai per ronde, tes dulu pelan-pelan.")
+    S.parry = {on = false, aggr = false, dist = 9, face = 0.5, last = 0, circle = false, color = Color3.fromRGB(170, 0, 255)}
+    local cPar = tSC:Group("Auto parry (Dagger)", 2)
+    cPar:Toggle("PAR_On", "Auto Parry", false, function(v) S.parry.on = v end)
+    cPar:Toggle("PAR_Aggr", "Auto Parry Aggressive (Predict)", false, function(v) S.parry.aggr = v end)
+    cPar:Slider("PAR_Dist", "Parry Distance", 4, 20, 9, 0.5, function(v) S.parry.dist = v end, "m")
+    cPar:Toggle("PAR_Circle", "Show Parry Circle", false, function(v) S.parry.circle = v end,
+        {id = "PAR_CircleCol", default = S.parry.color, cb = function(c) S.parry.color = c end})
+    local stLbl = cPar:Label("Status: OFF")
     local function attr(k)
         local v = lp:GetAttribute(k)
         if v == nil and lp.Character then v = lp.Character:GetAttribute(k) end
         return v
     end
+    local function setStatus(t)
+        if S.parry.stat ~= t then S.parry.stat = t stLbl.Text = t end
+    end
     local remote
     local function parryTick()
-        if not (running and S.parry.on) or S.lobby then return end
+        local P = S.parry
+        if not (running and (P.on or P.aggr)) then setStatus("Status: OFF") return end
         local ch = lp.Character
         local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
         local hum = ch and ch:FindFirstChildOfClass("Humanoid")
-        if not (hrp and hum and hum.Health > 0) then return end
-        if attr("EquippedItem") ~= "Parrying Dagger" then return end
-        if ch:GetAttribute("ParrySpent") or ch:GetAttribute("Parry") or ch:GetAttribute("Knocked") then return end
-        if os.clock() - S.parry.last < 2 then return end
+        if not (hrp and hum and hum.Health > 0) then setStatus("Status: belum spawn / mati") return end
+        if roleOf(lp) == "killer" then setStatus("Status: kamu killer") return end
+        local eq = attr("EquippedItem")
+        if eq ~= nil and eq ~= "Parrying Dagger" then setStatus("Status: item = " .. tostring(eq) .. ", bukan dagger") return end
+        if ch:GetAttribute("ParrySpent") then setStatus("Status: ParrySpent aktif (parry udah kepake)") return end
+        if ch:GetAttribute("Parry") or ch:GetAttribute("Knocked") then setStatus("Status: parry lagi aktif / knocked") return end
+        local ping = 0
+        pcall(function() ping = lp:GetNetworkPing() end)
+        local nd, fire = math.huge, nil
         for _, k in ipairs(getKillers()) do
-            if k.char:GetAttribute("IsChasing") and k.char:GetAttribute("ChaseTargetUserId") == lp.UserId then
-                local off = hrp.Position - k.hrp.Position
-                local d = off.Magnitude
-                if d > 0 and d <= S.parry.dist and k.hrp.CFrame.LookVector:Dot(off.Unit) >= S.parry.face then
-                    if not (remote and remote.Parent) then
-                        local r = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
-                        local it = r and r:FindFirstChild("Items")
-                        local pd = it and it:FindFirstChild("Parrying Dagger")
-                        remote = pd and pd:FindFirstChild("parry")
-                    end
-                    if remote then
-                        S.parry.last = os.clock()
-                        pcall(function() remote:FireServer(ch) end)
-                    end
-                    return
+            local off = hrp.Position - k.hrp.Position
+            local d = off.Magnitude
+            if d > 0 then
+                nd = math.min(nd, d)
+                local u = off.Unit
+                local face = k.hrp.CFrame.LookVector:Dot(u)
+                if P.on and d <= P.dist and face >= P.face then fire = "jarak" break end
+                if P.aggr and d <= P.dist * 1.6 then
+                    local closing = (k.hrp.AssemblyLinearVelocity - hrp.AssemblyLinearVelocity):Dot(u)
+                    if closing > 4 and face >= 0.3 and d / closing <= 0.4 + ping / 2 then fire = "predict" break end
                 end
             end
         end
+        if not fire then
+            setStatus(nd < math.huge and ("Status: siap | killer terdekat %.0fm"):format(nd) or "Status: siap | ga ada killer")
+            return
+        end
+        if os.clock() - P.last < 2 then return end
+        if not (remote and remote.Parent) then
+            local r = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
+            local it = r and r:FindFirstChild("Items")
+            local pd = it and it:FindFirstChild("Parrying Dagger")
+            remote = pd and pd:FindFirstChild("parry")
+        end
+        if not remote then setStatus("Status: remote parry ga ketemu") return end
+        P.last = os.clock()
+        pcall(function() remote:FireServer(ch) end)
+        notify("Auto parry", "Nembak (" .. fire .. ")")
     end
     task.spawn(function()
         while running do
@@ -1882,6 +1905,34 @@ do
             task.wait(0.05)
         end
     end)
+    -- circle jarak parry di tanah (Part di bawah Camera, ga ke-replicate)
+    local circ
+    track(RS.RenderStepped:Connect(function()
+        pcall(function()
+            local ch = lp.Character
+            local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+            local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+            local cam = workspace.CurrentCamera
+            if not (S.parry.circle and hrp and hum and cam) then
+                if circ then circ.Parent = nil end
+                return
+            end
+            if not circ then
+                circ = Instance.new("Part")
+                circ.Name = "JinParryCircle"
+                circ.Shape = Enum.PartType.Cylinder
+                circ.Anchored, circ.CanCollide, circ.CanQuery, circ.CanTouch, circ.CastShadow = true, false, false, false, false
+                circ.Material = Enum.Material.Neon
+                circ.Transparency = 0.75
+                S.parryCircle = circ
+            end
+            circ.Color = S.parry.color
+            local r = S.parry.dist
+            circ.Size = Vector3.new(0.15, r * 2, r * 2)
+            circ.CFrame = CFrame.new(hrp.Position - Vector3.new(0, hrp.Size.Y / 2 + hum.HipHeight - 0.05, 0)) * CFrame.Angles(0, 0, math.rad(90))
+            if circ.Parent ~= cam then circ.Parent = cam end
+        end)
+    end))
 end
 
 local cView = tMisc:Group("View", 1)
@@ -2021,6 +2072,7 @@ function cleanup()
     for inst in pairs(ovis) do destroyObj(inst) end
     pcall(function() espFolder:Destroy() end)
     pcall(function() coneFolder:Destroy() end)
+    pcall(function() if S.parryCircle then S.parryCircle:Destroy() end end)
     S.fb.on, S.al.shadows = false, false
     pcall(fbRestore) pcall(shadowsRestore) pcall(particlesRestore) pcall(postRestore)
     pcall(setQuality, false)
@@ -2095,10 +2147,10 @@ LAGI DIKERJAIN (belum diverifikasi di game)
     Dari scan2: KillerChance punya user 30 -> 31 pas ronde jalan (naik tiap ronde ga jadi killer, cocok sama undian berbobot).
   - PREDIKSI MAP (tab Misc): dengerin Remotes.Messages.Mapinfo(nama, 1). Di scan2 masuk sebelum RoundInProgress=true (re4 masuk ~17 dtk sebelum ronde),
     jadi dianggap map berikutnya; pas RoundInProgress=true ditulis "Map sekarang". Event pertama pas join bisa jadi map lama. Arg ke-2 ("1") artinya belum jelas.
-  - AUTO PARRY (tab Skill Check, default OFF): PREDIKTIF, bukan reaktif. Scan2: ayun killer -> damage cuma 0.12-0.17 dtk (anim 135002183282873 pas 5.2 stud,
-    121216847022485 pas 2.2 stud, HP turun 0.12 dtk setelahnya), lebih pendek dari ping 237ms, jadi nunggu anim = telat. Trigger: killer IsChasing kita
-    (ChaseTargetUserId == UserId), dalam S.parry.dist stud, ngadep >= 0.5. Parry window 0.8 dtk jadi nembak agak awal masih nutup. BELUM dites,
-    log scan2 ga ada parry yang kena killer (parry-nya kebuang pas killer 85 stud). Kalau EquippedItem ternyata bukan attribute Player/Character, ga bakal nembak.
+  - AUTO PARRY (tab Skill Check, default OFF): versi 1 (cuma nembak pas killer IsChasing kita) ga jalan di tes user: deket killer, kena hit, diem.
+    Penyebab belum pasti (kandidat: ParrySpent nyangkut, EquippedItem ga kebaca, IsChasing ga ke-set). Versi sekarang gaya L2 Hub: Auto Parry (jarak+ngadep),
+    Aggressive/Predict (waktu tabrakan <= 0.4 dtk + ping/2), slider jarak, circle di tanah + warna. Ada baris "Status" di menu yang nyebut penyebab ga nembak.
+    Fakta dari scan2: ayun killer -> damage 0.12-0.17 dtk; anim 135002183282873 (5.2 stud) dan 121216847022485 (2.2 stud) dipakai killer yang kena kita.
   - PERFECT VAULT: BELUM ditulis. jin_remotes.txt ga ada satupun event vault (isinya cuma UpdateCharacterLook, PushRemote,
     GetPing, EmoteHandler, parry, anim idle/run/walk). Yang ada di dump: remote Window.VaultEvent / fastvault / VaultCommit /
     VaultReject / VaultCompleteEvent (argumen ga diketahui) dan attribute karakter isvaulting, VaultTier (medium), VaultReason (pace),
