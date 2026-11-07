@@ -2077,7 +2077,7 @@ do local function parryInit()
             repeat
                 if ch:GetAttribute("Parry") then return true end
                 task.wait()
-            until os.clock() - t0 > 0.3
+            until os.clock() - t0 > 0.2
             return false
         end
         local steps = {
@@ -2093,6 +2093,7 @@ do local function parryInit()
         -- v3.6: log nunjukin step 2 (remote doang) udah cukup bikin Char.Parry nyala, sedangkan step 1 (press) ga ngapa-ngapain kalau
         -- tombol/key belum kerekam dan malah buang 0.3 dtk. Sekarang remote duluan, press cuma dipake kalau ada tombol/key kerekam.
         local hasPress = P.btn or P.key or P.btnInst
+        local tStart = os.clock()
         local order = {}
         for _, i in ipairs({P.method, 2, 3, 1}) do
             local dup = false
@@ -2103,7 +2104,8 @@ do local function parryInit()
             local okc, err = pcall(steps[i])
             local good = on()
             plog("  step", i, "pcall", okc, err or "", "-> Parry nyala:", good, "| EquippedItem", attr("EquippedItem"), "| dagger di", toolLoc(ch), "| ParrySpent", ch:GetAttribute("ParrySpent"))
-            if good then P.method = i return i end
+            if good then P.method, P.methodOk = i, true return i end
+            if P.methodOk and os.clock() - tStart > 0.25 then break end   -- v3.9: metode udah pernah sukses -> gagal = cooldown, jangan nyoba semua metode
         end
         return nil
     end
@@ -2252,6 +2254,13 @@ do local function parryInit()
     -- jarak prediksi <= hitReach dan kita masih di arah bidik (dot >= hitDot). hitReach / hitDot MELEBAR sendiri tiap kita kena hit
     -- yang tadinya diprediksi meleset (auto-kalibrasi, lihat watchHum).
     local HIT_T, EVAL_DELAY = 0.2, 0.04
+    -- v3.9: EVAL_DELAY adaptif ping. Parry baru aktif di server ~0.13 dtk + ping/2 setelah ditembak, hit dateng ~0.2 dtk setelah anim mulai.
+    -- Ping tinggi -> delay tetap 0.04 bikin parry telat. Sekarang: makin gede ping, makin kecil delay (min 0 = tembak langsung).
+    local function evalDelay()
+        local ping = 0
+        pcall(function() ping = lp:GetNetworkPing() end)
+        return math.clamp(HIT_T - 0.13 - ping * 0.5 - 0.03, 0, EVAL_DELAY)
+    end
     local function willHit(k, hrp, tRem)
         local P = S.parry
         local kv, uv = k.hrp.AssemblyLinearVelocity, hrp.AssemblyLinearVelocity
@@ -2315,16 +2324,19 @@ do local function parryInit()
                 return
             end
             local reason = known and "ayunan" or "ayunan (tebakan)"
-            task.delay(EVAL_DELAY, function()
+            local ed = evalDelay()
+            task.delay(ed, function()
                 local P2 = S.parry
                 if not (running and P2.on and k.hrp.Parent) then return end
                 local c2 = lp.Character
                 local h2 = c2 and c2:FindFirstChild("HumanoidRootPart")
                 if not h2 then return end
-                local ok2, d2, dot2 = willHit(k, h2, HIT_T - EVAL_DELAY)
+                local ok2, d2, dot2 = willHit(k, h2, HIT_T - ed)
                 P2.lastEval = {id = id, t = os.clock(), d = d2, dot = dot2}
                 plog("EVAL anim", id, ("| d_prediksi %.1f (reach %.1f) | dot %.2f (min %.2f) | jarak skrg %.1f | ->"):format(d2, P2.hitReach, dot2, P2.hitDot, (h2.Position - k.hrp.Position).Magnitude), (ok2 or not P2.hitOnly) and "TEMBAK" or "SKIP (ga bakal kena)")
-                if P2.hitOnly and not ok2 then
+                local dNow = (h2.Position - k.hrp.Position).Magnitude
+                local closeCall = dNow <= 4 and aimDot(aimOf(k), k.hrp.Position, h2.Position) >= 0.35   -- v3.9: nempel + dibidik = jangan percaya prediksi
+                if P2.hitOnly and not ok2 and not closeCall then
                     P2.why, P2.whyT = ("ayunan diprediksi meleset (d %.1f > %.1f / dot %.2f)"):format(d2, P2.hitReach, dot2), os.clock()
                     return
                 end
@@ -2407,7 +2419,7 @@ do local function parryInit()
                 if P.aggr and d <= P.dist * 1.6 and k.char:GetAttribute("IsChasing") and k.char:GetAttribute("ChaseTargetUserId") == lp.UserId then
                     local u = off.Unit
                     local closing = (k.hrp.AssemblyLinearVelocity - hrp.AssemblyLinearVelocity):Dot(u)
-                    if closing > 4 and d / closing <= 0.4 + ping / 2 and targetsUs(k, hrp) and not nearInteract(k, u) then tryFire("predict", k) end
+                    if closing > 4 and d / closing <= 0.4 + ping and targetsUs(k, hrp) and not nearInteract(k, u) then tryFire("predict", k) end
                 end
             end
         end
