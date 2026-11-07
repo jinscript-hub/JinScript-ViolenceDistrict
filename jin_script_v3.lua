@@ -95,6 +95,7 @@ local CATS = {
     {key = "pallet",    label = "Pallet",    color = {0, 230, 255},   on = false},
     {key = "window",    label = "Window",    color = {255, 235, 0},   on = false},
     {key = "hook",      label = "Hook",      color = {255, 105, 180}, on = false},
+    {key = "gate",      label = "Exit Gate", color = {255, 255, 255}, on = false},
     {key = "pumpkin",   label = "Pumpkin",   color = {255, 140, 0},   on = false},
 }
 local CAT = {}
@@ -102,7 +103,7 @@ for _, c in ipairs(CATS) do CAT[c.key] = c end
 
 local S = {
     cat = {}, names = true, dist = true, textSize = 13, maxDist = 600, chaseDist = 40, hookNear = 10,
-    hideSpec = true, genHideDone = true, genProgCol = true, genDoneCol = Color3.fromRGB(0, 255, 80), lobby = false,
+    hideSpec = true, palHideDown = true, genHideDone = true, genProgCol = true, genDoneCol = Color3.fromRGB(0, 255, 80), lobby = false,
     chaseCol = {Color3.fromRGB(0, 255, 80), Color3.fromRGB(255, 235, 0), Color3.fromRGB(255, 40, 40)}, -- ! ijo, !! kuning, !!! merah
     cone = {on = true, range = 70, angle = 100, color = Color3.fromRGB(255, 60, 60), transp = 0.75},
     sc = {enabled = true, mode = "Perfect"},
@@ -143,7 +144,7 @@ local function roleOf(plr)
 end
 
 -- spectator / nunggu ronde: team atau attribute bernama spectat / lobby / waiting dst.
--- FILL: kalau game pake nama lain, tambahin ke SPEC_WORDS (cek: Settings > Scan status pemain pas lagi spectator)
+-- FILL: kalau game pake nama lain, tambahin ke SPEC_WORDS
 local SPEC_WORDS = {"spectat", "lobby", "waiting", "queue", "intermission", "dead", "eliminat"}
 local function specWord(str)
     str = str:lower()
@@ -177,6 +178,12 @@ local MATCH = {
         local n = i.Name:lower()
         return n ~= "pallets" and n:find("pallet") ~= nil and n:find("point") == nil and n:find("slide") == nil
     end,
+    -- dump: Workspace.Map.Gate.ExitLever (Model); LeftGate = MeshPart, Map.gate = Part (ga ke-match, Model only)
+    gate      = function(i)
+        if not i:IsA("Model") then return false end
+        local n = i.Name:lower()
+        return n == "exitlever" or n == "gate" or n == "exit" or n:find("exitgate", 1, true) ~= nil or n:find("exit gate", 1, true) ~= nil or n:find("escape", 1, true) ~= nil
+    end,
     pumpkin   = function(i)
         if not i:IsA("PVInstance") then return false end
         local n = i.Name:lower()
@@ -200,7 +207,7 @@ local function inCharacter(i)
 end
 local function classify(i)
     local n = i.Name:lower()
-    if not (n:find("generator") or n:find("window") or n:find("pallet") or n:find("hook") or n:find("pumpkin") or n:find("labu")) then return end
+    if not (n:find("generator") or n:find("window") or n:find("pallet") or n:find("hook") or n:find("pumpkin") or n:find("labu") or n:find("gate") or n:find("exit") or n:find("escape")) then return end
     for cat, f in pairs(MATCH) do
         if f(i) and topmost(cat, i) and not inCharacter(i) then found[cat][i] = true return end
     end
@@ -211,7 +218,7 @@ end
 -- urutan cek: attribute / Value di Player+Character -> animasi yang lagi jalan -> fallback jarak
 --   hooked  harus dalam S.hookNear stud dari model Hook; flag hooked tapi jauh dari Hook = jatuh/merangkak (knocked)
 --   chased  fallback: killer dalam S.chaseDist stud dan ga ketutup tembok (raycast)
--- kalau game pake nama lain, edit STATE_KEYS / ANIM_KEYS (cek namanya: Settings > Scan status pemain)
+-- kalau game pake nama lain, edit STATE_KEYS / ANIM_KEYS (cek nama attribute / animasinya langsung di game)
 ----------------------------------------------------------------------
 local STATE_KEYS = {
     hooked  = {"hook", "sacrific", "caged"},
@@ -397,7 +404,7 @@ local function createObj(cat, inst)
 end
 
 -- PROGRESS GENERATOR: nyari attribute / NumberValue bernama mirip "progress" di dalam model Generator (dicache per generator)
--- FILL: kalau ga kedetek, jalanin Settings > Scan generator (hasil: jin_hub/jin_gens.txt), terus isi GEN_PROG_KEYS / GEN_DONE_KEYS
+-- terverifikasi: attribute RepairProgress (0..100) + Completed (bool); kalau game update dan ga kedetek, isi GEN_PROG_KEYS / GEN_DONE_KEYS
 local GEN_PROG_KEYS = {"progress", "percent", "repair", "completion"}
 local GEN_DONE_KEYS = {"complete", "finish", "repaired", "fixed", "done", "powered"}
 local GEN_SKIP_KEYS = {"max", "speed", "rate", "skill", "time", "count", "player"}
@@ -459,6 +466,43 @@ local function genProgress(inst)
         end
     end
     return prog, done
+end
+
+-- PALLET JATUH: nyari attribute boolean / BoolValue bernama mirip "dropped / fallen / down" di model Pallet (dicache)
+-- attribute/BoolValue dicoba dulu (PAL_DOWN_KEYS); ga ada di game ini, jadi fallback struktur Intact/Broken di bawah. BELUM dites pas pallet beneran jatuh
+local PAL_DOWN_KEYS = {"drop", "fall", "down", "broken", "destroy"}
+local palCache = setmetatable({}, {__mode = "k"})
+local function palletDown(inst)
+    local c = palCache[inst]
+    if not c or (not c.ref and os.clock() - c.at > 3) then
+        c = {at = os.clock()}
+        local list = {inst}
+        for _, d in ipairs(inst:GetDescendants()) do list[#list + 1] = d end
+        for _, o in ipairs(list) do
+            if c.ref then break end
+            for k, v in pairs(o:GetAttributes()) do
+                if type(v) == "boolean" and keyHit(k, PAL_DOWN_KEYS) then c.ref = {o, k} break end
+            end
+            if not c.ref and o:IsA("BoolValue") and keyHit(o.Name, PAL_DOWN_KEYS) then c.ref = {o} end
+        end
+        palCache[inst] = c
+    end
+    if not c.ref then
+        -- dump: pallet ga punya bool attribute, cuma child Intact / Broken (Model). Jatuh/patah = Intact ilang atau semua part-nya transparan
+        local intact = inst:FindFirstChild("Intact")
+        if not intact then return inst:FindFirstChild("Broken") ~= nil end
+        local n = 0
+        for _, d in ipairs(intact:GetDescendants()) do
+            if d:IsA("BasePart") then
+                n = n + 1
+                if d.Transparency < 0.99 then return false end
+            end
+        end
+        return n > 0
+    end
+    local v = genRead(c.ref)
+    if v == nil then palCache[inst] = nil return false end
+    return v == true
 end
 
 local function update()
@@ -556,8 +600,8 @@ local function update()
             if not inst:IsDescendantOf(workspace) then
                 set[inst] = nil
                 destroyObj(inst)
-            elseif enabled and cat == "generator" and S.genHideDone and select(2, genProgress(inst)) then
-                destroyObj(inst)   -- generator udah beres -> ESP dihilangin
+            elseif enabled and ((cat == "generator" and S.genHideDone and select(2, genProgress(inst))) or (cat == "pallet" and S.palHideDown and palletDown(inst))) then
+                destroyObj(inst)   -- generator beres / pallet udah jatuh -> ESP dihilangin
             elseif enabled then
                 local o = ovis[inst] or createObj(cat, inst)
                 local prog = (cat == "generator" and S.genProgCol) and genProgress(inst) or nil
@@ -1157,7 +1201,7 @@ local header = new("Frame", {Size = UDim2.new(1, 0, 0, HEAD), BackgroundTranspar
 new("Frame", {Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = T.stroke, BorderSizePixel = 0}, header)
 local ttl = mkLabel(header, "JÌN SCRIPT", 12, T.text, F_BOLD)
 ttl.Position = UDim2.fromOffset(14, 0); ttl.Size = UDim2.fromOffset(78, HEAD - 1)
-local ver = mkLabel(header, "v3.2", 10, T.dim)
+local ver = mkLabel(header, "v3.3", 10, T.dim)
 ver.Position = UDim2.fromOffset(92, 1); ver.Size = UDim2.fromOffset(30, HEAD - 1)
 
 local closeBtn = new("TextButton", {Size = UDim2.fromOffset(24, 24), AnchorPoint = Vector2.new(1, 0.5),
@@ -1730,7 +1774,7 @@ for _, c in ipairs(CATS) do
     local target = c.player and cPlayers or cObj
     target:Toggle("T_" .. key, c.label, c.on,
         function(v) S.cat[key].on = v end,
-        {id = "C_" .. key, default = S.cat[key].color, cb = function(col) S.cat[key].color = col end})
+        key ~= "chased" and {id = "C_" .. key, default = S.cat[key].color, cb = function(col) S.cat[key].color = col end} or nil)
 end
 local cDisp = tESP:Group("Tampilan", 2)
 cDisp:Toggle("ESP_Names", "Nama (di atas)", true, function(v) S.names = v end)
@@ -1738,6 +1782,7 @@ cDisp:Toggle("ESP_Dist", "Jarak (di bawah)", true, function(v) S.dist = v end)
 cDisp:Toggle("ESP_HideSpec", "ESP mati pas spectator / lobby", true, function(v) S.hideSpec = v end)
 cDisp:Toggle("ESP_GenProg", "Generator: warna ijo + % progress", true, function(v) S.genProgCol = v end)
 cDisp:Toggle("ESP_GenDone", "Generator beres = ESP ilang", true, function(v) S.genHideDone = v end)
+cDisp:Toggle("ESP_PalDown", "Pallet jatuh = ESP ilang", true, function(v) S.palHideDown = v end)
 cDisp:Slider("ESP_TextSize", "Ukuran teks", 10, 24, 13, 1, function(v) S.textSize = v end)
 cDisp:Slider("ESP_MaxDist", "Jarak max objek (0 = bebas)", 0, 3000, 600, 50, function(v) S.maxDist = v end, "m")
 cDisp:Toggle("Cone_On", "Area liat killer (tanah)", true, function(v) S.cone.on = v end)
@@ -1767,134 +1812,12 @@ cAL:Toggle("AL_Shadows", "Matiin shadow", false,
     function(v) S.al.shadows = v if v then shadowsSave() else shadowsRestore() end end)
 cAL:Toggle("AL_Quality", "Render quality terendah", false, function(v) S.al.quality = v setQuality(v) end)
 
--- scan data game: nyari tempat stats (Level, Screws, Gears, dll) disimpan, hasil ke jin_hub/jin_dump.txt
-local function dumpData()
-    notify("Scan", "Lagi nyari data, tunggu bentar...")
-    task.spawn(function()
-        local out = {}
-        local function add(x) if #out < 600 then out[#out + 1] = x end end
-        local function str(v) local ok, r = pcall(tostring, v) return ok and r or "?" end
-        add(("== %s (%d) | team=%s"):format(lp.Name, lp.UserId, lp.Team and lp.Team.Name or "nil"))
-        for k, v in pairs(lp:GetAttributes()) do add(("[attr] Player.%s = %s"):format(k, str(v))) end
-        for _, d in ipairs(lp:GetDescendants()) do
-            local path = d:GetFullName()
-            if d:IsA("ValueBase") then add(("[value] %s = %s"):format(path, str(d.Value))) end
-            for k, v in pairs(d:GetAttributes()) do add(("[attr] %s.%s = %s"):format(path, k, str(v))) end
-        end
-        local pats = {"level", "screw", "gear", "chance", "killer", "coin", "cash", "xp", "exp", "money", "stat", "data"}
-        local function hit(n)
-            n = n:lower()
-            for _, p in ipairs(pats) do if n:find(p, 1, true) then return true end end
-            return false
-        end
-        for _, root in ipairs({game:GetService("ReplicatedStorage"), pg}) do
-            for idx, d in ipairs(root:GetDescendants()) do
-                if idx % 400 == 0 then task.wait() end
-                if not d:IsDescendantOf(gui) then
-                    if d:IsA("ValueBase") and (hit(d.Name) or d.Name == lp.Name) then
-                        add(("[value] %s = %s"):format(d:GetFullName(), str(d.Value)))
-                    elseif (d:IsA("TextLabel") or d:IsA("TextButton")) and d.Text ~= "" and #d.Text < 60 and hit(d.Text) then
-                        add(("[text] %s = %s"):format(d:GetFullName(), d.Text))
-                    elseif d.Name == lp.Name or d.Name == tostring(lp.UserId) then
-                        add(("[node] %s (%s)"):format(d:GetFullName(), d.ClassName))
-                    end
-                end
-            end
-        end
-        local txt = table.concat(out, "\n")
-        if writefile then pcall(writefile, BASE .. "jin_dump.txt", txt) end
-        warn("[jin] scan selesai: " .. #out .. " baris")
-        notify("Scan", writefile and "Selesai, cek jin_hub/jin_dump.txt" or "Selesai, liat F9")
-    end)
-end
-
--- scan status semua pemain (attribute, Value, animasi yang lagi jalan) -> jin_hub/jin_players.txt
--- jalanin pas ada survivor yang lagi chased / knocked / hooked, biar kelihatan nama aslinya
-local function dumpPlayers()
-    notify("Scan", "Nyari status pemain...")
-    task.spawn(function()
-        local out = {}
-        local function add(x) if #out < 800 then out[#out + 1] = x end end
-        local function str(v) local ok, r = pcall(tostring, v) return ok and r or "?" end
-        local function dumpInst(tag, inst)
-            if not inst then return end
-            for k, v in pairs(inst:GetAttributes()) do add(("  [attr] %s.%s = %s"):format(tag, k, str(v))) end
-            for _, c in ipairs(inst:GetChildren()) do
-                if c:IsA("ValueBase") then add(("  [value] %s.%s = %s"):format(tag, c.Name, str(c.Value))) end
-            end
-        end
-        local killers = getKillers()
-        for _, plr in ipairs(Players:GetPlayers()) do
-            local role = roleOf(plr)
-            local char = plr.Character
-            local hum = char and char:FindFirstChildOfClass("Humanoid")
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
-            local st = "-"
-            if role == "survivor" and hum and hrp and hum.Health > 0 then
-                st = survivorState(plr, char, hum, hrp, killers)
-            end
-            add(("== %s | role=%s | detected=%s | team=%s"):format(plr.Name, role, st, plr.Team and plr.Team.Name or "nil"))
-            dumpInst("Player", plr)
-            dumpInst("Char", char)
-            if hum then
-                add(("  [hum] health=%d/%d walkspeed=%s state=%s"):format(
-                    math.floor(hum.Health), math.floor(hum.MaxHealth), str(hum.WalkSpeed), str(hum:GetState())))
-                local an = hum:FindFirstChildOfClass("Animator")
-                if an then
-                    local ok, tracks = pcall(function() return an:GetPlayingAnimationTracks() end)
-                    if ok then
-                        for _, t in ipairs(tracks) do
-                            add(("  [anim] %s | %s"):format(t.Name, str(t.Animation and t.Animation.AnimationId)))
-                        end
-                    end
-                end
-            end
-        end
-        local txt = table.concat(out, "\n")
-        if writefile then pcall(writefile, BASE .. "jin_players.txt", txt) end
-        warn("[jin] scan pemain selesai: " .. #out .. " baris")
-        notify("Scan", writefile and "Selesai, cek jin_hub/jin_players.txt" or "Selesai, liat F9")
-    end)
-end
-
--- scan semua Generator: attribute + Value + hasil deteksi progress -> jin_hub/jin_gens.txt
--- jalanin pas di dalam ronde, idealnya pas ada generator yang lagi dibenerin
-local function dumpGens()
-    notify("Scan", "Nyari data generator...")
-    task.spawn(function()
-        local out = {}
-        local function add(x) if #out < 700 then out[#out + 1] = x end end
-        local function str(v) local ok, r = pcall(tostring, v) return ok and r or "?" end
-        for inst in pairs(found.generator) do
-            if inst.Parent then
-                local base = inst:GetFullName()
-                local pr, dn = genProgress(inst)
-                add(("== %s | detected progress=%s done=%s"):format(base, str(pr), str(dn)))
-                local list = {inst}
-                for _, d in ipairs(inst:GetDescendants()) do list[#list + 1] = d end
-                for _, o in ipairs(list) do
-                    local rel = (o == inst) and "." or o:GetFullName():sub(#base + 2)
-                    for k, v in pairs(o:GetAttributes()) do add(("  [attr] %s.%s = %s"):format(rel, k, str(v))) end
-                    if o:IsA("ValueBase") then add(("  [value] %s = %s"):format(rel, str(o.Value))) end
-                end
-            end
-        end
-        local txt = table.concat(out, "\n")
-        if writefile then pcall(writefile, BASE .. "jin_gens.txt", txt) end
-        warn("[jin] scan generator selesai: " .. #out .. " baris")
-        notify("Scan", writefile and "Selesai, cek jin_hub/jin_gens.txt" or "Selesai, liat F9")
-    end)
-end
-
 local cleanup
 local cUI = tSet:Group("Tampilan", 1)
 cUI:Dropdown("UI_Size", "Ukuran", {"Kecil", "Sedang", "Besar", "Jumbo"}, "Sedang", function(v) curSize = v applyLayout() end)
 cUI:Dropdown("UI_Ratio", "Rasio", {"4:3", "16:10", "16:9", "21:9"}, "16:9", function(v) curRatio = v applyLayout() end)
 cUI:Label("4:3 = tinggi, 21:9 = lebar dan gepeng.")
 local cMenu = tSet:Group("Menu", 2)
-cMenu:Button("Scan data game (buat stats)", dumpData)
-cMenu:Button("Scan status pemain (chase/down/hook)", dumpPlayers)
-cMenu:Button("Scan generator (progress)", dumpGens)
 cMenu:Button("Reset config", function()
     local p = findFile(CFG_FILE)
     if p and delfile then pcall(delfile, p) end
@@ -1979,7 +1902,7 @@ loading = false
 pcall(refreshDash)
 setOpen(true)
 notify("Jìn Script", "Loaded")
-warn("[jin] v3.2 loaded")
+warn("[jin] v3.3 loaded")
 
 --[==[
 ======================================================================
@@ -1993,11 +1916,11 @@ PETA FILE (urutan, cari banner "-----" + judulnya)
   config atas -> state S + CATS -> ESP role -> ESP objek (MATCH/found/classify) -> status survivor
   -> ESP update() -> area liat killer (cone) -> skill check -> fullbright/anti lag -> UI helper
   -> config save/load -> window (do-block) -> Tab/Card -> Dashboard (do-block) -> tab ESP/SC/Misc/Settings
-  -> scan helper (dumpData / dumpPlayers / dumpGens) -> loop + cleanup
+  -> loop + cleanup
 
 ATURAN KERAS
   1. LIMIT 200 LOCAL per chunk. Kalau kelewat, loadstring balikin nil dan loader error
-     "attempt to call a nil value" di Line 1. Saat ini ~172 di main chunk. Bagian window dan Dashboard
+     "attempt to call a nil value" di Line 1. Saat ini ~175 di main chunk. Bagian window dan Dashboard
      sudah dibungkus do ... end (variabel yang dipake di luar di-predeclare). Fitur baru: bungkus pakai
      do-block atau taruh di table, JANGAN nambah local top-level sembarangan.
   2. Sandbox AI ga punya Lua/Luau, jadi hasil edit belum pernah dijalanin. Cek pakai pasangan do/end/kurung
@@ -2005,6 +1928,8 @@ ATURAN KERAS
   3. Edit kecil (str_replace / patch per baris). Jangan tulis ulang file. Selalu kerja dari file TERBARU,
      bukan dari upload lama, dan jangan timpa file output tanpa baca isinya dulu.
   4. Semua fitur ada toggle di menu, ga ada yang jalan otomatis tanpa toggle.
+  5. Riset / tes / nyari nama remote, attribute, animasi = script TERPISAH (jin_scan.lua), BUKAN di script utama
+     (boros token dan nambah local). Script utama cuma fitur final.
 
 SUDAH JADI
   - ESP pemain: highlight, nama, jarak. Status: sehat / kena hit / jatuh / digantung / killer.
@@ -2017,17 +1942,30 @@ SUDAH JADI
   - ESP mati total kalau lagi spectator atau lobby (ga ada Generator di workspace). Toggle: "ESP mati pas spectator / lobby".
   - Auto skill check (mode Instant / Perfect / Great / Random), fullbright, FOV, anti lag, dashboard.
 
-BELUM DIVERIFIKASI DI GAME (butuh data dari user)
-  - Progress generator: nama attribute/Value-nya ditebak lewat GEN_PROG_KEYS / GEN_DONE_KEYS.
-    Kalau di game % ga muncul atau warna ga berubah: minta user jalanin Settings > "Scan generator (progress)"
-    pas ada generator yang lagi dibenerin, lalu kirim isi workspace/jin_hub/jin_gens.txt. Isi key yang bener.
-  - Deteksi spectator: berdasarkan nama Team / attribute (SPEC_WORDS). Kalau masih ke-ESP pas spectator:
-    minta user jalanin "Scan status pemain" pas lagi spectator, kirim jin_players.txt, tambah kata ke SPEC_WORDS.
+SUDAH DIVERIFIKASI DI GAME (dikonfirmasi user)
+  - Progress generator = attribute RepairProgress (0..100) di model Generator, selesai = attribute Completed (bool).
+    Attribute lain yang ada: IsRepairing (di GeneratorPointN), PlayersRepairingCount, ProgressPaused.
+  - Deteksi spectator (Team / attribute lewat SPEC_WORDS) jalan.
   - Heuristik lobby = "ga ada model Generator". Kalau di mode lain game ga ada generator, matiin toggle itu.
 
+LAGI DIKERJAIN (belum diverifikasi di game)
+  - Pallet jatuh = ESP ilang: dump jin_objs.txt nunjukin pallet ga punya bool attribute, cuma child Intact / Broken / hitbox.
+    palletDown() sekarang fallback struktur: Intact ilang, atau semua part Intact transparan = jatuh/patah. Cuma ada sampel
+    pallet UTUH di dump, jadi belum tau apa yang berubah pas jatuh. Kalau ga jalan: dump Intact/Broken/hitbox (Transparency,
+    CanCollide, Parent) sebelum dan sesudah pallet dijatuhin.
+  - ESP Exit Gate: MATCH.gate sekarang ngenain Model "ExitLever" (Workspace.Map.Gate.ExitLever) + Model bernama gate.
+    LeftGate = MeshPart dan Map.gate = Part, ga ke-match (Model only). Status kebuka belum ada datanya. Default OFF.
+  - PERFECT VAULT: BELUM ditulis. jin_remotes.txt ga ada satupun event vault (isinya cuma UpdateCharacterLook, PushRemote,
+    GetPing, EmoteHandler, parry, anim idle/run/walk). Yang ada di dump: remote Window.VaultEvent / fastvault / VaultCommit /
+    VaultReject / VaultCompleteEvent (argumen ga diketahui) dan attribute karakter isvaulting, VaultTier (medium), VaultReason (pace),
+    vaultspeed, VaultSfxToken, __VaultFireCount. Tier kayaknya ditentuin server dari "pace" (jalan/lari). Butuh log remote
+    pas vault di window: sekali jalan, sekali lari, plus attribute berubah di karakter. Jangan nembak remote tanpa argumen asli.
+
+DIHAPUS (jangan dibalikin kalau ga perlu)
+  - Tombol Scan lama (dumpData / dumpPlayers / dumpGens) dan picker warna "Chased (!)". Udah ga kepake.
+    Riset / nyari nama / remote sekarang di script terpisah: jin_scan.lua.
+
 IDE LANJUTAN (belum dikerjain)
-  - Rapihin versi (header v3.3, label UI dan warn masih tulis v3.2).
-  - Picker warna "Chased (!)" di menu sekarang ga dipake (warna tanda chase pakai S.chaseCol).
   - Config simpen S.hookNear / S.chaseCol kalau mau bisa diatur dari menu.
 ======================================================================
 ]==]
