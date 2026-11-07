@@ -1,4 +1,4 @@
--- Jìn Script v3.6 | Violence District
+-- Jìn Script v3.7 | Violence District
 -- Menu: RightShift (PC) / tap logo (HP) | F6 = skill check on/off
 -- Semua file (logo, ikon, config) ada di workspace/jin_hub/
 
@@ -1839,7 +1839,7 @@ cSC:Dropdown("SC_Mode", "Mode", {"Instant", "Perfect", "Great", "Random"}, "Perf
 -- dan dicatat di baris Status. BELUM dites di game.
 -- Dibungkus fungsi: batas Lua 200 local per fungsi utama kelewat kalau semua local parry ditaruh di scope file (error "attempt to call a nil value" pas load).
 do local function parryInit()
-    S.parry = {on = false, aggr = false, dist = 9, last = 0, busy = false, method = 2, circle = false, color = Color3.fromRGB(170, 0, 255), detect = true, learn = true, block = 0, cdLo = 0, nl = 0, face = false}
+    S.parry = {on = false, aggr = false, dist = 9, last = 0, busy = false, method = 2, hitOnly = true, hitReach = 6, hitDot = 0.55, circle = false, color = Color3.fromRGB(170, 0, 255), detect = true, learn = true, block = 0, cdLo = 0, nl = 0, face = false}
     S.parry.detect = true    -- v3.6: ON lagi (biar killer baru ga perlu nyatet ID manual), tapi tebakan wajib lolos target gate + killer ngejar kita
     -- id animasi ayun killer. Slasher dari scan2 (2 anim ini muncul <0.2 dtk sebelum HP turun). FILL: killer lain, liat "anim" di baris Status pas dia ayun
     local ATTACK_ANIMS = {["135002183282873"] = true, ["121216847022485"] = true}
@@ -1850,6 +1850,8 @@ do local function parryInit()
     cPar:Toggle("PAR_Learn", "Auto-learn anim serang dari hit", true, function(v) S.parry.learn = v end)
     cPar:Toggle("PAR_Face", "Hadap killer pas parry (tes: parry depan doang?)", false, function(v) S.parry.face = v end)
     cPar:Slider("PAR_Dist", "Parry Distance", 4, 20, 9, 0.5, function(v) S.parry.dist = v end, "m")
+    cPar:Toggle("PAR_HitOnly", "Parry cuma kalau ayunan bakal KENA (prediksi)", true, function(v) S.parry.hitOnly = v end)
+    cPar:Slider("PAR_HitReach", "Hit reach (jarak kena, prediksi)", 3, 15, 6, 0.5, function(v) S.parry.hitReach = v end, "m")
     cPar:Toggle("PAR_Circle", "Show Parry Circle", false, function(v) S.parry.circle = v end,
         {id = "PAR_CircleCol", default = S.parry.color, cb = function(c) S.parry.color = c end})
     local stLbl = cPar:Label("Status: OFF")
@@ -2208,6 +2210,20 @@ do local function parryInit()
         end
         return true
     end
+    -- HIT PREDICTION (v3.7): parry baru nyala ~0.13 dtk setelah ditembak, hit dateng ~0.2 dtk setelah anim mulai -> ga bisa nunggu HP turun.
+    -- Jadi tunggu EVAL_DELAY (biar kecepatan lunge killer kebaca), ekstrapolasi posisi killer + kita sampai waktu hit, tembak kalau
+    -- jarak prediksi <= hitReach dan kita masih di arah bidik (dot >= hitDot). hitReach / hitDot MELEBAR sendiri tiap kita kena hit
+    -- yang tadinya diprediksi meleset (auto-kalibrasi, lihat watchHum).
+    local HIT_T, EVAL_DELAY = 0.2, 0.04
+    local function willHit(k, hrp, tRem)
+        local P = S.parry
+        local kv, uv = k.hrp.AssemblyLinearVelocity, hrp.AssemblyLinearVelocity
+        local kp = k.hrp.Position + Vector3.new(kv.X, 0, kv.Z) * tRem
+        local up = hrp.Position + Vector3.new(uv.X, 0, uv.Z) * tRem
+        local d = Vector3.new(up.X - kp.X, 0, up.Z - kp.Z).Magnitude
+        local dot = aimDot(aimOf(k), kp, up)
+        return d <= P.hitReach and dot >= P.hitDot, d, dot
+    end
     local hooked = setmetatable({}, {__mode = "k"})
     local function hookKiller(k)
         -- Animator bisa ada di Humanoid atau AnimationController, cari rekursif. Key = animator, jadi kalau diganti ke-hook ulang
@@ -2261,7 +2277,22 @@ do local function parryInit()
                 if known then plog("SKIP anim", id, "|", why) end
                 return
             end
-            tryFire(known and "ayunan" or "ayunan (tebakan)", k, id)
+            local reason = known and "ayunan" or "ayunan (tebakan)"
+            task.delay(EVAL_DELAY, function()
+                local P2 = S.parry
+                if not (running and P2.on and k.hrp.Parent) then return end
+                local c2 = lp.Character
+                local h2 = c2 and c2:FindFirstChild("HumanoidRootPart")
+                if not h2 then return end
+                local ok2, d2, dot2 = willHit(k, h2, HIT_T - EVAL_DELAY)
+                P2.lastEval = {id = id, t = os.clock(), d = d2, dot = dot2}
+                plog("EVAL anim", id, ("| d_prediksi %.1f (reach %.1f) | dot %.2f (min %.2f) | jarak skrg %.1f | ->"):format(d2, P2.hitReach, dot2, P2.hitDot, (h2.Position - k.hrp.Position).Magnitude), (ok2 or not P2.hitOnly) and "TEMBAK" or "SKIP (ga bakal kena)")
+                if P2.hitOnly and not ok2 then
+                    P2.why, P2.whyT = ("ayunan diprediksi meleset (d %.1f > %.1f / dot %.2f)"):format(d2, P2.hitReach, dot2), os.clock()
+                    return
+                end
+                tryFire(reason, k, id)
+            end)
         end))
     end
     -- auto-learn: HP survivor mana pun turun -> anim non-loop killer yang MULAI paling awal dalam jendela 0.03-0.6 dtk sebelum hit
@@ -2289,6 +2320,17 @@ do local function parryInit()
             end
             if mine then
                 plog("HIT KITA | anim", best and best.id or "?", "| Parry", tostring(hum.Parent and hum.Parent:GetAttribute("Parry")), "| sejak FIRE", S.parry.firedT and ("%.3fs"):format(now - S.parry.firedT) or "-")
+                -- auto-kalibrasi: kena hit padahal prediksi bilang meleset -> lebarin hitReach / hitDot sesuai angka prediksi itu
+                local le, Pc = S.parry.lastEval, S.parry
+                if le and best and le.id == best.id and now - le.t <= 0.5 then
+                    local oldR, oldD = Pc.hitReach, Pc.hitDot
+                    if le.d > Pc.hitReach then Pc.hitReach = math.min(le.d * 1.05, 14) end
+                    if le.dot < Pc.hitDot then Pc.hitDot = math.max(le.dot - 0.05, 0.2) end
+                    if Pc.hitReach ~= oldR or Pc.hitDot ~= oldD then
+                        plog("KALIBRASI kena hit | hitReach", ("%.1f -> %.1f"):format(oldR, Pc.hitReach), "| hitDot", ("%.2f -> %.2f"):format(oldD, Pc.hitDot))
+                        notify("Auto parry", ("kalibrasi: hit reach %.1fm"):format(Pc.hitReach))
+                    end
+                end
                 local pd = S.parry.pending   -- kena hit pas parry kita lagi aktif = tembus
                 if pd and not pd.done and now - pd.t <= 0.8 then
                     pd.pierced, pd.pid = true, best and best.id
@@ -2616,6 +2658,11 @@ LAGI DIKERJAIN (belum diverifikasi di game)
     press cuma dicoba kalau ada tombol/key kerekam -> ga perlu parry manual lagi. (2) jarak: killer lunge (mulai ayun dari 9m, tetep kena) -> reach = dist*1.3 + kecepatan
     killer ke arah kita x 0.25 dtk. (3) detect ON lagi tapi anim yang belum dikenal cuma ditembak kalau killer ngejar KITA (IsChasing + ChaseTargetUserId) atau udah <= dist.
     (4) event anim sama < 0.1 dtk di-dedupe (log: burst 76 event), log ditulis ke file tiap 1 dtk (debounce). BELUM dites di game.
+    v3.7: parry cuma nembak kalau ayunan diprediksi KENA (user: killer ayun tapi meleset di dalam zona, parry kebuang). Slider "Parry Distance" sekarang cuma
+    gerbang kandidat; keputusan akhir di willHit(): EVAL_DELAY 0.04 dtk setelah anim mulai, posisi killer + kita diekstrapolasi (kecepatan x sisa waktu ke hit, HIT_T 0.2 dtk
+    dari log), tembak kalau jarak prediksi <= hitReach (default 6m, slider) dan dot bidik >= hitDot (0.55). Auto-kalibrasi: kena hit yang tadinya diprediksi meleset ->
+    hitReach / hitDot dilebarin ke angka prediksi itu (hitReach max 14). Toggle "Parry cuma kalau ayunan bakal KENA" buat balik ke perilaku lama. Log: baris EVAL (angka prediksi +
+    keputusan) dan KALIBRASI. Nilai hasil kalibrasi ga disimpen antar sesi. BELUM dites di game; default 6m itu tebakan, cek baris EVAL vs HIT KITA buat nyetel.
   - PERFECT VAULT: BELUM ditulis. jin_remotes.txt ga ada satupun event vault (isinya cuma UpdateCharacterLook, PushRemote,
     GetPing, EmoteHandler, parry, anim idle/run/walk). Yang ada di dump: remote Window.VaultEvent / fastvault / VaultCommit /
     VaultReject / VaultCompleteEvent (argumen ga diketahui) dan attribute karakter isvaulting, VaultTier (medium), VaultReason (pace),
