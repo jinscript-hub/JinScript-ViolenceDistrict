@@ -2307,7 +2307,7 @@ do local function parryInit()
             local why
             if not (known or (P.detect and looksLikeSwing(tr))) then why = "anim " .. id .. " ga dikenal sbg serangan"
             elseif nopar[id] then why = "anim " .. id .. " ga bisa di-parry"
-            elseif not known and not (d <= P.dist or (k.char:GetAttribute("IsChasing") and k.char:GetAttribute("ChaseTargetUserId") == lp.UserId)) then
+            elseif not known and not (k.char:GetAttribute("IsChasing") and k.char:GetAttribute("ChaseTargetUserId") == lp.UserId) then
                 why = "tebakan: killer ga lagi ngejar kita"   -- anim belum dikenal cuma ditembak kalau killer ngejar KITA / udah deket banget
             elseif d > reach then why = ("killer %.0fm, di luar jarak (reach %.0fm)"):format(d, reach)
             else
@@ -2335,7 +2335,7 @@ do local function parryInit()
                 P2.lastEval = {id = id, t = os.clock(), d = d2, dot = dot2}
                 plog("EVAL anim", id, ("| d_prediksi %.1f (reach %.1f) | dot %.2f (min %.2f) | jarak skrg %.1f | ->"):format(d2, P2.hitReach, dot2, P2.hitDot, (h2.Position - k.hrp.Position).Magnitude), (ok2 or not P2.hitOnly) and "TEMBAK" or "SKIP (ga bakal kena)")
                 local dNow = (h2.Position - k.hrp.Position).Magnitude
-                local closeCall = dNow <= 4 and aimDot(aimOf(k), k.hrp.Position, h2.Position) >= 0.35   -- v3.9: nempel + dibidik = jangan percaya prediksi
+                local closeCall = known and dNow <= 4 and aimDot(aimOf(k), k.hrp.Position, h2.Position) >= 0.35   -- v3.9: nempel + dibidik = jangan percaya prediksi
                 if P2.hitOnly and not ok2 and not closeCall then
                     P2.why, P2.whyT = ("ayunan diprediksi meleset (d %.1f > %.1f / dot %.2f)"):format(d2, P2.hitReach, dot2), os.clock()
                     return
@@ -2389,7 +2389,7 @@ do local function parryInit()
             if best and S.parry.learn and not (learned[best.id] or ATTACK_ANIMS[best.id]) then
                 hits[best.id] = (hits[best.id] or 0) + 1
                 -- v3.4: 1 hit cuma cukup kalau anim-nya lolos heuristik swing. Selain itu butuh 2 hit, biar anim random (emote / interaksi) ga kepelajar permanen
-                if best.swing or hits[best.id] >= 2 then addLearn(best.id, mine and "hit kita" or "hit survivor lain") end
+                if hits[best.id] >= 2 then addLearn(best.id, mine and "hit kita" or "hit survivor lain") end
             end
         end))
     end
