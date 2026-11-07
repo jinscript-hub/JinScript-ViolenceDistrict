@@ -1832,12 +1832,15 @@ local cSC = tSC:Group("Auto skill check", 1)
 cSC:Toggle("SC_Enabled", "Enabled (F6)", true, function(v) S.sc.enabled = v end)
 cSC:Dropdown("SC_Mode", "Mode", {"Instant", "Perfect", "Great", "Random"}, "Perfect", function(v) S.sc.mode = v end)
 
--- AUTO PARRY (default OFF). Log: Items["Parrying Dagger"].parry:FireServer(karakter sendiri) -> Char.Parry=true ~0.8 dtk (mulai ~0.1 dtk setelah fire), abis itu Char.ParrySpent=true.
--- Normal  : killer dalam S.parry.dist stud dan ngadep ke kita -> tembak.
--- Aggressive (predict): waktu tabrakan = jarak / kecepatan mendekat; nembak kalau <= 0.4 dtk + ping/2 (ayun killer -> damage cuma ~0.12-0.17 dtk, lebih pendek dari ping).
--- Baris "Status" di menu nyebut kenapa ga nembak (item, ParrySpent, jarak). BELUM dites; parry salah timing = kepake (ParrySpent).
+-- AUTO PARRY (default OFF). Log: Items["Parrying Dagger"].parry:FireServer(karakter sendiri) -> Char.Parry=true ~0.8 dtk, abis itu Char.ParrySpent=true.
+-- Normal    : REAKTIF, nembak pas animasi ayun killer (ATTACK_ANIMS) main dan killer dalam jarak + ngadep. Lewat jarak doang ga nembak.
+-- Aggressive: PREDIKTIF, killer yang lagi ngejar KITA (IsChasing + ChaseTargetUserId), waktu tabrakan <= 0.4 dtk + ping/2.
+-- Tiap tembakan DIVERIFIKASI: Char.Parry harus nyala <= 0.3 dtk, kalau ngga coba metode berikutnya (1 remote, 2 StopEmote+remote, 3 tool:Activate)
+-- dan dicatat di baris Status. BELUM dites di game.
 do
-    S.parry = {on = false, aggr = false, dist = 9, face = 0.5, last = 0, circle = false, color = Color3.fromRGB(170, 0, 255)}
+    S.parry = {on = false, aggr = false, dist = 9, last = 0, busy = false, method = 1, circle = false, color = Color3.fromRGB(170, 0, 255)}
+    -- id animasi ayun killer. Slasher dari scan2 (2 anim ini muncul <0.2 dtk sebelum HP turun). FILL: killer lain, liat "anim" di baris Status pas dia ayun
+    local ATTACK_ANIMS = {["135002183282873"] = true, ["121216847022485"] = true}
     local cPar = tSC:Group("Auto parry (Dagger)", 2)
     cPar:Toggle("PAR_On", "Auto Parry", false, function(v) S.parry.on = v end)
     cPar:Toggle("PAR_Aggr", "Auto Parry Aggressive (Predict)", false, function(v) S.parry.aggr = v end)
@@ -1845,59 +1848,137 @@ do
     cPar:Toggle("PAR_Circle", "Show Parry Circle", false, function(v) S.parry.circle = v end,
         {id = "PAR_CircleCol", default = S.parry.color, cb = function(c) S.parry.color = c end})
     local stLbl = cPar:Label("Status: OFF")
+    local function render(base)
+        local P = S.parry
+        local t = base
+        if P.res and os.clock() - P.resT < 6 then t = t .. " | " .. P.res end
+        if P.anim then t = t .. " | anim killer: " .. P.anim end
+        if P.stat ~= t then P.stat = t stLbl.Text = t end
+    end
     local function attr(k)
         local v = lp:GetAttribute(k)
         if v == nil and lp.Character then v = lp.Character:GetAttribute(k) end
         return v
     end
-    local function setStatus(t)
-        if S.parry.stat ~= t then S.parry.stat = t stLbl.Text = t end
+    local function rm(...)
+        local o = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
+        for _, n in ipairs({...}) do o = o and o:FindFirstChild(n) end
+        return o
     end
-    local remote
-    local function parryTick()
-        local P = S.parry
-        if not (running and (P.on or P.aggr)) then setStatus("Status: OFF") return end
+    -- return ch, hum kalau boleh nembak, atau nil + alasan
+    local function ready()
         local ch = lp.Character
         local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
         local hum = ch and ch:FindFirstChildOfClass("Humanoid")
-        if not (hrp and hum and hum.Health > 0) then setStatus("Status: belum spawn / mati") return end
-        if roleOf(lp) == "killer" then setStatus("Status: kamu killer") return end
+        if not (hrp and hum and hum.Health > 0) then return nil, "belum spawn / mati" end
+        if roleOf(lp) == "killer" then return nil, "kamu killer" end
         local eq = attr("EquippedItem")
-        if eq ~= nil and eq ~= "Parrying Dagger" then setStatus("Status: item = " .. tostring(eq) .. ", bukan dagger") return end
-        if ch:GetAttribute("ParrySpent") then setStatus("Status: ParrySpent aktif (parry udah kepake)") return end
-        if ch:GetAttribute("Parry") or ch:GetAttribute("Knocked") then setStatus("Status: parry lagi aktif / knocked") return end
+        if eq ~= nil and eq ~= "Parrying Dagger" then return nil, "item = " .. tostring(eq) .. ", bukan dagger" end
+        if ch:GetAttribute("ParrySpent") then return nil, "ParrySpent aktif" end
+        if ch:GetAttribute("Parry") or ch:GetAttribute("Knocked") then return nil, "parry lagi aktif / knocked" end
+        return ch, hum, hrp
+    end
+    -- coba 3 metode, urutan mulai dari yang terakhir berhasil. Berhasil = Char.Parry nyala <= 0.3 dtk
+    local function attempt(ch, hum)
+        local P = S.parry
+        local function on()
+            local t0 = os.clock()
+            repeat
+                if ch:GetAttribute("Parry") then return true end
+                task.wait()
+            until os.clock() - t0 > 0.3
+            return false
+        end
+        local steps = {
+            function() local r = rm("Items", "Parrying Dagger", "parry") if r then r:FireServer(ch) end end,
+            function()
+                local e = rm("EmoteHandler")
+                if e then e:FireServer("StopEmote") end
+                local r = rm("Items", "Parrying Dagger", "parry")
+                if r then r:FireServer(ch) end
+            end,
+            function()
+                local bp = lp:FindFirstChild("Backpack")
+                local tool = ch:FindFirstChild("Parrying Dagger") or (bp and bp:FindFirstChild("Parrying Dagger"))
+                if tool and tool:IsA("Tool") then
+                    if tool.Parent ~= ch then hum:EquipTool(tool) task.wait(0.1) end
+                    tool:Activate()
+                end
+            end,
+        }
+        local order = {P.method}
+        for i = 1, #steps do if i ~= P.method then order[#order + 1] = i end end
+        for _, i in ipairs(order) do
+            pcall(steps[i])
+            if on() then P.method = i return i end
+        end
+        return nil
+    end
+    local function tryFire(reason)
+        local P = S.parry
+        if P.busy or os.clock() - P.last < 1.5 then return end
+        local ch, hum = ready()
+        if not ch then return end
+        P.busy, P.last = true, os.clock()
+        task.spawn(function()
+            local m = attempt(ch, hum)
+            P.busy = false
+            if m then
+                P.res = ("parry NYALA via metode %d (%s)"):format(m, reason)
+                notify("Auto parry", "Parry nyala (" .. reason .. ")")
+            else
+                P.res = "parry GAGAL: server ga nyalain Parry (3 metode)"
+                P.last = 0
+            end
+            P.resT = os.clock()
+        end)
+    end
+    -- reaktif: dengerin animasi killer
+    local hooked = setmetatable({}, {__mode = "k"})
+    local function hookKiller(k)
+        if hooked[k.char] then return end
+        local hum = k.char:FindFirstChildOfClass("Humanoid")
+        local an = hum and hum:FindFirstChildOfClass("Animator")
+        if not an then return end
+        hooked[k.char] = true
+        track(an.AnimationPlayed:Connect(function(tr)
+            local a = tr.Animation
+            local id = a and tostring(a.AnimationId):match("%d+")
+            local ch = lp.Character
+            local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+            if not (id and hrp and k.hrp.Parent) then return end
+            local off = hrp.Position - k.hrp.Position
+            local d = off.Magnitude
+            if d > 14 or d == 0 then return end
+            S.parry.anim = ("%s %.2fs %.0fm"):format(id, tr.Length, d)
+            if S.parry.on and ATTACK_ANIMS[id] and d <= S.parry.dist * 1.3 and k.hrp.CFrame.LookVector:Dot(off.Unit) >= 0.3 then
+                tryFire("ayunan")
+            end
+        end))
+    end
+    local function parryTick()
+        local P = S.parry
+        if not (running and (P.on or P.aggr)) then render("Status: OFF") return end
+        local ks = getKillers()
+        for _, k in ipairs(ks) do hookKiller(k) end
+        local ch, hum, hrp = ready()
+        if not ch then render("Status: " .. hum) return end
         local ping = 0
         pcall(function() ping = lp:GetNetworkPing() end)
-        local nd, fire = math.huge, nil
-        for _, k in ipairs(getKillers()) do
+        local nd = math.huge
+        for _, k in ipairs(ks) do
             local off = hrp.Position - k.hrp.Position
             local d = off.Magnitude
             if d > 0 then
                 nd = math.min(nd, d)
-                local u = off.Unit
-                local face = k.hrp.CFrame.LookVector:Dot(u)
-                if P.on and d <= P.dist and face >= P.face then fire = "jarak" break end
-                if P.aggr and d <= P.dist * 1.6 then
+                if P.aggr and d <= P.dist * 1.6 and k.char:GetAttribute("IsChasing") and k.char:GetAttribute("ChaseTargetUserId") == lp.UserId then
+                    local u = off.Unit
                     local closing = (k.hrp.AssemblyLinearVelocity - hrp.AssemblyLinearVelocity):Dot(u)
-                    if closing > 4 and face >= 0.3 and d / closing <= 0.4 + ping / 2 then fire = "predict" break end
+                    if closing > 4 and k.hrp.CFrame.LookVector:Dot(u) >= 0.3 and d / closing <= 0.4 + ping / 2 then tryFire("predict") end
                 end
             end
         end
-        if not fire then
-            setStatus(nd < math.huge and ("Status: siap | killer terdekat %.0fm"):format(nd) or "Status: siap | ga ada killer")
-            return
-        end
-        if os.clock() - P.last < 2 then return end
-        if not (remote and remote.Parent) then
-            local r = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
-            local it = r and r:FindFirstChild("Items")
-            local pd = it and it:FindFirstChild("Parrying Dagger")
-            remote = pd and pd:FindFirstChild("parry")
-        end
-        if not remote then setStatus("Status: remote parry ga ketemu") return end
-        P.last = os.clock()
-        pcall(function() remote:FireServer(ch) end)
-        notify("Auto parry", "Nembak (" .. fire .. ")")
+        render(nd < math.huge and ("Status: siap | killer terdekat %.0fm"):format(nd) or "Status: siap | ga ada killer")
     end
     task.spawn(function()
         while running do
@@ -2147,10 +2228,11 @@ LAGI DIKERJAIN (belum diverifikasi di game)
     Dari scan2: KillerChance punya user 30 -> 31 pas ronde jalan (naik tiap ronde ga jadi killer, cocok sama undian berbobot).
   - PREDIKSI MAP (tab Misc): dengerin Remotes.Messages.Mapinfo(nama, 1). Di scan2 masuk sebelum RoundInProgress=true (re4 masuk ~17 dtk sebelum ronde),
     jadi dianggap map berikutnya; pas RoundInProgress=true ditulis "Map sekarang". Event pertama pas join bisa jadi map lama. Arg ke-2 ("1") artinya belum jelas.
-  - AUTO PARRY (tab Skill Check, default OFF): versi 1 (cuma nembak pas killer IsChasing kita) ga jalan di tes user: deket killer, kena hit, diem.
-    Penyebab belum pasti (kandidat: ParrySpent nyangkut, EquippedItem ga kebaca, IsChasing ga ke-set). Versi sekarang gaya L2 Hub: Auto Parry (jarak+ngadep),
-    Aggressive/Predict (waktu tabrakan <= 0.4 dtk + ping/2), slider jarak, circle di tanah + warna. Ada baris "Status" di menu yang nyebut penyebab ga nembak.
-    Fakta dari scan2: ayun killer -> damage 0.12-0.17 dtk; anim 135002183282873 (5.2 stud) dan 121216847022485 (2.2 stud) dipakai killer yang kena kita.
+  - AUTO PARRY (tab Skill Check, default OFF). Bug user v2: (1) FireServer ga bikin parry beneran tapi script nganggep udah, (2) masuk jarak doang dianggap ayun.
+    v3: tiap tembakan diverifikasi (Char.Parry nyala <= 0.3 dtk) dengan 3 metode berurutan (remote / StopEmote+remote / tool:Activate), hasilnya di baris Status.
+    Normal = reaktif lewat ATTACK_ANIMS (Slasher: 135002183282873, 121216847022485); killer lain: isi ID dari baris "anim killer" di Status. Aggressive = prediktif, wajib IsChasing kita.
+    CATATAN: relTo() di jin_scan2.lua facing-nya kebalik (negatif = ngadep ke kita). Di script utama udah bener.
+    Belum tau parry nahan hit atau cuma stun killer; belum ada log parry yang kena killer.
   - PERFECT VAULT: BELUM ditulis. jin_remotes.txt ga ada satupun event vault (isinya cuma UpdateCharacterLook, PushRemote,
     GetPing, EmoteHandler, parry, anim idle/run/walk). Yang ada di dump: remote Window.VaultEvent / fastvault / VaultCommit /
     VaultReject / VaultCompleteEvent (argumen ga diketahui) dan attribute karakter isvaulting, VaultTier (medium), VaultReason (pace),
