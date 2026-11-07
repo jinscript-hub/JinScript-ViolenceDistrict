@@ -1862,7 +1862,7 @@ do
             local a, n = {}, {}
             for id in pairs(learned) do a[#a + 1] = id end
             for id in pairs(nopar) do n[#n + 1] = id end
-            writefile(PFILE, HttpService:JSONEncode({anims = a, nopar = n, stats = stats}))
+            writefile(PFILE, HttpService:JSONEncode({anims = a, nopar = n, stats = stats, btn = S.parry.btn, key = S.parry.key and S.parry.key.Name}))
         end)
     end
     local function addLearn(id, why)
@@ -1877,6 +1877,8 @@ do
             for _, id in ipairs(d.anims or {}) do learned[tostring(id)] = true S.parry.nl = S.parry.nl + 1 end
             for _, id in ipairs(d.nopar or {}) do nopar[tostring(id)] = true end
             if type(d.stats) == "table" then stats = d.stats end
+            if type(d.btn) == "table" then S.parry.btn = d.btn end
+            if type(d.key) == "string" then S.parry.key = Enum.KeyCode[d.key] end
         end
     end)
     local function render(base)
@@ -1925,6 +1927,77 @@ do
         for _, o in ipairs(out) do if o:find("=true$") then return nil, "attr " .. o end end
         return ch, hum, hrp
     end
+    -- PRESS ASLI: dagger yang ditembak lewat remote doang ga mencet apa-apa di sisi klien (anim / tombol ga jalan). Jadi script ngerekam
+    -- parry MANUAL kamu: tombol GUI / key yang kepencet <= 0.5 dtk sebelum Char.Parry nyala, terus nge-press yang sama pas auto.
+    -- Urutan press: Tool:Activate (kalau dagger ada sbg Tool) -> tombol kerekam (firesignal) -> key kerekam (VirtualInputManager).
+    local UIS = game:GetService("UserInputService")
+    local lastIn, lastKey, hookedBtn = {t = 0}, {t = 0}, setmetatable({}, {__mode = "k"})
+    local function hookBtn(b)
+        if hookedBtn[b] or not b:IsA("GuiButton") then return end
+        hookedBtn[b] = true
+        track(b.Activated:Connect(function() lastIn = {t = os.clock(), btn = b, name = b:GetFullName()} end))
+    end
+    task.spawn(function()
+        local pg = lp:WaitForChild("PlayerGui", 15)
+        if not pg then return end
+        for _, d in ipairs(pg:GetDescendants()) do hookBtn(d) end
+        track(pg.DescendantAdded:Connect(hookBtn))
+    end)
+    track(UIS.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.Keyboard then lastKey = {t = os.clock(), code = i.KeyCode} end
+    end))
+    local parryHooked = setmetatable({}, {__mode = "k"})
+    local function watchParryAttr()
+        local ch = lp.Character
+        if not ch or parryHooked[ch] then return end
+        parryHooked[ch] = true
+        track(ch:GetAttributeChangedSignal("Parry"):Connect(function()
+            local P = S.parry
+            if not ch:GetAttribute("Parry") or os.clock() - (P.firedT or 0) < 1.2 then return end   -- bukan parry manual
+            local now, info = os.clock(), {}
+            if lastIn.btn and now - lastIn.t < 0.5 then
+                P.btn, P.btnInst = {name = lastIn.btn.Name, parent = lastIn.btn.Parent and lastIn.btn.Parent.Name}, lastIn.btn
+                info[#info + 1] = "tombol " .. lastIn.name
+            end
+            if lastKey.code and now - lastKey.t < 0.5 then P.key = lastKey.code info[#info + 1] = "key " .. lastKey.code.Name end
+            P.res = "parry MANUAL kerekam: " .. (#info > 0 and table.concat(info, ", ") or "ga ada tombol/key (mungkin sentuhan layar / input lain)") .. " | item " .. tostring(attr("EquippedItem"))
+            P.resT = os.clock()
+            saveP()
+        end))
+    end
+    local function findBtn()
+        local P = S.parry
+        if P.btnInst and P.btnInst.Parent then return P.btnInst end
+        local pg, b = lp:FindFirstChild("PlayerGui"), P.btn
+        if not (pg and b) then return end
+        for _, d in ipairs(pg:GetDescendants()) do
+            if d:IsA("GuiButton") and d.Name == b.name and d.Parent and d.Parent.Name == b.parent then P.btnInst = d return d end
+        end
+    end
+    local function pressReal(ch, hum)
+        local P = S.parry
+        local bp = lp:FindFirstChild("Backpack")
+        local tool = ch:FindFirstChild("Parrying Dagger") or (bp and bp:FindFirstChild("Parrying Dagger"))
+        if tool and tool:IsA("Tool") then
+            if tool.Parent ~= ch then hum:EquipTool(tool) task.wait(0.1) end
+            tool:Activate()
+            return
+        end
+        local b = findBtn()
+        if b and firesignal then
+            pcall(firesignal, b.Activated)
+            pcall(firesignal, b.MouseButton1Click)
+            return
+        end
+        if P.key then
+            pcall(function()
+                local vim = game:GetService("VirtualInputManager")
+                vim:SendKeyEvent(true, P.key, false, game)
+                task.wait(0.03)
+                vim:SendKeyEvent(false, P.key, false, game)
+            end)
+        end
+    end
     -- coba 3 metode, urutan mulai dari yang terakhir berhasil. Berhasil = Char.Parry nyala <= 0.3 dtk
     local function attempt(ch, hum)
         local P = S.parry
@@ -1937,20 +2010,13 @@ do
             return false
         end
         local steps = {
+            function() pressReal(ch, hum) end,
             function() local r = rm("Items", "Parrying Dagger", "parry") if r then r:FireServer(ch) end end,
             function()
                 local e = rm("EmoteHandler")
                 if e then e:FireServer("StopEmote") end
                 local r = rm("Items", "Parrying Dagger", "parry")
                 if r then r:FireServer(ch) end
-            end,
-            function()
-                local bp = lp:FindFirstChild("Backpack")
-                local tool = ch:FindFirstChild("Parrying Dagger") or (bp and bp:FindFirstChild("Parrying Dagger"))
-                if tool and tool:IsA("Tool") then
-                    if tool.Parent ~= ch then hum:EquipTool(tool) task.wait(0.1) end
-                    tool:Activate()
-                end
             end,
         }
         local order = {P.method}
@@ -2010,6 +2076,7 @@ do
         P.busy = true
         local t0 = os.clock()
         P.block = t0 + 0.35
+        P.firedT = t0
         task.spawn(function()
             local hrp = ch:FindFirstChild("HumanoidRootPart")
             if P.face and hrp and k and k.hrp.Parent then
@@ -2148,6 +2215,7 @@ do
         local ks = getKillers()
         for _, k in ipairs(ks) do hookKiller(k) end
         watchAll()
+        watchParryAttr()
         local ch, hum, hrp = ready()
         if not ch then render("Status: " .. hum) return end
         local ping = 0
@@ -2432,6 +2500,8 @@ LAGI DIKERJAIN (belum diverifikasi di game)
     v3.2: (1) killer ngerjain gen/pallet/window ga dihitung nyerang (killer ngadep objek lebih lurus dari ngadep kita). (2) Status "skip: ..." ngasih tau
     kenapa ga nembak. (3) learn ambil anim yang mulai PALING AWAL sebelum hit (bukan yang terakhir: anim recovery bisa ke-ambil). (4) skill ga bisa di-parry:
     tiap parry dicek tembus/ketahan; tembus dari depan >= 2x dan lebih banyak dari ketahan -> masuk nopar (di-skip), disimpen di jin_parry.json.
+    v3.3: tembakan sekarang NGE-PRESS beneran dulu (Tool:Activate -> tombol GUI kerekam -> key kerekam), baru remote (metode 1 = press, 2 = remote,
+    3 = StopEmote+remote). Tombol/key direkam dari parry MANUAL kamu (Status: "parry MANUAL kerekam: ..."), jadi parry manual sekali dulu tiap ganti device. BELUM dites.
     (5) toggle "Hadap killer pas parry" buat tes kalau parry cuma kena dari depan; Status nulis killer ada di depan / samping-belakang pas nembak. BELUM dites.
   - PERFECT VAULT: BELUM ditulis. jin_remotes.txt ga ada satupun event vault (isinya cuma UpdateCharacterLook, PushRemote,
     GetPing, EmoteHandler, parry, anim idle/run/walk). Yang ada di dump: remote Window.VaultEvent / fastvault / VaultCommit /
