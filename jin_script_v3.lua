@@ -1,4 +1,4 @@
--- Jìn Script v3.5 | Violence District
+-- Jìn Script v3.6 | Violence District
 -- Menu: RightShift (PC) / tap logo (HP) | F6 = skill check on/off
 -- Semua file (logo, ikon, config) ada di workspace/jin_hub/
 
@@ -1839,14 +1839,14 @@ cSC:Dropdown("SC_Mode", "Mode", {"Instant", "Perfect", "Great", "Random"}, "Perf
 -- dan dicatat di baris Status. BELUM dites di game.
 -- Dibungkus fungsi: batas Lua 200 local per fungsi utama kelewat kalau semua local parry ditaruh di scope file (error "attempt to call a nil value" pas load).
 do local function parryInit()
-    S.parry = {on = false, aggr = false, dist = 9, last = 0, busy = false, method = 1, circle = false, color = Color3.fromRGB(170, 0, 255), detect = true, learn = true, block = 0, cdLo = 0, nl = 0, face = false}
-    S.parry.detect = false   -- v3.4: heuristik anim default OFF (penyebab utama tembakan ngawur)
+    S.parry = {on = false, aggr = false, dist = 9, last = 0, busy = false, method = 2, circle = false, color = Color3.fromRGB(170, 0, 255), detect = true, learn = true, block = 0, cdLo = 0, nl = 0, face = false}
+    S.parry.detect = true    -- v3.6: ON lagi (biar killer baru ga perlu nyatet ID manual), tapi tebakan wajib lolos target gate + killer ngejar kita
     -- id animasi ayun killer. Slasher dari scan2 (2 anim ini muncul <0.2 dtk sebelum HP turun). FILL: killer lain, liat "anim" di baris Status pas dia ayun
     local ATTACK_ANIMS = {["135002183282873"] = true, ["121216847022485"] = true}
     local cPar = tSC:Group("Auto parry (Dagger)", 2)
     cPar:Toggle("PAR_On", "Auto Parry", false, function(v) S.parry.on = v end)
     cPar:Toggle("PAR_Aggr", "Auto Parry Aggressive (Predict)", false, function(v) S.parry.aggr = v end)
-    cPar:Toggle("PAR_Detect", "Tebak anim serang (killer baru, boros dagger)", false, function(v) S.parry.detect = v end)
+    cPar:Toggle("PAR_Detect", "Tebak anim serang (killer baru, tanpa ID)", true, function(v) S.parry.detect = v end)
     cPar:Toggle("PAR_Learn", "Auto-learn anim serang dari hit", true, function(v) S.parry.learn = v end)
     cPar:Toggle("PAR_Face", "Hadap killer pas parry (tes: parry depan doang?)", false, function(v) S.parry.face = v end)
     cPar:Slider("PAR_Dist", "Parry Distance", 4, 20, 9, 0.5, function(v) S.parry.dist = v end, "m")
@@ -1885,13 +1885,19 @@ do local function parryInit()
     end)
     -- LOG (v3.5): tiap tembakan / hit / skip ditulis ke jin_parry_log.txt (200 baris terakhir) buat diagnosa "notif muncul tapi dagger ga kepake"
     local LOGF = BASE .. "jin_parry_log.txt"
-    local logbuf = {}
+    local logbuf, logBusy = {}, false
     local function plog(...)
         local a = table.pack(...)
         for i = 1, a.n do a[i] = tostring(a[i]) end
         logbuf[#logbuf + 1] = ("[%.2f] %s"):format(os.clock(), table.concat(a, " ", 1, a.n))
         if #logbuf > 200 then table.remove(logbuf, 1) end
-        if writefile then pcall(writefile, LOGF, table.concat(logbuf, "\n")) end
+        if writefile and not logBusy then   -- debounce: writefile tiap baris bikin burst event nge-lag
+            logBusy = true
+            task.delay(1, function()
+                logBusy = false
+                pcall(writefile, LOGF, table.concat(logbuf, "\n"))
+            end)
+        end
     end
     local function attrDump(inst)
         local o = {}
@@ -2045,8 +2051,15 @@ do local function parryInit()
                 if r then r:FireServer(ch) end
             end,
         }
-        local order = {P.method}
-        for i = 1, #steps do if i ~= P.method then order[#order + 1] = i end end
+        -- v3.6: log nunjukin step 2 (remote doang) udah cukup bikin Char.Parry nyala, sedangkan step 1 (press) ga ngapa-ngapain kalau
+        -- tombol/key belum kerekam dan malah buang 0.3 dtk. Sekarang remote duluan, press cuma dipake kalau ada tombol/key kerekam.
+        local hasPress = P.btn or P.key or P.btnInst
+        local order = {}
+        for _, i in ipairs({P.method, 2, 3, 1}) do
+            local dup = false
+            for _, o in ipairs(order) do if o == i then dup = true end end
+            if not dup and (i ~= 1 or hasPress) then order[#order + 1] = i end
+        end
         for _, i in ipairs(order) do
             local okc, err = pcall(steps[i])
             local good = on()
@@ -2216,17 +2229,25 @@ do local function parryInit()
             if not hrp then return end
             local off = hrp.Position - k.hrp.Position
             local d = off.Magnitude
-            if d > math.max(14, P.dist * 1.3) or d == 0 then return end   -- v3.3: cap 14 bikin slider > 10.8m ga ngefek
+            if d > 30 or d == 0 then return end   -- cap kasar, jarak sebenernya dicek di bawah (reach = dist*1.3 + lunge)
+            local nowT = os.clock()
+            if P.lastId == id and nowT - (P.lastIdT or 0) < 0.1 then return end   -- log: 76 event anim sama dalam 0.1 dtk (burst)
+            P.lastId, P.lastIdT = id, nowT
             P.anim = ("%s %.2fs %.0fm %s"):format(id, tr.Length, d, tr.Looped and "loop" or "once")
             P.animT = os.clock()
             if not P.on then return end
             -- alasan skip ditulis ke Status (skip: ...) biar keliatan kenapa ga nembak
             local toUs = off.Unit
             local known = ATTACK_ANIMS[id] or learned[id]
+            -- killer lunge: log nunjukin killer mulai ayun dari 9m lalu tetep kena. Jarak dihitung + kecepatan dia ke arah kita x 0.25 dtk (delay hit ~0.2 dtk)
+            local closing = (k.hrp.AssemblyLinearVelocity - hrp.AssemblyLinearVelocity):Dot(toUs)
+            local reach = P.dist * 1.3 + math.max(0, closing) * 0.25
             local why
             if not (known or (P.detect and looksLikeSwing(tr))) then why = "anim " .. id .. " ga dikenal sbg serangan"
             elseif nopar[id] then why = "anim " .. id .. " ga bisa di-parry"
-            elseif d > P.dist * 1.3 then why = ("killer %.0fm, di luar jarak"):format(d)
+            elseif not known and not (d <= P.dist or (k.char:GetAttribute("IsChasing") and k.char:GetAttribute("ChaseTargetUserId") == lp.UserId)) then
+                why = "tebakan: killer ga lagi ngejar kita"   -- anim belum dikenal cuma ditembak kalau killer ngejar KITA / udah deket banget
+            elseif d > reach then why = ("killer %.0fm, di luar jarak (reach %.0fm)"):format(d, reach)
             else
                 local ok, w = targetsUs(k, hrp)
                 if not ok then why = w
@@ -2590,6 +2611,11 @@ LAGI DIKERJAIN (belum diverifikasi di game)
     v3.5: logger diagnosa -> workspace/jin_hub/jin_parry_log.txt (200 baris terakhir): FIRE (jeda sejak anim mulai, ping, semua attribute karakter),
     tiap step metode (pcall ok?, Parry nyala?, EquippedItem, dagger di char/backpack), SKIP (alasan), HIT KITA (Parry aktif ga, berapa lama setelah FIRE).
     Buat nyari kenapa "notif muncul tapi dagger ga kepake" (lagi lari / telat / ga ke-press).
+    v3.6 (dari log jin_parry_log.txt): (1) PENYEBAB UTAMA TELAT: step 1 (press) ga ngapa-ngapain kalau tombol/key belum kerekam, tapi nunggu 0.3 dtk dulu, baru remote (step 2)
+    nembak ~0.5 dtk setelah anim mulai, padahal hit dateng 0.2 dtk. Step 2 (remote doang) KEBUKTI bikin Char.Parry nyala (~0.13 dtk). Sekarang remote duluan (method=2),
+    press cuma dicoba kalau ada tombol/key kerekam -> ga perlu parry manual lagi. (2) jarak: killer lunge (mulai ayun dari 9m, tetep kena) -> reach = dist*1.3 + kecepatan
+    killer ke arah kita x 0.25 dtk. (3) detect ON lagi tapi anim yang belum dikenal cuma ditembak kalau killer ngejar KITA (IsChasing + ChaseTargetUserId) atau udah <= dist.
+    (4) event anim sama < 0.1 dtk di-dedupe (log: burst 76 event), log ditulis ke file tiap 1 dtk (debounce). BELUM dites di game.
   - PERFECT VAULT: BELUM ditulis. jin_remotes.txt ga ada satupun event vault (isinya cuma UpdateCharacterLook, PushRemote,
     GetPing, EmoteHandler, parry, anim idle/run/walk). Yang ada di dump: remote Window.VaultEvent / fastvault / VaultCommit /
     VaultReject / VaultCompleteEvent (argumen ga diketahui) dan attribute karakter isvaulting, VaultTier (medium), VaultReason (pace),
