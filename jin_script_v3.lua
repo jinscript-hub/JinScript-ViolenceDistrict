@@ -1,4 +1,4 @@
--- Jìn Script v3.3 | Violence District
+-- Jìn Script v3.4 | Violence District
 -- Menu: RightShift (PC) / tap logo (HP) | F6 = skill check on/off
 -- Semua file (logo, ikon, config) ada di workspace/jin_hub/
 
@@ -1840,12 +1840,13 @@ cSC:Dropdown("SC_Mode", "Mode", {"Instant", "Perfect", "Great", "Random"}, "Perf
 -- Dibungkus fungsi: batas Lua 200 local per fungsi utama kelewat kalau semua local parry ditaruh di scope file (error "attempt to call a nil value" pas load).
 do local function parryInit()
     S.parry = {on = false, aggr = false, dist = 9, last = 0, busy = false, method = 1, circle = false, color = Color3.fromRGB(170, 0, 255), detect = true, learn = true, block = 0, cdLo = 0, nl = 0, face = false}
+    S.parry.detect = false   -- v3.4: heuristik anim default OFF (penyebab utama tembakan ngawur)
     -- id animasi ayun killer. Slasher dari scan2 (2 anim ini muncul <0.2 dtk sebelum HP turun). FILL: killer lain, liat "anim" di baris Status pas dia ayun
     local ATTACK_ANIMS = {["135002183282873"] = true, ["121216847022485"] = true}
     local cPar = tSC:Group("Auto parry (Dagger)", 2)
     cPar:Toggle("PAR_On", "Auto Parry", false, function(v) S.parry.on = v end)
     cPar:Toggle("PAR_Aggr", "Auto Parry Aggressive (Predict)", false, function(v) S.parry.aggr = v end)
-    cPar:Toggle("PAR_Detect", "Deteksi anim serang semua killer", true, function(v) S.parry.detect = v end)
+    cPar:Toggle("PAR_Detect", "Tebak anim serang (killer baru, boros dagger)", false, function(v) S.parry.detect = v end)
     cPar:Toggle("PAR_Learn", "Auto-learn anim serang dari hit", true, function(v) S.parry.learn = v end)
     cPar:Toggle("PAR_Face", "Hadap killer pas parry (tes: parry depan doang?)", false, function(v) S.parry.face = v end)
     cPar:Slider("PAR_Dist", "Parry Distance", 4, 20, 9, 0.5, function(v) S.parry.dist = v end, "m")
@@ -2128,6 +2129,45 @@ do local function parryInit()
         local L = tr.Length
         return L == 0 or (L >= 0.3 and L <= 2.5)   -- L == 0: track belum ke-load, jangan dibuang
     end
+    -- TARGET GATE (v3.4): killer cuma dihitung nyerang KITA kalau (1) arah bidik (CamLook, fallback LookVector) ngarah ke kita
+    -- dan (2) ga ada survivor lain yang jelas lebih pas di garis bidik dia. Dagger kebuang kalau nembak ayunan ke orang lain.
+    -- Bidik diukur di bidang datar (Y dibuang), sama kayak cone.
+    local function aimOf(k)
+        local cl = k.char:GetAttribute("CamLook")
+        local v = (typeof(cl) == "Vector3") and cl or k.hrp.CFrame.LookVector
+        v = Vector3.new(v.X, 0, v.Z)
+        if v.Magnitude < 0.01 then
+            local lv = k.hrp.CFrame.LookVector
+            v = Vector3.new(lv.X, 0, lv.Z)
+        end
+        return v.Magnitude > 0.01 and v.Unit or Vector3.new(0, 0, 1)
+    end
+    local function aimDot(aim, from, to)
+        local v = Vector3.new(to.X - from.X, 0, to.Z - from.Z)
+        if v.Magnitude < 0.01 then return 1 end
+        return aim:Dot(v.Unit)
+    end
+    local AIM_MIN, AIM_MARGIN = 0.55, 0.15   -- ~57 derajat dari bidik; survivor lain dianggap target kalau lebih lurus >= 0.15
+    local function targetsUs(k, hrp)
+        local aim, kp = aimOf(k), k.hrp.Position
+        local mine = aimDot(aim, kp, hrp.Position)
+        if mine < AIM_MIN then return false, "killer ga ngebidik kita" end
+        local dMine = (hrp.Position - kp).Magnitude
+        for _, pl in ipairs(Players:GetPlayers()) do
+            if pl ~= lp and roleOf(pl) ~= "killer" then
+                local c = pl.Character
+                local h = c and c:FindFirstChild("HumanoidRootPart")
+                local hm = c and c:FindFirstChildOfClass("Humanoid")
+                if h and hm and hm.Health > 0 and not c:GetAttribute("Knocked") then
+                    local dv = (h.Position - kp).Magnitude
+                    if dv <= dMine and aimDot(aim, kp, h.Position) >= math.max(AIM_MIN, mine + AIM_MARGIN) then
+                        return false, "killer ngincer " .. pl.DisplayName
+                    end
+                end
+            end
+        end
+        return true
+    end
     local hooked = setmetatable({}, {__mode = "k"})
     local function hookKiller(k)
         -- Animator bisa ada di Humanoid atau AnimationController, cari rekursif. Key = animator, jadi kalau diganti ke-hook ulang
@@ -2149,7 +2189,7 @@ do local function parryInit()
             if not hrp then return end
             local off = hrp.Position - k.hrp.Position
             local d = off.Magnitude
-            if d > 14 or d == 0 then return end
+            if d > math.max(14, P.dist * 1.3) or d == 0 then return end   -- v3.3: cap 14 bikin slider > 10.8m ga ngefek
             P.anim = ("%s %.2fs %.0fm %s"):format(id, tr.Length, d, tr.Looped and "loop" or "once")
             if not P.on then return end
             -- alasan skip ditulis ke Status (skip: ...) biar keliatan kenapa ga nembak
@@ -2159,10 +2199,13 @@ do local function parryInit()
             if not (known or (P.detect and looksLikeSwing(tr))) then why = "anim " .. id .. " ga dikenal sbg serangan"
             elseif nopar[id] then why = "anim " .. id .. " ga bisa di-parry"
             elseif d > P.dist * 1.3 then why = ("killer %.0fm, di luar jarak"):format(d)
-            elseif k.hrp.CFrame.LookVector:Dot(toUs) < 0 then why = "killer ga ngadep kita"   -- arah KITA ga dicek, cuma arah killer (<= 90 derajat)
             else
-                local near = nearInteract(k, toUs)
-                if near then why = "killer lagi ngerjain " .. near end
+                local ok, w = targetsUs(k, hrp)
+                if not ok then why = w
+                else
+                    local near = nearInteract(k, toUs)
+                    if near then why = "killer lagi ngerjain " .. near end
+                end
             end
             if why then P.why, P.whyT = why, os.clock() return end
             tryFire(known and "ayunan" or "ayunan (tebakan)", k, id)
@@ -2200,7 +2243,8 @@ do local function parryInit()
             end
             if best and S.parry.learn and not (learned[best.id] or ATTACK_ANIMS[best.id]) then
                 hits[best.id] = (hits[best.id] or 0) + 1
-                if mine or best.swing or hits[best.id] >= 2 then addLearn(best.id, mine and "hit kita" or "hit survivor lain") end
+                -- v3.4: 1 hit cuma cukup kalau anim-nya lolos heuristik swing. Selain itu butuh 2 hit, biar anim random (emote / interaksi) ga kepelajar permanen
+                if best.swing or hits[best.id] >= 2 then addLearn(best.id, mine and "hit kita" or "hit survivor lain") end
             end
         end))
     end
@@ -2230,7 +2274,7 @@ do local function parryInit()
                 if P.aggr and d <= P.dist * 1.6 and k.char:GetAttribute("IsChasing") and k.char:GetAttribute("ChaseTargetUserId") == lp.UserId then
                     local u = off.Unit
                     local closing = (k.hrp.AssemblyLinearVelocity - hrp.AssemblyLinearVelocity):Dot(u)
-                    if closing > 4 and k.hrp.CFrame.LookVector:Dot(u) >= 0 and d / closing <= 0.4 + ping / 2 then tryFire("predict", k) end
+                    if closing > 4 and d / closing <= 0.4 + ping / 2 and targetsUs(k, hrp) and not nearInteract(k, u) then tryFire("predict", k) end
                 end
             end
         end
@@ -2504,6 +2548,12 @@ LAGI DIKERJAIN (belum diverifikasi di game)
     v3.3: tembakan sekarang NGE-PRESS beneran dulu (Tool:Activate -> tombol GUI kerekam -> key kerekam), baru remote (metode 1 = press, 2 = remote,
     3 = StopEmote+remote). Tombol/key direkam dari parry MANUAL kamu (Status: "parry MANUAL kerekam: ..."), jadi parry manual sekali dulu tiap ganti device. BELUM dites.
     (5) toggle "Hadap killer pas parry" buat tes kalau parry cuma kena dari depan; Status nulis killer ada di depan / samping-belakang pas nembak. BELUM dites.
+    v3.4: auto parry dirapihin biar ga ngawur. (1) TARGET GATE targetsUs(): killer harus ngebidik kita (CamLook, dot >= 0.55) dan ga ada survivor lain
+    yang lebih lurus di garis bidik (selisih >= 0.15, dan lebih deket/sama) -> skip, Status "skip: killer ngincer <nama>". Berlaku di mode Normal dan Aggressive.
+    (2) "Tebak anim serang" (detect) default OFF: heuristik ini nembak ke anim non-loop apa aja (interaksi, emote). Nyalain cuma buat killer baru yang belum kepelajar.
+    (3) auto-learn 1 hit cuma cukup kalau anim lolos heuristik swing, selain itu 2 hit (sebelumnya "hit kita" langsung belajar -> anim random bisa kepelajar permanen).
+    (4) bug: cap jarak 14 stud ngabaikan slider Parry Distance > 10.8m, sekarang max(14, dist*1.3). (5) Aggressive juga skip kalau killer lagi ngerjain gen/pallet/window.
+    Kalau jin_parry.json lama udah keracunan anim salah: hapus id-nya dari "anims" (atau hapus file-nya). BELUM dites di game.
   - PERFECT VAULT: BELUM ditulis. jin_remotes.txt ga ada satupun event vault (isinya cuma UpdateCharacterLook, PushRemote,
     GetPing, EmoteHandler, parry, anim idle/run/walk). Yang ada di dump: remote Window.VaultEvent / fastvault / VaultCommit /
     VaultReject / VaultCompleteEvent (argumen ga diketahui) dan attribute karakter isvaulting, VaultTier (medium), VaultReason (pace),
