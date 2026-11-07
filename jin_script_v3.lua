@@ -1838,12 +1838,14 @@ cSC:Dropdown("SC_Mode", "Mode", {"Instant", "Perfect", "Great", "Random"}, "Perf
 -- Tiap tembakan DIVERIFIKASI: Char.Parry harus nyala <= 0.3 dtk, kalau ngga coba metode berikutnya (1 remote, 2 StopEmote+remote, 3 tool:Activate)
 -- dan dicatat di baris Status. BELUM dites di game.
 do
-    S.parry = {on = false, aggr = false, dist = 9, last = 0, busy = false, method = 1, circle = false, color = Color3.fromRGB(170, 0, 255)}
+    S.parry = {on = false, aggr = false, dist = 9, last = 0, busy = false, method = 1, circle = false, color = Color3.fromRGB(170, 0, 255), detect = true, learn = true}
     -- id animasi ayun killer. Slasher dari scan2 (2 anim ini muncul <0.2 dtk sebelum HP turun). FILL: killer lain, liat "anim" di baris Status pas dia ayun
     local ATTACK_ANIMS = {["135002183282873"] = true, ["121216847022485"] = true}
     local cPar = tSC:Group("Auto parry (Dagger)", 2)
     cPar:Toggle("PAR_On", "Auto Parry", false, function(v) S.parry.on = v end)
     cPar:Toggle("PAR_Aggr", "Auto Parry Aggressive (Predict)", false, function(v) S.parry.aggr = v end)
+    cPar:Toggle("PAR_Detect", "Deteksi anim serang semua killer", true, function(v) S.parry.detect = v end)
+    cPar:Toggle("PAR_Learn", "Auto-learn anim serang dari hit", true, function(v) S.parry.learn = v end)
     cPar:Slider("PAR_Dist", "Parry Distance", 4, 20, 9, 0.5, function(v) S.parry.dist = v end, "m")
     cPar:Toggle("PAR_Circle", "Show Parry Circle", false, function(v) S.parry.circle = v end,
         {id = "PAR_CircleCol", default = S.parry.color, cb = function(c) S.parry.color = c end})
@@ -1933,14 +1935,25 @@ do
             P.resT = os.clock()
         end)
     end
-    -- reaktif: dengerin animasi killer
+    -- reaktif: dengerin animasi killer.
+    -- ATTACK_ANIMS = hardcode (Slasher). learned = anim yang kebukti nurunin HP kita (auto-learn, semua killer).
+    -- detect (heuristik) = anim non-loop, priority Action+, panjang 0.3-2.5 dtk, buat killer yang belum kepelajar.
+    local learned, recent = {}, {}
+    local SWING_PRIO = {
+        [Enum.AnimationPriority.Action] = true, [Enum.AnimationPriority.Action2] = true,
+        [Enum.AnimationPriority.Action3] = true, [Enum.AnimationPriority.Action4] = true,
+    }
+    local function looksLikeSwing(tr)
+        if tr.Looped or not SWING_PRIO[tr.Priority] then return false end
+        local L = tr.Length
+        return L == 0 or (L >= 0.3 and L <= 2.5)   -- L == 0: track belum ke-load, jangan dibuang
+    end
     local hooked = setmetatable({}, {__mode = "k"})
     local function hookKiller(k)
-        if hooked[k.char] then return end
-        local hum = k.char:FindFirstChildOfClass("Humanoid")
-        local an = hum and hum:FindFirstChildOfClass("Animator")
-        if not an then return end
-        hooked[k.char] = true
+        -- Animator bisa ada di Humanoid atau AnimationController, cari rekursif. Key = animator (bukan char), jadi kalau diganti ke-hook ulang
+        local an = k.char:FindFirstChildWhichIsA("Animator", true)
+        if not an or hooked[an] then return end
+        hooked[an] = true
         track(an.AnimationPlayed:Connect(function(tr)
             local a = tr.Animation
             local id = a and tostring(a.AnimationId):match("%d+")
@@ -1950,9 +1963,39 @@ do
             local off = hrp.Position - k.hrp.Position
             local d = off.Magnitude
             if d > 14 or d == 0 then return end
-            S.parry.anim = ("%s %.2fs %.0fm"):format(id, tr.Length, d)
-            if S.parry.on and ATTACK_ANIMS[id] and d <= S.parry.dist * 1.3 and k.hrp.CFrame.LookVector:Dot(off.Unit) >= 0.3 then
-                tryFire("ayunan")
+            local P = S.parry
+            P.anim = ("%s %.2fs %.0fm %s"):format(id, tr.Length, d, tr.Looped and "loop" or "once")
+            recent[#recent + 1] = {id = id, t = os.clock(), loop = tr.Looped}
+            if #recent > 12 then table.remove(recent, 1) end
+            if not P.on then return end
+            local known = ATTACK_ANIMS[id] or learned[id]
+            if (known or (P.detect and looksLikeSwing(tr))) and d <= P.dist * 1.3
+                and k.hrp.CFrame.LookVector:Dot(off.Unit) >= 0.3 then
+                tryFire(known and "ayunan" or "ayunan (tebakan)")
+            end
+        end))
+    end
+    -- auto-learn: HP kita turun -> anim non-loop killer terakhir (<= 0.6 dtk) = anim serang
+    local hpHum
+    local function watchHP()
+        local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
+        if not hum or hum == hpHum then return end
+        hpHum = hum
+        local last = hum.Health
+        track(hum.HealthChanged:Connect(function(h)
+            local drop = h < last - 0.5
+            last = h
+            if not (drop and S.parry.learn) then return end
+            local now = os.clock()
+            for i = #recent, 1, -1 do
+                local e = recent[i]
+                if now - e.t <= 0.6 and not e.loop then
+                    if not learned[e.id] and not ATTACK_ANIMS[e.id] then
+                        learned[e.id] = true
+                        notify("Auto parry", "anim serang baru kepelajar: " .. e.id)
+                    end
+                    break
+                end
             end
         end))
     end
@@ -1961,6 +2004,7 @@ do
         if not (running and (P.on or P.aggr)) then render("Status: OFF") return end
         local ks = getKillers()
         for _, k in ipairs(ks) do hookKiller(k) end
+        watchHP()
         local ch, hum, hrp = ready()
         if not ch then render("Status: " .. hum) return end
         local ping = 0
@@ -2011,7 +2055,10 @@ do
             local r = S.parry.dist
             circ.Size = Vector3.new(0.15, r * 2, r * 2)
             circ.CFrame = CFrame.new(hrp.Position - Vector3.new(0, hrp.Size.Y / 2 + hum.HipHeight - 0.05, 0)) * CFrame.Angles(0, 0, math.rad(90))
-            if circ.Parent ~= cam then circ.Parent = cam end
+            -- pas map/ronde baru CurrentCamera diganti, circ ikut ke-Destroy (Parent locked) -> buang & bikin ulang frame berikutnya
+            if circ.Parent ~= cam then
+                if not pcall(function() circ.Parent = cam end) then circ = nil S.parryCircle = nil end
+            end
         end)
     end))
 end
@@ -2233,6 +2280,9 @@ LAGI DIKERJAIN (belum diverifikasi di game)
     Normal = reaktif lewat ATTACK_ANIMS (Slasher: 135002183282873, 121216847022485); killer lain: isi ID dari baris "anim killer" di Status. Aggressive = prediktif, wajib IsChasing kita.
     CATATAN: relTo() di jin_scan2.lua facing-nya kebalik (negatif = ngadep ke kita). Di script utama udah bener.
     Belum tau parry nahan hit atau cuma stun killer; belum ada log parry yang kena killer.
+    FIX: (1) parry cuma jalan di Slasher -> sekarang auto-learn anim serang dari hit (HP turun) + heuristik anim non-loop/Action (toggle "Deteksi anim serang"),
+    Animator dicari rekursif. Heuristik bisa salah tembak (dagger sekali pake) -> matiin toggle kalau boros. (2) lingkaran parry ilang pas map baru:
+    circ nempel di Camera, Camera diganti -> circ ke-destroy, sekarang dibikin ulang. BELUM dites di game.
   - PERFECT VAULT: BELUM ditulis. jin_remotes.txt ga ada satupun event vault (isinya cuma UpdateCharacterLook, PushRemote,
     GetPing, EmoteHandler, parry, anim idle/run/walk). Yang ada di dump: remote Window.VaultEvent / fastvault / VaultCommit /
     VaultReject / VaultCompleteEvent (argumen ga diketahui) dan attribute karakter isvaulting, VaultTier (medium), VaultReason (pace),
