@@ -1,4 +1,4 @@
--- Jìn Script v3.12.8 | Violence District
+-- Jìn Script v3.12.9 | Violence District
 -- Menu: RightShift (PC) / tap logo (HP) | F6 = skill check on/off
 -- Semua file (logo, ikon, config) ada di workspace/jin_hub/
 
@@ -1853,6 +1853,7 @@ do local function parryInit()
         "117042998468241", "133963973694098", "105374834496520", "111920872708571", "101636125032002",   -- HIT KITA terkonfirmasi
         "129626174716003", "113691709436161", "130593238885843",   -- hasil auto-learn lama, BELUM diverifikasi ulang
         "83333467665074",   -- killer peezatime (chain): HIT KITA 3x + 1x ke-parry sukses (log v3.12.6)
+        "106871536134254",  -- killer rip_fernando0914 (chainsaw): RUSH dari 12.2m, hit 0.39 dtk kemudian (KATTR ChainsawRushActive false->true bareng anim ini)
     }) do ATTACK_ANIMS[id] = true end
     -- v3.12.5 (dari log killer kietnekk89): anim ayunan (101636125032002) baru kebaca 0.04-0.07 dtk SEBELUM HP turun -> reaktif mustahil (parry butuh ~0.13 dtk).
     -- Yang kebaca duluan = anim ANCANG-ANCANG / lunge 125430111937587 (0.40 dtk dan 0.69 dtk sebelum hit, 2 dari 2 kejadian). Itu yang ditembak.
@@ -1861,7 +1862,7 @@ do local function parryInit()
     local EARLY_ANIMS = {["125430111937587"] = 0.048, ["127417297154354"] = 0.036}
     -- anim yang BUKAN serangan tapi dulu ke-"tebak": 81198376178242 = anim sesudah hit (nongol 0.01-0.12 dtk abis HP turun), 70719237641923 = ngelempar/ngangkat survivor.
     -- Parry yang kebuang kena cooldown 60 dtk, jadi satu tebakan salah = semua serangan berikutnya ga bisa di-parry.
-    local NOT_SWING = {["81198376178242"] = true, ["70719237641923"] = true, ["78196404793645"] = true, ["108286715411226"] = true, ["75857500533792"] = true}   -- 78196404793645 = anim sesudah hit (peezatime), 108286715411226 = bawa survivor
+    local NOT_SWING = {["117070354890871"] = true, ["81198376178242"] = true, ["70719237641923"] = true, ["78196404793645"] = true, ["108286715411226"] = true, ["75857500533792"] = true}   -- 78196404793645 = anim sesudah hit (peezatime), 108286715411226 = bawa survivor
     local cPar = tSC:Group("Auto parry (Dagger)", 2)
     cPar:Toggle("PAR_On", "Auto Parry", false, function(v) S.parry.on = v end)
     cPar:Toggle("PAR_Aggr", "Auto Parry Aggressive (Predict)", false, function(v) S.parry.aggr = v end)
@@ -1903,6 +1904,8 @@ do local function parryInit()
             if type(d.key) == "string" then S.parry.key = Enum.KeyCode[d.key] end
         end
     end)
+    -- v3.12.9: anim rush chainsaw mulai dari ~12m dan kena 0.39 dtk kemudian -> jangkauan khusus anim ini 16m (sebelumnya "meleset" di prediksi karena slider 9m)
+    idReach["106871536134254"] = math.max(idReach["106871536134254"] or 0, 16)
     -- LOG (v3.5): tiap tembakan / hit / skip ditulis ke jin_parry_log.txt (200 baris terakhir) buat diagnosa "notif muncul tapi dagger ga kepake"
     local LOGF = BASE .. "jin_parry_log.txt"
     local logbuf, logBusy = {}, false
@@ -2087,6 +2090,9 @@ do local function parryInit()
         parryHooked[ch] = true
         track(ch:GetAttributeChangedSignal("Parry"):Connect(function()
             local P = S.parry
+            if ch:GetAttribute("Parry") and P.firedT and os.clock() - P.firedT < 1.2 then   -- v3.12.9: ukur berapa lama parry baru NYALA sejak ditembak (log: hit +0.17 dtk lolos, attr baru kebaca true <= 0.40 dtk)
+                plog("PARRY ATTR nyala", ("+%.3fs sejak FIRE"):format(os.clock() - P.firedT))
+            end
             if not ch:GetAttribute("Parry") or os.clock() - (P.firedT or 0) < 1.2 then return end   -- bukan parry manual
             local now, info = os.clock(), {}
             if lastIn.btn and now - lastIn.t < 0.5 then
@@ -2394,7 +2400,8 @@ do local function parryInit()
         local up = hrp.Position + Vector3.new(uv.X, 0, uv.Z) * tRem
         local d = Vector3.new(up.X - kp.X, 0, up.Z - kp.Z).Magnitude
         local dot = aimDot(aimOf(k), kp, up)
-        return d <= math.max(P.dist, idReach[id or ""] or 0) and dot >= P.hitDot, d, dot   -- P.dist = slider "Jangkauan parry"
+        -- v3.12.9: log rip_fernando0914: 2 ayunan ke-skip "d_prediksi 1.2, dot 0.04" lalu kena hit 0.2 dtk kemudian. Pas killer nempel (<= 2.5m) arah ke kita jadi noise -> dot ga dihitung.
+        return d <= math.max(P.dist, idReach[id or ""] or 0) and (dot >= P.hitDot or d <= 2.5), d, dot   -- P.dist = slider "Jangkauan parry"
     end
     local hooked = setmetatable({}, {__mode = "k"})
     local hookedAttr = setmetatable({}, {__mode = "k"})
@@ -2643,7 +2650,7 @@ do local function parryInit()
                         local why
                         local keepRes = false
                         if since and since <= 1.0 then
-                            if since < 0.15 then why = ("TELAT: parry ditembak %.2fs sebelum hit (anim killer telat kebaca / ping)"):format(since)
+                            if since < 0.25 then why = ("TELAT: parry ditembak %.2fs sebelum hit (parry belum nyala / anim killer telat kebaca)"):format(since)
                             else why = ("tembus: parry ditembak %.2fs sebelum hit"):format(since) keepRes = true end
                         elseif (Pd.whyK and now - (Pd.whyKT or 0) < 1.5) or (Pd.nfWhy and now - (Pd.nfT or 0) < 1.5) then
                             -- v3.12.7: alasan paling baru menang; whyK = cuma skip untuk anim serang yang DIKENAL (dulu alasan "anim ga dikenal" dari anim lain ikut nyangkut)
@@ -3031,6 +3038,10 @@ LAGI DIKERJAIN (belum diverifikasi di game)
     IsStunned false->true, IsCarrying true->false); 2x muncul, 1x ditembak -> meleset -> cooldown 60 dtk. Lolos karena tebakan boleh ditembak kalau killer <= jangkauan (13.2m)
     walau lagi ngejar survivor LAIN (ChaseTargetUserId bukan kita). Sekarang: 75857500533792 masuk NOT_SWING, tebakan di-skip pas killer IsStunned, dan tebakan cuma
     ditembak kalau killer ngejar KITA (syarat "jarak <= jangkauan" dibuang). Anim serang yang udah dikenal ga berubah. BELUM dites di game.
+    v3.12.9 (log 3 killer: rip_fernando0914 chainsaw, Rov909Mow Slasher): (1) willHit: killer nempel (d prediksi <= 2.5m) bidik ga dihitung (2 ayunan ke-skip dot 0.04 lalu kena).
+    (2) 106871536134254 = RUSH chainsaw (ChainsawRushActive true bareng anim, hit 0.39 dtk kemudian dari 12m): masuk ATTACK_ANIMS + jangkauan khusus 16m; 117070354890871 (anim
+    ngegas 1.7 dtk sebelum rush) masuk NOT_SWING. (3) Rov909Mow: FIRE pas anim 135002183282873 (3.9m) tapi hit +0.17 dtk tembus -> parry belum nyala secepat itu; log baru
+    "PARRY ATTR nyala +Xs sejak FIRE" buat ngukur. HIT DIAG: < 0.25 dtk dianggap TELAT. BELUM dites di game.
   - PERFECT VAULT: BELUM ditulis. jin_remotes.txt ga ada satupun event vault (isinya cuma UpdateCharacterLook, PushRemote,
     GetPing, EmoteHandler, parry, anim idle/run/walk). Yang ada di dump: remote Window.VaultEvent / fastvault / VaultCommit /
     VaultReject / VaultCompleteEvent (argumen ga diketahui) dan attribute karakter isvaulting, VaultTier (medium), VaultReason (pace),
