@@ -1,4 +1,4 @@
--- Jìn Script v3.11 | Violence District
+-- Jìn Script v3.10 | Violence District
 -- Menu: RightShift (PC) / tap logo (HP) | F6 = skill check on/off
 -- Semua file (logo, ikon, config) ada di workspace/jin_hub/
 
@@ -1839,68 +1839,56 @@ cSC:Dropdown("SC_Mode", "Mode", {"Instant", "Perfect", "Great", "Random"}, "Perf
 -- dan dicatat di baris Status. BELUM dites di game.
 -- Dibungkus fungsi: batas Lua 200 local per fungsi utama kelewat kalau semua local parry ditaruh di scope file (error "attempt to call a nil value" pas load).
 do local function parryInit()
-    S.parry = {on = false, aggr = false, dist = 10, last = 0, busy = false, method = 2, hitOnly = true, hitReach = 8, hitDot = 0.55, mode = "hemat", calReach = 0, circle = false, color = Color3.fromRGB(170, 0, 255), detect = false, learn = true, block = 0, cdLo = 0, nl = 0, face = false}
-    -- PUBLIC (v3.11): UI cuma "Auto Parry" + "Mode". Sisanya diurus di belakang layar:
-    --   aggr = false   nembak tanpa ayunan = parry kebuang (meleset = cooldown 60 dtk)
-    --   detect = false tebakan anim yang ga ada di daftar rawan false positive (log: anim non-serangan lolos gate)
-    --   learn = true   anim baru dipelajari dari hit, DI MEMORI doang, ga ditulis ke file
-    --   dist = 10      cuma gerbang kandidat, keputusan akhir di willHit()
-    --   hitReach / hitDot = dari Mode + kalibrasi otomatis (calReach / calDot -> jin_parry.json, angka doang, ga ada id anim)
-    local PARRY_DEBUG = true   -- FILL: false sebelum publish. true = nulis jin_hub/jin_parry_log.txt (isinya anim id) + baris Status nampilin id
-    local MODES = {hemat = {reach = 8, dot = 0.55}, sensitif = {reach = 11, dot = 0.35}}
-    local function applyMode()
-        local P, m = S.parry, MODES[S.parry.mode] or MODES.hemat
-        P.hitReach = math.max(m.reach, P.calReach or 0)
-        P.hitDot = math.min(m.dot, P.calDot or m.dot)
-    end
-    -- id animasi ayun killer, ditanem di script (ga ada di workspace). Sumber: baris "HIT KITA" / parry sukses di jin_parry_log.txt.
-    -- SENGAJA ga dimasukin: 87833180786200, 110466971021611 (muncul berkala pas killer deket 3.5m dot 1.0 = bukan serangan), 101443662521580 (muncul abis kena hit).
-    local ATTACK_ANIMS = {}
-    for _, id in ipairs({
-        "135002183282873", "121216847022485",   -- Slasher: dua-duanya nyala bareng tiap ayunan, parry sukses
-        "81963230963908", "84926129581106",     -- pasangan ayunan (HIT KITA di 81963230963908; yang satunya selalu muncul bareng)
-        "117042998468241", "133963973694098",   -- HIT KITA terkonfirmasi
-        "105374834496520", "111920872708571",   -- HIT KITA terkonfirmasi
-        "101636125032002",                      -- HIT KITA terkonfirmasi
-        "129626174716003", "113691709436161", "130593238885843",   -- hasil auto-learn lama, BELUM diverifikasi ulang
-    }) do ATTACK_ANIMS[id] = true end
+    S.parry = {on = false, aggr = false, dist = 9, last = 0, busy = false, method = 2, hitOnly = true, hitReach = 8, hitDot = 0.55, circle = false, color = Color3.fromRGB(170, 0, 255), detect = true, learn = true, block = 0, cdLo = 0, nl = 0, face = false}
+    S.parry.detect = true    -- v3.6: ON lagi (biar killer baru ga perlu nyatet ID manual), tapi tebakan wajib lolos target gate + killer ngejar kita
+    -- id animasi ayun killer. Slasher dari scan2 (2 anim ini muncul <0.2 dtk sebelum HP turun). FILL: killer lain, liat "anim" di baris Status pas dia ayun
+    local ATTACK_ANIMS = {["135002183282873"] = true, ["121216847022485"] = true}
     local cPar = tSC:Group("Auto parry (Dagger)", 2)
     cPar:Toggle("PAR_On", "Auto Parry", false, function(v) S.parry.on = v end)
-    cPar:Dropdown("PAR_Mode", "Mode", {"Hemat (pas kena)", "Sensitif"}, "Hemat (pas kena)", function(v)
-        S.parry.mode = v:find("^Sens") and "sensitif" or "hemat"
-        applyMode()
-    end)
+    cPar:Toggle("PAR_Aggr", "Auto Parry Aggressive (Predict)", false, function(v) S.parry.aggr = v end)
+    cPar:Toggle("PAR_Detect", "Tebak anim serang (killer baru, tanpa ID)", true, function(v) S.parry.detect = v end)
+    cPar:Toggle("PAR_Learn", "Auto-learn anim serang dari hit", true, function(v) S.parry.learn = v end)
+    cPar:Toggle("PAR_Face", "Hadap killer pas parry (tes: parry depan doang?)", false, function(v) S.parry.face = v end)
+    cPar:Slider("PAR_Dist", "Parry Distance", 4, 20, 9, 0.5, function(v) S.parry.dist = v end, "m")
+    cPar:Toggle("PAR_HitOnly", "Parry cuma kalau ayunan bakal KENA (prediksi)", true, function(v) S.parry.hitOnly = v end)
+    cPar:Slider("PAR_HitReach", "Hit reach (jarak kena, prediksi)", 3, 15, 8, 0.5, function(v) S.parry.hitReach = v end, "m")
+    cPar:Toggle("PAR_Circle", "Show Parry Circle", false, function(v) S.parry.circle = v end,
+        {id = "PAR_CircleCol", default = S.parry.color, cb = function(c) S.parry.color = c end})
     local stLbl = cPar:Label("Status: OFF")
-    -- learned = anim serang hasil auto-learn (MEMORI doang). nopar = anim yang TEMBUS parry dari depan (skill killer yg ga bisa di-parry), di-skip.
-    -- stats[id] = {pf,bf = tembus/ketahan dari depan, po,bo = tembus/ketahan dari sisi/belakang}. Semua cuma di memori; file jin_parry.json
-    -- sekarang cuma nyimpen kalibrasi (calReach, calDot), tanpa id anim.
+    -- learned = anim serang hasil auto-learn. nopar = anim yang TEMBUS parry dari depan (skill killer yg ga bisa di-parry), di-skip.
+    -- stats[id] = {pf,bf = tembus/ketahan dari depan, po,bo = tembus/ketahan dari sisi/belakang}. Semua disimpen ke jin_parry.json
+    -- (bisa diedit manual: tambahin id ke "nopar" buat skill yg kamu tau ga bisa di-parry)
     local learned, recent, nopar, stats = {}, {}, {}, {}
     local PFILE = BASE .. "jin_parry.json"
     local function saveP()
         if not writefile then return end
         pcall(function()
-            writefile(PFILE, HttpService:JSONEncode({calReach = S.parry.calReach, calDot = S.parry.calDot}))
+            local a, n = {}, {}
+            for id in pairs(learned) do a[#a + 1] = id end
+            for id in pairs(nopar) do n[#n + 1] = id end
+            writefile(PFILE, HttpService:JSONEncode({anims = a, nopar = n, stats = stats, btn = S.parry.btn, key = S.parry.key and S.parry.key.Name}))
         end)
     end
     local function addLearn(id, why)
         learned[id] = true
         S.parry.nl = S.parry.nl + 1
-        notify("Auto parry", "anim serang baru dipelajari")
+        saveP()
+        notify("Auto parry", "anim serang baru (" .. why .. "): " .. id)
     end
     pcall(function()
         if isfile and readfile and isfile(PFILE) then
             local d = HttpService:JSONDecode(readfile(PFILE))
-            if tonumber(d.calReach) then S.parry.calReach = tonumber(d.calReach) end
-            if tonumber(d.calDot) then S.parry.calDot = tonumber(d.calDot) end
-            if d.anims or d.nopar or d.stats or d.btn or d.key then saveP() end   -- file versi lama masih nyimpen id anim: timpa jadi cuma kalibrasi
+            for _, id in ipairs(d.anims or {}) do learned[tostring(id)] = true S.parry.nl = S.parry.nl + 1 end
+            for _, id in ipairs(d.nopar or {}) do nopar[tostring(id)] = true end
+            if type(d.stats) == "table" then stats = d.stats end
+            if type(d.btn) == "table" then S.parry.btn = d.btn end
+            if type(d.key) == "string" then S.parry.key = Enum.KeyCode[d.key] end
         end
     end)
-    applyMode()
     -- LOG (v3.5): tiap tembakan / hit / skip ditulis ke jin_parry_log.txt (200 baris terakhir) buat diagnosa "notif muncul tapi dagger ga kepake"
     local LOGF = BASE .. "jin_parry_log.txt"
     local logbuf, logBusy = {}, false
     local function plog(...)
-        if not PARRY_DEBUG then return end
         local a = table.pack(...)
         for i = 1, a.n do a[i] = tostring(a[i]) end
         logbuf[#logbuf + 1] = ("[%.2f] %s"):format(os.clock(), table.concat(a, " ", 1, a.n))
@@ -1930,12 +1918,11 @@ do local function parryInit()
     local function render(base)
         local P = S.parry
         local t = base
-        local function mask(s) return PARRY_DEBUG and s or (s:gsub("%d%d%d%d%d%d+", "#")) end   -- publik: id anim ga boleh nongol di UI
-        if P.res and os.clock() - P.resT < 6 then t = t .. " | " .. mask(P.res) end
-        if PARRY_DEBUG and P.anim then t = t .. " | anim killer: " .. P.anim end
-        if PARRY_DEBUG then t = t .. " | learned " .. P.nl end
-        if P.why and os.clock() - (P.whyT or 0) < 6 then t = t .. " | skip: " .. mask(P.why) end
-        if PARRY_DEBUG and P.cdAttr then t = t .. " | " .. P.cdAttr end
+        if P.res and os.clock() - P.resT < 6 then t = t .. " | " .. P.res end
+        if P.anim then t = t .. " | anim killer: " .. P.anim end
+        t = t .. " | learned " .. P.nl
+        if P.why and os.clock() - (P.whyT or 0) < 6 then t = t .. " | skip: " .. P.why end
+        if P.cdAttr then t = t .. " | " .. P.cdAttr end
         if P.stat ~= t then P.stat = t stLbl.Text = t end
     end
     local function attr(k)
@@ -2201,7 +2188,7 @@ do local function parryInit()
             S.parry.resT = os.clock()
             if pd.front and st.pf >= 2 and st.pf > st.bf and not nopar[id] then
                 nopar[id] = true
-                notify("Auto parry", "ada serangan yang tembus parry dari depan -> di-skip (ga bisa di-parry)")
+                notify("Auto parry", "anim " .. id .. " tembus parry dari depan -> di-skip (ga bisa di-parry)")
             end
         end
         saveP()
@@ -2462,13 +2449,11 @@ do local function parryInit()
                 local le, Pc = S.parry.lastEval, S.parry
                 if le and best and le.id == best.id and now - le.t <= 0.5 then
                     local oldR, oldD = Pc.hitReach, Pc.hitDot
-                    -- cap 12: kalibrasi disimpen permanen dan cuma bisa naik, jangan sampe satu skill jarak jauh narik semua killer
-                    if le.d > Pc.hitReach then Pc.hitReach = math.min(le.d * 1.05, 12) Pc.calReach = Pc.hitReach end
-                    if le.dot < Pc.hitDot then Pc.hitDot = math.max(le.dot - 0.05, 0.2) Pc.calDot = Pc.hitDot end
+                    if le.d > Pc.hitReach then Pc.hitReach = math.min(le.d * 1.05, 14) end
+                    if le.dot < Pc.hitDot then Pc.hitDot = math.max(le.dot - 0.05, 0.2) end
                     if Pc.hitReach ~= oldR or Pc.hitDot ~= oldD then
                         plog("KALIBRASI kena hit | hitReach", ("%.1f -> %.1f"):format(oldR, Pc.hitReach), "| hitDot", ("%.2f -> %.2f"):format(oldD, Pc.hitDot))
-                        saveP()
-                        notify("Auto parry", "kalibrasi otomatis: jangkauan parry disesuaikan")
+                        notify("Auto parry", ("kalibrasi: hit reach %.1fm"):format(Pc.hitReach))
                     end
                 end
                 local pd = S.parry.pending   -- kena hit pas parry kita lagi aktif = tembus
@@ -2820,11 +2805,6 @@ LAGI DIKERJAIN (belum diverifikasi di game)
     busy / lowHP / HP). Sebelumnya ketelen diem-diem, makanya "anim ketangkep tapi dagger ga jalan" ga ketahuan sebabnya. (2) HIT KITA nyatet HP/MaxHP (cek dugaan:
     CanUse() nolak kalau HP < 50% = injured). (3) hitReach default 6 -> 8 (log: hit kena di jarak prediksi 7.2, kalibrasi manual 7.6). Catatan dari log: PARRYRESULT false|60 =
     parry meleset kena cooldown 60 dtk; PARRYRESULT false|0 = server nolak tanpa cooldown. Dua-duanya muncul TANPA baris FIRE (bukan dari script).
-    v3.11 (persiapan publish): UI auto parry diringkas jadi "Auto Parry" + "Mode" (Hemat / Sensitif: reach 8 / 11 + dot 0.55 / 0.35). Aggressive, tebak anim, auto-learn, hadap killer,
-    jarak, hit-only, hit reach, circle disembunyiin (nilai tetap di S.parry, ADVANCED). Kalibrasi hit reach / dot otomatis disimpen (jin_parry.json, angka doang, cap 12m) dan
-    jadi dasar Mode (max(mode, kalibrasi)). ID anim ayun killer ditanem di script (ATTACK_ANIMS); auto-learn cuma di memori; jin_parry.json lama yang masih nyimpen id ditimpa
-    otomatis. PARRY_DEBUG = true -> log + id di Status; set false sebelum publish (ga ada file log, id ke-mask di Status). Catatan: id di dalem script tetep kebaca kalau script
-    plaintext, obfuscate kalau mau disembunyiin dari pembaca script.
   - PERFECT VAULT: BELUM ditulis. jin_remotes.txt ga ada satupun event vault (isinya cuma UpdateCharacterLook, PushRemote,
     GetPing, EmoteHandler, parry, anim idle/run/walk). Yang ada di dump: remote Window.VaultEvent / fastvault / VaultCommit /
     VaultReject / VaultCompleteEvent (argumen ga diketahui) dan attribute karakter isvaulting, VaultTier (medium), VaultReason (pace),
