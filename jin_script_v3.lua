@@ -1,4 +1,4 @@
--- Jìn Script v3.12.1 | Violence District
+-- Jìn Script v3.12.2 | Violence District
 -- Menu: RightShift (PC) / tap logo (HP) | F6 = skill check on/off
 -- Semua file (logo, ikon, config) ada di workspace/jin_hub/
 
@@ -2439,7 +2439,9 @@ do local function parryInit()
                 local ok, w = targetsUs(k, hrp)
                 if not ok then why = w
                 else
-                    local near = nearInteract(k, toUs)
+                    -- v3.12.2: log: 2 ayunan asli ke-skip "killer lagi ngerjain window" (killer deket jendela pas nyerang kita, 1.9m / 7.6m) -> kena hit.
+                    -- id yang udah dikenal = pasti serangan, cek gen/pallet/window cuma buat tebakan.
+                    local near = (not known) and nearInteract(k, toUs)
                     if near then why = "killer lagi ngerjain " .. near end
                 end
             end
