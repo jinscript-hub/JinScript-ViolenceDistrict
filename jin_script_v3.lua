@@ -1201,7 +1201,7 @@ local header = new("Frame", {Size = UDim2.new(1, 0, 0, HEAD), BackgroundTranspar
 new("Frame", {Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = T.stroke, BorderSizePixel = 0}, header)
 local ttl = mkLabel(header, "JÌN SCRIPT", 12, T.text, F_BOLD)
 ttl.Position = UDim2.fromOffset(14, 0); ttl.Size = UDim2.fromOffset(78, HEAD - 1)
-local ver = mkLabel(header, "v3.3", 10, T.dim)
+local ver = mkLabel(header, "v3.5", 10, T.dim)
 ver.Position = UDim2.fromOffset(92, 1); ver.Size = UDim2.fromOffset(30, HEAD - 1)
 
 local closeBtn = new("TextButton", {Size = UDim2.fromOffset(24, 24), AnchorPoint = Vector2.new(1, 0.5),
@@ -1842,7 +1842,13 @@ do local function parryInit()
     S.parry = {on = false, aggr = false, dist = 9, last = 0, busy = false, method = 2, hitOnly = true, hitReach = 6, hitDot = 0.55, circle = false, color = Color3.fromRGB(170, 0, 255), detect = true, learn = true, block = 0, cdLo = 0, nl = 0, face = false}
     S.parry.detect = true    -- v3.6: ON lagi (biar killer baru ga perlu nyatet ID manual), tapi tebakan wajib lolos target gate + killer ngejar kita
     -- id animasi ayun killer. Slasher dari scan2 (2 anim ini muncul <0.2 dtk sebelum HP turun). FILL: killer lain, liat "anim" di baris Status pas dia ayun
-    local ATTACK_ANIMS = {["135002183282873"] = true, ["121216847022485"] = true}
+    local ATTACK_ANIMS = {["135002183282873"] = true, ["121216847022485"] = true,
+        -- v3.12, Abysswalker: tombol attack = 2 anim ini selalu bareng (13x dari jin_killer_ids.txt)
+        ["125430111937587"] = true, ["101636125032002"] = true}
+    -- v3.12, Abysswalker, BUKAN buat di-parry: move1 (skill 1), move2 (skill 2), action (interaksi), 81198376178242 (muncul pas attack tapi tanpa
+    -- input, kemungkinan stun / recovery abis kena parry; belum dipastiin), 97354662952727 (muncul sendiri tanpa input)
+    local NOPAR_FIX = {["100014992013740"] = true, ["75613723058031"] = true, ["111092602501258"] = true, ["99535659278916"] = true,
+        ["70719237641923"] = true, ["81198376178242"] = true, ["97354662952727"] = true}
     local cPar = tSC:Group("Auto parry (Dagger)", 2)
     cPar:Toggle("PAR_On", "Auto Parry", false, function(v) S.parry.on = v end)
     cPar:Toggle("PAR_Aggr", "Auto Parry Aggressive (Predict)", false, function(v) S.parry.aggr = v end)
@@ -2321,7 +2327,7 @@ do local function parryInit()
             local reach = P.dist * 1.3 + math.max(0, closing) * 0.25
             local why
             if not (known or (P.detect and looksLikeSwing(tr))) then why = "anim " .. id .. " ga dikenal sbg serangan"
-            elseif nopar[id] then why = "anim " .. id .. " ga bisa di-parry"
+            elseif nopar[id] or NOPAR_FIX[id] then why = "anim " .. id .. " ga bisa / ga perlu di-parry"
             elseif not known and not (k.char:GetAttribute("IsChasing") and k.char:GetAttribute("ChaseTargetUserId") == lp.UserId) then
                 why = "tebakan: killer ga lagi ngejar kita"   -- anim belum dikenal cuma ditembak kalau killer ngejar KITA / udah deket banget
             elseif d > reach then why = ("killer %.0fm, di luar jarak (reach %.0fm)"):format(d, reach)
@@ -2386,7 +2392,7 @@ do local function parryInit()
                 plog("HIT KITA | anim", best and best.id or "?", "| Parry", tostring(hum.Parent and hum.Parent:GetAttribute("Parry")), "| sejak FIRE", S.parry.firedT and ("%.3fs"):format(now - S.parry.firedT) or "-")
                 -- auto-kalibrasi: kena hit padahal prediksi bilang meleset -> lebarin hitReach / hitDot sesuai angka prediksi itu
                 local le, Pc = S.parry.lastEval, S.parry
-                if le and best and le.id == best.id and now - le.t <= 0.5 then
+                if le and best and (le.id == best.id or ATTACK_ANIMS[le.id] or learned[le.id]) and now - le.t <= 0.5 then
                     local oldR, oldD = Pc.hitReach, Pc.hitDot
                     if le.d > Pc.hitReach then Pc.hitReach = math.min(le.d * 1.05, 14) end
                     if le.dot < Pc.hitDot then Pc.hitDot = math.max(le.dot - 0.05, 0.2) end
@@ -2402,7 +2408,7 @@ do local function parryInit()
                 end
             end
             local learnOK = best and (now - best.t) <= 0.45 and (vh.Position - best.pos).Magnitude <= 12
-            if best and learnOK and S.parry.learn and not (learned[best.id] or ATTACK_ANIMS[best.id]) then
+            if best and learnOK and S.parry.learn and not (learned[best.id] or ATTACK_ANIMS[best.id] or NOPAR_FIX[best.id]) then
                 hits[best.id] = (hits[best.id] or 0) + 1
                 -- v3.4: 1 hit cuma cukup kalau anim-nya lolos heuristik swing. Selain itu butuh 2 hit, biar anim random (emote / interaksi) ga kepelajar permanen
                 if hits[best.id] >= 2 then addLearn(best.id, mine and "hit kita" or "hit survivor lain") end
@@ -2642,7 +2648,7 @@ loading = false
 pcall(refreshDash)
 setOpen(true)
 notify("Jìn Script", "Loaded")
-warn("[jin] v3.3 loaded")
+warn("[jin] v3.5 loaded")
 
 --[==[
 ======================================================================
