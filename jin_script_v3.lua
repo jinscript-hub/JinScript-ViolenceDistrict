@@ -1,4 +1,4 @@
--- Jìn Script v3.12.6 | Violence District
+-- Jìn Script v3.12.7 | Violence District
 -- Menu: RightShift (PC) / tap logo (HP) | F6 = skill check on/off
 -- Semua file (logo, ikon, config) ada di workspace/jin_hub/
 
@@ -1852,13 +1852,16 @@ do local function parryInit()
         "81963230963908", "84926129581106",     -- pasangan ayunan (HIT KITA di 81963230963908)
         "117042998468241", "133963973694098", "105374834496520", "111920872708571", "101636125032002",   -- HIT KITA terkonfirmasi
         "129626174716003", "113691709436161", "130593238885843",   -- hasil auto-learn lama, BELUM diverifikasi ulang
+        "83333467665074",   -- killer peezatime (chain): HIT KITA 3x + 1x ke-parry sukses (log v3.12.6)
     }) do ATTACK_ANIMS[id] = true end
     -- v3.12.5 (dari log killer kietnekk89): anim ayunan (101636125032002) baru kebaca 0.04-0.07 dtk SEBELUM HP turun -> reaktif mustahil (parry butuh ~0.13 dtk).
     -- Yang kebaca duluan = anim ANCANG-ANCANG / lunge 125430111937587 (0.40 dtk dan 0.69 dtk sebelum hit, 2 dari 2 kejadian). Itu yang ditembak.
-    local EARLY_ANIMS = {["125430111937587"] = true}
+    -- v3.12.7: nilai = K awal (detik dari ancang-ancang sampai HIT KENA, per meter jarak killer pas ancang-ancang), dikalibrasi per id dari tiap HIT KITA.
+    --   125430111937587 (kietnekk89): 0.40 dtk @ 8.2m, 0.69 dtk @ 14.3m -> ~0.048. 127417297154354 (peezatime, chain): 0.17 @ 4.5m, 0.29 @ 7.3m, 0.35 @ 9.7m -> ~0.036.
+    local EARLY_ANIMS = {["125430111937587"] = 0.048, ["127417297154354"] = 0.036}
     -- anim yang BUKAN serangan tapi dulu ke-"tebak": 81198376178242 = anim sesudah hit (nongol 0.01-0.12 dtk abis HP turun), 70719237641923 = ngelempar/ngangkat survivor.
     -- Parry yang kebuang kena cooldown 60 dtk, jadi satu tebakan salah = semua serangan berikutnya ga bisa di-parry.
-    local NOT_SWING = {["81198376178242"] = true, ["70719237641923"] = true}
+    local NOT_SWING = {["81198376178242"] = true, ["70719237641923"] = true, ["78196404793645"] = true, ["108286715411226"] = true}   -- 78196404793645 = anim sesudah hit (peezatime), 108286715411226 = bawa survivor
     local cPar = tSC:Group("Auto parry (Dagger)", 2)
     cPar:Toggle("PAR_On", "Auto Parry", false, function(v) S.parry.on = v end)
     cPar:Toggle("PAR_Aggr", "Auto Parry Aggressive (Predict)", false, function(v) S.parry.aggr = v end)
@@ -2021,7 +2024,11 @@ do local function parryInit()
         if roleOf(lp) == "killer" then return nil, "kamu killer" end
         local eq = attr("EquippedItem")
         if eq ~= nil and eq ~= "Parrying Dagger" then return nil, "item = " .. tostring(eq) .. ", bukan dagger" end
-        if ch:GetAttribute("ParrySpent") then return nil, "cooldown dagger (ParrySpent, parry sebelumnya kepake / meleset = ~60 dtk)" end
+        if ch:GetAttribute("ParrySpent") then
+            -- v3.12.7: log: parry sukses (PARRYRESULT true|0|true) -> ParryClient.isSilenced = true; parry meleset (false|60) -> cuma cooldown. Beda penyebab, beda pesan.
+            if pc.self and pc.self.isSilenced then return nil, "dagger udah kepake (silenced, parry berhasil sebelumnya; kemungkinan sekali pakai)" end
+            return nil, "cooldown dagger (parry sebelumnya meleset = ~60 dtk)"
+        end
         if ch:GetAttribute("Parry") or ch:GetAttribute("Knocked") then return nil, "parry lagi aktif / knocked" end
         local P = S.parry
         local now = os.clock()
@@ -2349,6 +2356,9 @@ do local function parryInit()
     end
     local AIM_MIN, AIM_MARGIN = 0.55, 0.15   -- ~57 derajat dari bidik; survivor lain dianggap target kalau lebih lurus >= 0.15
     local function targetsUs(k, hrp)
+        -- v3.12.7: log peezatime (chain): 2 dari 3 hit ke-skip "ga ngebidik kita (dot -0.57 / -0.99)" padahal ChaseTargetUserId = kita. Pas killer chain/lunge, CamLook + kecepatan
+        -- ga bisa dipercaya. Killer yang lagi ngejar KITA = target kita, gerbang bidik dilewati (risiko: ayunan ke temen yang deket, jarang pas lagi ngejar kita).
+        if k.char:GetAttribute("IsChasing") and k.char:GetAttribute("ChaseTargetUserId") == lp.UserId then return true end
         local aim, kp = aimOf(k), k.hrp.Position
         local mine = aimDot(aim, kp, hrp.Position)
         -- v3.12.1: log: killer lunge 12-13m, hit kena tapi CamLook belum ngadep (dot < 0.55) -> ke-skip. Kalau killer lagi mendekat cepet, batas dot dilonggarin.
@@ -2453,12 +2463,9 @@ do local function parryInit()
             -- (arah bidik / prediksi posisi ga dipake: killer lagi lunge, CamLook-nya telat). Satu parry meleset = cooldown 60 dtk, jadi gerbangnya sengaja ketat.
             -- v3.12.6: kalibrasi otomatis jeda ancang-ancang -> ayunan (K detik per meter jarak killer pas ancang-ancang). Awal 0.043 dari 2 sampel log (0.33 dtk @ 8.2m, 0.65 dtk @ 14.3m)
             local E = P.early
-            if E and E.k == k and (ATTACK_ANIMS[id] or learned[id]) and not E.cal and nowT - E.t > 0.1 and nowT - E.t < 1.2 then
-                E.cal = true
-                local obs = (nowT - E.t) / math.max(E.d, 1)
-                local oldK = P.earlyK
-                P.earlyK = math.min(0.08, math.max(0.02, oldK * 0.6 + obs * 0.4))
-                plog("STRIKE", id, ("| ancang->ayunan %.2fs | jarak ancang %.1fm | K %.3f -> %.3f"):format(nowT - E.t, E.d, oldK, P.earlyK))
+            if E and E.k == k and (ATTACK_ANIMS[id] or learned[id]) and not E.stk and nowT - E.t > 0.05 and nowT - E.t < 1.2 then
+                E.stk = true   -- v3.12.7: cuma dicatat; K dikalibrasi dari waktu HIT (bukan ayunan), karena hit kadang 0.2 dtk setelah anim ayunan
+                plog("STRIKE", id, ("| ancang->ayunan %.2fs | jarak ancang %.1fm"):format(nowT - E.t, E.d))
             end
             if EARLY_ANIMS[id] and not nopar[id] then
                 local nowE = os.clock()
@@ -2468,7 +2475,7 @@ do local function parryInit()
                 elseif not (chasingUs or d <= 10) then whyE = ("ancang-ancang tapi killer ga ngejar kita (%.0fm)"):format(d)
                 elseif nowE - (P.lastHitT or 0) < 0.3 then whyE = "ancang-ancang tapi baru abis hit" end
                 plog("EARLY anim", id, ("| %.1fm | ngejar kita %s | ->"):format(d, tostring(chasingUs and true or false)), whyE and ("SKIP: " .. whyE) or "TEMBAK")
-                if whyE then P.why, P.whyT = whyE, nowE return end
+                if whyE then P.why, P.whyT = whyE, nowE P.whyK, P.whyKT = whyE, nowE return end
                 P.lastEval = nil
                 P.early = {id = id, t = nowE, d = d, k = k}
                 if not P.human then
@@ -2482,7 +2489,8 @@ do local function parryInit()
                 local ping = 0
                 pcall(function() ping = lp:GetNetworkPing() end)
                 local lead = math.min(0.06 + ping, 0.3)
-                local tFire = nowE + math.max(0, P.earlyK * d - lead)
+                local K = (P.earlyKs and P.earlyKs[id]) or EARLY_ANIMS[id]
+                local tFire = nowE + math.max(0, K * d - lead)
                 local d0 = d
                 task.spawn(function()
                     while running and os.clock() < tFire do task.wait() end
@@ -2495,8 +2503,8 @@ do local function parryInit()
                     if os.clock() - (P3.firedT or 0) < 1 then why3 = "udah ditembak lewat jalur lain"
                     elseif (P3.lastHitT or 0) > nowE then why3 = "udah ada hit sebelum waktunya"
                     elseif d3 > 18 or d3 > d0 + 1.5 then why3 = ("killer ngejauh (%.1fm -> %.1fm), kemungkinan pancingan"):format(d0, d3) end
-                    plog("EARLY tunda", ("%.2fs"):format(tFire - nowE), ("| jarak %.1f -> %.1f | K %.3f | lead %.2f |"):format(d0, d3, P3.earlyK, lead), why3 and ("BATAL: " .. why3) or "TEMBAK")
-                    if why3 then P3.why, P3.whyT = why3, os.clock() return end
+                    plog("EARLY tunda", ("%.2fs"):format(tFire - nowE), ("| jarak %.1f -> %.1f | K %.3f | lead %.2f |"):format(d0, d3, K, lead), why3 and ("BATAL: " .. why3) or "TEMBAK")
+                    if why3 then P3.why, P3.whyT = why3, os.clock() P3.whyK, P3.whyKT = why3, os.clock() return end
                     tryFire("ancang-ancang (ditunda)", k, id)
                 end)
                 return
@@ -2528,7 +2536,7 @@ do local function parryInit()
             end
             if why then
                 P.why, P.whyT = why, os.clock()
-                if known then plog("SKIP anim", id, "|", why) end
+                if known then P.whyK, P.whyKT = why, os.clock() plog("SKIP anim", id, "|", why) end
                 return
             end
             local reason = known and "ayunan" or "ayunan (tebakan)"
@@ -2543,6 +2551,7 @@ do local function parryInit()
                 plog("EVAL anim", id, ("| d_prediksi %.1f (range %.1f) | dot %.2f (min %.2f) | jarak skrg %.1f | ->"):format(d2, P2.dist, dot2, P2.hitDot, (h2.Position - k.hrp.Position).Magnitude), (ok2 or not P2.hitOnly) and "TEMBAK" or "SKIP (ga bakal kena)")
                 if P2.hitOnly and not ok2 then
                     P2.why, P2.whyT = ("ayunan diprediksi meleset (d %.1f > %.1f / dot %.2f)"):format(d2, P2.dist, dot2), os.clock()
+                    P2.whyK, P2.whyKT = P2.why, P2.whyT
                     return
                 end
                 tryFire(reason, k, id)
@@ -2576,12 +2585,22 @@ do local function parryInit()
                 end
             end
             if mine then
-                local rl = {}
+                local rl, seenR = {}, {}
                 for i = 1, #recent do
                     local e = recent[i]
-                    if now - e.t <= 1.2 then rl[#rl + 1] = ("%s(-%.2fs)"):format(e.id, now - e.t) end
+                    if now - e.t <= 1.2 and not seenR[e.id] then seenR[e.id] = true rl[#rl + 1] = ("%s(-%.2fs)"):format(e.id, now - e.t) end   -- 1 baris per id (event anim bisa burst ratusan)
                 end
                 plog("RECENT anim <= 1.2s sebelum hit:", #rl > 0 and table.concat(rl, ", ") or "-")   -- buat nyari anim ancang-ancang killer lain
+                local Ee = S.parry.early
+                if Ee and not Ee.cal and now - Ee.t > 0.05 and now - Ee.t < 1.5 then
+                    Ee.cal = true
+                    local ks = S.parry.earlyKs
+                    if not ks then ks = {} S.parry.earlyKs = ks end
+                    local oldK = ks[Ee.id] or EARLY_ANIMS[Ee.id] or 0.04
+                    local obs = (now - Ee.t) / math.max(Ee.d, 1)
+                    ks[Ee.id] = math.min(0.12, math.max(0.015, oldK * 0.6 + obs * 0.4))
+                    plog("KALIBRASI ancang->hit", Ee.id, ("| %.2fs @ %.1fm | K %.3f -> %.3f"):format(now - Ee.t, Ee.d, oldK, ks[Ee.id]))
+                end
                 plog("HIT KITA | HP", ("%.0f/%.0f"):format(hum.Health, hum.MaxHealth), "| anim", best and best.id or "?", "| Parry", tostring(hum.Parent and hum.Parent:GetAttribute("Parry")), "| sejak FIRE", S.parry.firedT and ("%.3fs"):format(now - S.parry.firedT) or "-")
                 -- auto-kalibrasi: kena hit padahal prediksi bilang meleset -> lebarin hitReach / hitDot sesuai angka prediksi itu
                 local le, Pc = S.parry.lastEval, S.parry
@@ -2626,8 +2645,12 @@ do local function parryInit()
                         if since and since <= 1.0 then
                             if since < 0.15 then why = ("TELAT: parry ditembak %.2fs sebelum hit (anim killer telat kebaca / ping)"):format(since)
                             else why = ("tembus: parry ditembak %.2fs sebelum hit"):format(since) keepRes = true end
-                        elseif Pd.why and now - (Pd.whyT or 0) < 1.5 then why = "di-skip: " .. Pd.why
-                        elseif Pd.nfWhy and now - (Pd.nfT or 0) < 1.5 then why = "ga bisa nembak: " .. tostring(Pd.nfWhy)
+                        elseif (Pd.whyK and now - (Pd.whyKT or 0) < 1.5) or (Pd.nfWhy and now - (Pd.nfT or 0) < 1.5) then
+                            -- v3.12.7: alasan paling baru menang; whyK = cuma skip untuk anim serang yang DIKENAL (dulu alasan "anim ga dikenal" dari anim lain ikut nyangkut)
+                            local wOK = Pd.whyK and now - (Pd.whyKT or 0) < 1.5
+                            local nOK = Pd.nfWhy and now - (Pd.nfT or 0) < 1.5
+                            if nOK and (not wOK or (Pd.nfT or 0) >= (Pd.whyKT or 0)) then why = "ga bisa nembak: " .. tostring(Pd.nfWhy)
+                            else why = "di-skip: " .. Pd.whyK end
                         else why = "ga ada anim serang ke-detect (anim belum dikenal?)" end
                         Pd.hitNotifT = now
                         if not keepRes then Pd.res, Pd.resT = "KENA HIT, " .. why, now end
@@ -2999,6 +3022,11 @@ LAGI DIKERJAIN (belum diverifikasi di game)
     DITUNDA ke sekitar ayunan nyampe: waktu tembak = ancang + K x jarak - (ping + 0.06). K mulai 0.043 (2 sampel), belajar sendiri dari tiap ayunan (log STRIKE). Sebelum
     nembak dicek ulang (killer ngejauh / udah ada hit / udah ditembak -> BATAL, log "EARLY tunda"). Toggle "Parry pas ayunan nyampe" (PAR_Human); OFF = tembak langsung kayak v3.12.5.
     BELUM dites di game.
+    v3.12.7 (log peezatime / chain killer, notif "anim ga dikenal" pas kena hit): (1) notif itu MENYESATKAN: alasan skip dari anim lain (127417297154354 = ancang-ancang chain)
+    nyangkut; sekarang HIT DIAG cuma pake skip anim serang yang dikenal + alasan paling baru. (2) 2 dari 3 hit ke-skip gerbang bidik (dot -0.57 / -0.99) padahal killer ngejar kita
+    -> killer yang ngejar KITA ga dicek bidik lagi. (3) 83333467665074 masuk ATTACK_ANIMS; 127417297154354 jadi anim ancang-ancang (EARLY_ANIMS, K per id, kalibrasi dari waktu
+    HIT, log KALIBRASI); 78196404793645 + 108286715411226 masuk NOT_SWING. (4) hit ke-3 ga bisa dicegah: parry sukses 481.95 (PARRYRESULT true|0|true) -> dagger silenced, pesan
+    ready() sekarang bedain "udah kepake" vs "cooldown". (5) log RECENT 1 baris per id. BELUM dites di game.
   - PERFECT VAULT: BELUM ditulis. jin_remotes.txt ga ada satupun event vault (isinya cuma UpdateCharacterLook, PushRemote,
     GetPing, EmoteHandler, parry, anim idle/run/walk). Yang ada di dump: remote Window.VaultEvent / fastvault / VaultCommit /
     VaultReject / VaultCompleteEvent (argumen ga diketahui) dan attribute karakter isvaulting, VaultTier (medium), VaultReason (pace),
