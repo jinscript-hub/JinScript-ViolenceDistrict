@@ -1,4 +1,4 @@
--- Jìn Script v3.12.10 | Violence District
+-- Jìn Script v3.12.11 | Violence District
 -- Menu: RightShift (PC) / tap logo (HP) | F6 = skill check on/off
 -- Semua file (logo, ikon, config) ada di workspace/jin_hub/
 
@@ -1839,7 +1839,7 @@ cSC:Dropdown("SC_Mode", "Mode", {"Instant", "Perfect", "Great", "Random"}, "Perf
 -- dan dicatat di baris Status. BELUM dites di game.
 -- Dibungkus fungsi: batas Lua 200 local per fungsi utama kelewat kalau semua local parry ditaruh di scope file (error "attempt to call a nil value" pas load).
 do local function parryInit()
-    S.parry = {on = false, aggr = false, dist = 9, last = 0, busy = false, method = 2, hitOnly = true, circle = false, color = Color3.fromRGB(170, 0, 255), detect = true, learn = true, hitDot = 0.55, block = 0, cdLo = 0, nl = 0, face = false, human = true, earlyK = 0.043}
+    S.parry = {on = false, aggr = false, dist = 12, last = 0, busy = false, method = 2, hitOnly = false, circle = false, color = Color3.fromRGB(170, 0, 255), detect = false, learn = true, hitDot = 0.55, block = 0, cdLo = 0, nl = 0, face = false, human = true, earlyK = 0.043}
     -- v3.12: Parry Distance + Hit reach digabung jadi SATU slider "Jangkauan parry" (S.parry.dist, id config baru PAR_Range, ga bawa nilai lama).
     --   willHit() pake dist langsung; gerbang kandidat di hookKiller = dist*1.5 + lunge; lingkaran = dist; kalibrasi otomatis nambah slider-nya sendiri (maks 14).
     -- PARRY_DEBUG = true -> log file + id anim di Status (kayak v3.10). Set false sebelum publish (id ke-mask, file log ga ditulis).
@@ -1865,13 +1865,10 @@ do local function parryInit()
     local NOT_SWING = {["117070354890871"] = true, ["81198376178242"] = true, ["70719237641923"] = true, ["78196404793645"] = true, ["108286715411226"] = true, ["75857500533792"] = true}   -- 78196404793645 = anim sesudah hit (peezatime), 108286715411226 = bawa survivor
     local cPar = tSC:Group("Auto parry (Dagger)", 2)
     cPar:Toggle("PAR_On", "Auto Parry", false, function(v) S.parry.on = v end)
-    cPar:Toggle("PAR_Aggr", "Auto Parry Aggressive (Predict)", false, function(v) S.parry.aggr = v end)
-    cPar:Toggle("PAR_Detect", "Deteksi anim serang semua killer", true, function(v) S.parry.detect = v end)
     cPar:Toggle("PAR_Learn", "Auto-learn anim serang dari hit", true, function(v) S.parry.learn = v end)
     cPar:Toggle("PAR_Face", "Hadap killer pas parry (tes: parry depan doang?)", false, function(v) S.parry.face = v end)
     cPar:Toggle("PAR_Human", "Parry pas ayunan nyampe (ga keliatan bot)", true, function(v) S.parry.human = v end)
-    cPar:Slider("PAR_Range", "Jangkauan parry", 4, 16, 9, 0.5, function(v) S.parry.dist = v end, "m")
-    cPar:Toggle("PAR_HitOnly", "Parry cuma kalau ayunan bakal KENA", true, function(v) S.parry.hitOnly = v end)
+    cPar:Slider("PAR_Range", "Jangkauan parry", 4, 16, 12, 0.5, function(v) S.parry.dist = v end, "m")
     cPar:Toggle("PAR_Circle", "Show Parry Circle", false, function(v) S.parry.circle = v end,
         {id = "PAR_CircleCol", default = S.parry.color, cb = function(c) S.parry.color = c end})
     local stLbl = cPar:Label("Status: OFF")
@@ -3025,6 +3022,9 @@ LAGI DIKERJAIN (belum diverifikasi di game)
     busy / lowHP / HP). Sebelumnya ketelen diem-diem, makanya "anim ketangkep tapi dagger ga jalan" ga ketahuan sebabnya. (2) HIT KITA nyatet HP/MaxHP (cek dugaan:
     CanUse() nolak kalau HP < 50% = injured). (3) hitReach default 6 -> 8 (log: hit kena di jarak prediksi 7.2, kalibrasi manual 7.6). Catatan dari log: PARRYRESULT false|60 =
     parry meleset kena cooldown 60 dtk; PARRYRESULT false|0 = server nolak tanpa cooldown. Dua-duanya muncul TANPA baris FIRE (bukan dari script).
+    v3.12.11: TEBAKAN DIHAPUS (permintaan user: tebakan bikin parry gagal terus). Prediksi "bakal kena" (hitOnly), tebak anim tak dikenal (detect), dan Aggressive (prediktif)
+    dimatiin permanen + toggle-nya dibuang. Sisa: anim serang YANG DIKENAL (ATTACK_ANIMS / hasil auto-learn dari hit) + gerbang target (ngejar kita / bukan ngejar orang lain)
+    + gerbang jarak longgar (slider "Jangkauan parry" default 12, per-anim dari kalibrasi). Tembak sekali pas anim mulai. EVAL tetap dilog (info doang, ga nge-skip). BELUM dites di game.
     v3.12 (di atas v3.10): Parry Distance + Hit reach digabung jadi satu slider "Jangkauan parry" (config id baru PAR_Range, default 9, maks 16). willHit() pake nilai itu,
     gerbang kandidat otomatis = range*1.5 + lunge*0.25, lingkaran = range. Kalibrasi (kena hit padahal prediksi meleset) nambah slider-nya sendiri (maks 14, kesimpen).
     Mode Hemat/Sensitif dibuang; toggle v3.10 (Aggressive, Deteksi, Auto-learn, Hadap, Hit-only, Circle) balik. ATTACK_ANIMS sekarang 12 id. PARRY_DEBUG = true (false pas publish).
