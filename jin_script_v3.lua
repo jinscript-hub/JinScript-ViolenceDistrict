@@ -1,4 +1,4 @@
--- Jìn Script v3.12.5 | Violence District
+-- Jìn Script v3.12.6 | Violence District
 -- Menu: RightShift (PC) / tap logo (HP) | F6 = skill check on/off
 -- Semua file (logo, ikon, config) ada di workspace/jin_hub/
 
@@ -1839,7 +1839,7 @@ cSC:Dropdown("SC_Mode", "Mode", {"Instant", "Perfect", "Great", "Random"}, "Perf
 -- dan dicatat di baris Status. BELUM dites di game.
 -- Dibungkus fungsi: batas Lua 200 local per fungsi utama kelewat kalau semua local parry ditaruh di scope file (error "attempt to call a nil value" pas load).
 do local function parryInit()
-    S.parry = {on = false, aggr = false, dist = 9, last = 0, busy = false, method = 2, hitOnly = true, circle = false, color = Color3.fromRGB(170, 0, 255), detect = true, learn = true, hitDot = 0.55, block = 0, cdLo = 0, nl = 0, face = false}
+    S.parry = {on = false, aggr = false, dist = 9, last = 0, busy = false, method = 2, hitOnly = true, circle = false, color = Color3.fromRGB(170, 0, 255), detect = true, learn = true, hitDot = 0.55, block = 0, cdLo = 0, nl = 0, face = false, human = true, earlyK = 0.043}
     -- v3.12: Parry Distance + Hit reach digabung jadi SATU slider "Jangkauan parry" (S.parry.dist, id config baru PAR_Range, ga bawa nilai lama).
     --   willHit() pake dist langsung; gerbang kandidat di hookKiller = dist*1.5 + lunge; lingkaran = dist; kalibrasi otomatis nambah slider-nya sendiri (maks 14).
     -- PARRY_DEBUG = true -> log file + id anim di Status (kayak v3.10). Set false sebelum publish (id ke-mask, file log ga ditulis).
@@ -1865,6 +1865,7 @@ do local function parryInit()
     cPar:Toggle("PAR_Detect", "Deteksi anim serang semua killer", true, function(v) S.parry.detect = v end)
     cPar:Toggle("PAR_Learn", "Auto-learn anim serang dari hit", true, function(v) S.parry.learn = v end)
     cPar:Toggle("PAR_Face", "Hadap killer pas parry (tes: parry depan doang?)", false, function(v) S.parry.face = v end)
+    cPar:Toggle("PAR_Human", "Parry pas ayunan nyampe (ga keliatan bot)", true, function(v) S.parry.human = v end)
     cPar:Slider("PAR_Range", "Jangkauan parry", 4, 16, 9, 0.5, function(v) S.parry.dist = v end, "m")
     cPar:Toggle("PAR_HitOnly", "Parry cuma kalau ayunan bakal KENA", true, function(v) S.parry.hitOnly = v end)
     cPar:Toggle("PAR_Circle", "Show Parry Circle", false, function(v) S.parry.circle = v end,
@@ -2450,6 +2451,15 @@ do local function parryInit()
             -- v3.12.5: ANCANG-ANCANG. Tembak langsung begitu killer mulai lunge, jangan nunggu anim ayunan (itu cuma 0.04-0.07 dtk sebelum hit = telat).
             -- Parry nyala ~0.13 dtk abis ditembak dan tahan ~0.8 dtk -> nutup hit yang dateng 0.2-0.9 dtk kemudian. Syarat: killer ngejar KITA atau udah <= 10m
             -- (arah bidik / prediksi posisi ga dipake: killer lagi lunge, CamLook-nya telat). Satu parry meleset = cooldown 60 dtk, jadi gerbangnya sengaja ketat.
+            -- v3.12.6: kalibrasi otomatis jeda ancang-ancang -> ayunan (K detik per meter jarak killer pas ancang-ancang). Awal 0.043 dari 2 sampel log (0.33 dtk @ 8.2m, 0.65 dtk @ 14.3m)
+            local E = P.early
+            if E and E.k == k and (ATTACK_ANIMS[id] or learned[id]) and not E.cal and nowT - E.t > 0.1 and nowT - E.t < 1.2 then
+                E.cal = true
+                local obs = (nowT - E.t) / math.max(E.d, 1)
+                local oldK = P.earlyK
+                P.earlyK = math.min(0.08, math.max(0.02, oldK * 0.6 + obs * 0.4))
+                plog("STRIKE", id, ("| ancang->ayunan %.2fs | jarak ancang %.1fm | K %.3f -> %.3f"):format(nowT - E.t, E.d, oldK, P.earlyK))
+            end
             if EARLY_ANIMS[id] and not nopar[id] then
                 local nowE = os.clock()
                 local chasingUs = k.char:GetAttribute("IsChasing") and k.char:GetAttribute("ChaseTargetUserId") == lp.UserId
@@ -2460,7 +2470,35 @@ do local function parryInit()
                 plog("EARLY anim", id, ("| %.1fm | ngejar kita %s | ->"):format(d, tostring(chasingUs and true or false)), whyE and ("SKIP: " .. whyE) or "TEMBAK")
                 if whyE then P.why, P.whyT = whyE, nowE return end
                 P.lastEval = nil
-                tryFire("ancang-ancang", k, id)
+                P.early = {id = id, t = nowE, d = d, k = k}
+                if not P.human then
+                    tryFire("ancang-ancang", k, id)
+                    return
+                end
+                -- v3.12.6: TUNDA tembakan sampai ayunan hampir nyampe, biar parry-nya nyala pas killer beneran ngehit (bukan 0.5 dtk lebih awal = keliatan bot, dan gampang
+                -- dipancing: killer ancang-ancang terus bidik ke samping). Perkiraan ayunan = ancang + K x jarak; tembak "lead" dtk sebelumnya (ping + 0.06, parry baru
+                -- sampai server setelah ping/2 dan nyala ~0.13 dtk). Sebelum nembak dicek ulang: killer harus masih deket / ga ngejauh (CamLook ga dipake: log nunjukin
+                -- hit kena padahal dot 0.00), belum ada hit, belum ditembak jalur lain.
+                local ping = 0
+                pcall(function() ping = lp:GetNetworkPing() end)
+                local lead = math.min(0.06 + ping, 0.3)
+                local tFire = nowE + math.max(0, P.earlyK * d - lead)
+                local d0 = d
+                task.spawn(function()
+                    while running and os.clock() < tFire do task.wait() end
+                    local P3 = S.parry
+                    local c3 = lp.Character
+                    local h3 = c3 and c3:FindFirstChild("HumanoidRootPart")
+                    if not (running and P3.on and h3 and k.hrp.Parent) then return end
+                    local d3 = (h3.Position - k.hrp.Position).Magnitude
+                    local why3
+                    if os.clock() - (P3.firedT or 0) < 1 then why3 = "udah ditembak lewat jalur lain"
+                    elseif (P3.lastHitT or 0) > nowE then why3 = "udah ada hit sebelum waktunya"
+                    elseif d3 > 18 or d3 > d0 + 1.5 then why3 = ("killer ngejauh (%.1fm -> %.1fm), kemungkinan pancingan"):format(d0, d3) end
+                    plog("EARLY tunda", ("%.2fs"):format(tFire - nowE), ("| jarak %.1f -> %.1f | K %.3f | lead %.2f |"):format(d0, d3, P3.earlyK, lead), why3 and ("BATAL: " .. why3) or "TEMBAK")
+                    if why3 then P3.why, P3.whyT = why3, os.clock() return end
+                    tryFire("ancang-ancang (ditunda)", k, id)
+                end)
                 return
             end
             -- alasan skip ditulis ke Status (skip: ...) biar keliatan kenapa ga nembak
@@ -2956,6 +2994,10 @@ LAGI DIKERJAIN (belum diverifikasi di game)
     atau <= 10m, maks 18m, log baris EARLY). Cuma 2 sampel, cek baris "EARLY" vs "HIT KITA" di log berikutnya. (2) PENYEBAB "kadang ngga": 1x FIRE di log = tebakan salah
     (81198376178242 = anim sesudah hit) -> PARRYRESULT false|60 -> cooldown 60 dtk -> semua ayunan berikutnya NOFIRE. NOT_SWING nahan id itu + 70719237641923 (angkat survivor),
     tebakan juga di-skip 0.6 dtk abis ada hit dan pas killer bawa / ga gerak. (3) log RECENT: daftar anim 1.2 dtk sebelum tiap hit, buat nyari anim ancang-ancang killer lain.
+    BELUM dites di game.
+    v3.12.6 (keluhan: pemain jago bisa bedain auto parry, killer ancang-ancang terus bidik ke samping -> parry kena angin): parry ga ditembak pas ancang-ancang lagi, tapi
+    DITUNDA ke sekitar ayunan nyampe: waktu tembak = ancang + K x jarak - (ping + 0.06). K mulai 0.043 (2 sampel), belajar sendiri dari tiap ayunan (log STRIKE). Sebelum
+    nembak dicek ulang (killer ngejauh / udah ada hit / udah ditembak -> BATAL, log "EARLY tunda"). Toggle "Parry pas ayunan nyampe" (PAR_Human); OFF = tembak langsung kayak v3.12.5.
     BELUM dites di game.
   - PERFECT VAULT: BELUM ditulis. jin_remotes.txt ga ada satupun event vault (isinya cuma UpdateCharacterLook, PushRemote,
     GetPing, EmoteHandler, parry, anim idle/run/walk). Yang ada di dump: remote Window.VaultEvent / fastvault / VaultCommit /
