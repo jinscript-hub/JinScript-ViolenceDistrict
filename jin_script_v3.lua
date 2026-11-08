@@ -1,4 +1,4 @@
--- Jìn Script v3.8 | Violence District
+-- Jìn Script v3.9 | Violence District
 -- Menu: RightShift (PC) / tap logo (HP) | F6 = skill check on/off
 -- Semua file (logo, ikon, config) ada di workspace/jin_hub/
 
@@ -1201,7 +1201,7 @@ local header = new("Frame", {Size = UDim2.new(1, 0, 0, HEAD), BackgroundTranspar
 new("Frame", {Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = T.stroke, BorderSizePixel = 0}, header)
 local ttl = mkLabel(header, "JÌN SCRIPT", 12, T.text, F_BOLD)
 ttl.Position = UDim2.fromOffset(14, 0); ttl.Size = UDim2.fromOffset(78, HEAD - 1)
-local ver = mkLabel(header, "v3.5", 10, T.dim)
+local ver = mkLabel(header, "v3.3", 10, T.dim)
 ver.Position = UDim2.fromOffset(92, 1); ver.Size = UDim2.fromOffset(30, HEAD - 1)
 
 local closeBtn = new("TextButton", {Size = UDim2.fromOffset(24, 24), AnchorPoint = Vector2.new(1, 0.5),
@@ -1842,13 +1842,7 @@ do local function parryInit()
     S.parry = {on = false, aggr = false, dist = 9, last = 0, busy = false, method = 2, hitOnly = true, hitReach = 6, hitDot = 0.55, circle = false, color = Color3.fromRGB(170, 0, 255), detect = true, learn = true, block = 0, cdLo = 0, nl = 0, face = false}
     S.parry.detect = true    -- v3.6: ON lagi (biar killer baru ga perlu nyatet ID manual), tapi tebakan wajib lolos target gate + killer ngejar kita
     -- id animasi ayun killer. Slasher dari scan2 (2 anim ini muncul <0.2 dtk sebelum HP turun). FILL: killer lain, liat "anim" di baris Status pas dia ayun
-    local ATTACK_ANIMS = {["135002183282873"] = true, ["121216847022485"] = true,
-        -- v3.12, Abysswalker: tombol attack = 2 anim ini selalu bareng (13x dari jin_killer_ids.txt)
-        ["125430111937587"] = true, ["101636125032002"] = true}
-    -- v3.12, Abysswalker, BUKAN buat di-parry: move1 (skill 1), move2 (skill 2), action (interaksi), 81198376178242 (muncul pas attack tapi tanpa
-    -- input, kemungkinan stun / recovery abis kena parry; belum dipastiin), 97354662952727 (muncul sendiri tanpa input)
-    local NOPAR_FIX = {["100014992013740"] = true, ["75613723058031"] = true, ["111092602501258"] = true, ["99535659278916"] = true,
-        ["70719237641923"] = true, ["81198376178242"] = true, ["97354662952727"] = true}
+    local ATTACK_ANIMS = {["135002183282873"] = true, ["121216847022485"] = true}
     local cPar = tSC:Group("Auto parry (Dagger)", 2)
     cPar:Toggle("PAR_On", "Auto Parry", false, function(v) S.parry.on = v end)
     cPar:Toggle("PAR_Aggr", "Auto Parry Aggressive (Predict)", false, function(v) S.parry.aggr = v end)
@@ -1941,6 +1935,61 @@ do local function parryInit()
         for _, n in ipairs({...}) do o = o and o:FindFirstChild(n) end
         return o
     end
+    -- PARRYCLIENT (v3.9, dari jin_parry_src.txt): instance ParryClient (self) diambil sekali dari upvalue closure Gui-mob.MouseButton1Down dan di-cache
+    -- (getconnections tiap tembakan lambat: sempat 0.25 dtk antara FIRE dan handler, padahal hit dateng ~0.2 dtk). Dari instance ini:
+    --   self:CanUse() = equipped + ga silenced + ga cooldown (server kasih angkanya lewat parryResult) + ga resolving + ga busy + HP >= 50%
+    --   self:Parry()  = kode asli: FireServer(char) -> puter badan -> anim -> berhenti (slow 0) ; dipanggil langsung, tanpa tes hit lingkaran tombol
+    local pc = {t = 0}
+    local function parryBtn()
+        local pgui = lp:FindFirstChild("PlayerGui")
+        local m = pgui and pgui:FindFirstChild("Survivor-mob")
+        local c = m and m:FindFirstChild("Controls")
+        return c and c:FindFirstChild("Gui-mob")
+    end
+    local function findParryObj()
+        local b = parryBtn()
+        local gu = (debug and debug.getupvalues) or getupvalues
+        if not (b and getconnections and gu) then return nil end
+        local ok, cs = pcall(getconnections, b.MouseButton1Down)
+        if not ok then return nil end
+        for _, c in ipairs(cs) do
+            local f = c.Function
+            local okS, sc = pcall(function() return getfenv(f).script end)
+            if f and okS and sc and sc.Name == "ParryClient" then
+                local okU, us = pcall(gu, f)
+                if okU and type(us) == "table" then
+                    for _, u in pairs(us) do
+                        if type(u) == "table" and rawget(u, "parryEvent") then
+                            pc.self = u
+                            plog("PARRYOBJ ketemu | tool", tostring(u.tool and u.tool:GetFullName()), "| lockDuration", tostring(u.lockDuration))
+                            return u
+                        end
+                    end
+                end
+            end
+        end
+        return nil
+    end
+    local function parryObj()
+        local s = pc.self
+        if s and s.tool and s.tool.Parent and s.character == lp.Character then return s end
+        if os.clock() - pc.t < 1 then return nil end   -- cari ulang paling cepet 1x / dtk (respawn / ronde baru bikin instance baru)
+        pc.t = os.clock()
+        pc.self = nil
+        return findParryObj()
+    end
+    task.spawn(function()   -- hasil parry dari server: success, cooldown, permanent, chain, char. Cuma dicatat.
+        local ok, r = pcall(function()
+            return game:GetService("ReplicatedStorage"):WaitForChild("Remotes", 30):WaitForChild("Items", 30):WaitForChild("Parrying Dagger", 30):WaitForChild("parryResult", 30)
+        end)
+        if ok and r then
+            track(r.OnClientEvent:Connect(function(...)
+                local a = table.pack(...)
+                for i = 1, a.n do a[i] = tostring(a[i]) end
+                plog("PARRYRESULT", table.concat(a, " | ", 1, a.n))
+            end))
+        end
+    end)
     -- return ch, hum kalau boleh nembak, atau nil + alasan
     local function ready()
         local ch = lp.Character
@@ -1955,6 +2004,11 @@ do local function parryInit()
         local P = S.parry
         local now = os.clock()
         if now < P.block then return nil, ("dagger cooldown ~%.1f dtk"):format(P.block - now) end
+        local po = parryObj()
+        if po then
+            local okC, can = pcall(po.CanUse, po)
+            if okC and can == false then return nil, "dagger ga bisa dipake (cooldown / resolving / busy / HP < 50%)" end
+        end
         -- kalau game punya attribute cooldown (nama ada "cool") di karakter / tool: ditampilin di Status. boolean true = lagi cooldown
         local out = {}
         local bp = lp:FindFirstChild("Backpack")
@@ -2041,65 +2095,55 @@ do local function parryInit()
     -- HANDLER ASLI (v3.8, dari jin_recon.txt): tombol parry HP = PlayerGui.Survivor-mob.Controls.Gui-mob. MouseButton1Down-nya disambung ke module
     -- ReplicatedStorage.Modules.Items.ParryingDagger.ParryClient (Activated / yang lain cuma UI). Kita panggil function itu langsung (pola sama kayak
     -- skill check), jadi yang jalan kode client asli: animasi, berhenti, gate recharge, baru remote. Remote-doang (metode lama) ga ngelewatin itu semua.
-    local function parryBtn()
-        local pgui = lp:FindFirstChild("PlayerGui")
-        local m = pgui and pgui:FindFirstChild("Survivor-mob")
-        local c = m and m:FindFirstChild("Controls")
-        return c and c:FindFirstChild("Gui-mob")
-    end
-    -- v3.11: daftar function ParryClient di-cache (getconnections + getfenv itu yang lambat, di log jedanya 0.67 dtk di tembakan pertama).
-    -- Dipanasin di background lewat parryTick, jadi pas FIRE tinggal manggil.
-    local hcache, warming = {}, false
-    local function resolveHandlers(b)
-        local fns = {}
-        local ok, cs = pcall(getconnections, b.MouseButton1Down)
-        if not ok then return nil end
-        for _, c in ipairs(cs) do
-            local f = c.Function
-            local okS, sc = pcall(function() return getfenv(f).script end)
-            if f and okS and sc and sc.Name == "ParryClient" then fns[#fns + 1] = f end
-        end
-        hcache = {btn = b, fns = fns, t = os.clock()}
-        return fns
-    end
-    -- return jumlah handler yang dipanggil (0 = ga ketemu), alasan
-    local function pressHandler()
+    -- fallback lambat (instance ga kebaca dari upvalue): panggil closure tombol lewat getconnections. return jumlah handler yang dipanggil, alasan
+    local function pressHandlerSlow()
         local b = parryBtn()
         if not b then return 0, "tombol Survivor-mob.Controls.Gui-mob ga ada" end
         if not getconnections then return 0, "getconnections ga ada" end
         local pos = b.AbsolutePosition + b.AbsoluteSize / 2
-        local fns = (hcache.btn == b and #hcache.fns > 0 and os.clock() - hcache.t < 10) and hcache.fns or resolveHandlers(b)
-        if not fns then return 0, "getconnections error" end
         local n = 0
-        for _, f in ipairs(fns) do
-            local ok2, err = pcall(f, pos.X, pos.Y)
-            n = n + 1
-            plog("  HANDLER ParryClient dipanggil | ok", ok2, err or "")
+        local ok, cs = pcall(getconnections, b.MouseButton1Down)
+        if not ok then return 0, "getconnections error" end
+        for _, c in ipairs(cs) do
+            local f = c.Function
+            local okS, sc = pcall(function() return getfenv(f).script end)
+            if f and okS and sc and sc.Name == "ParryClient" then
+                local ok2, err = pcall(f, pos.X, pos.Y)
+                n = n + 1
+                plog("  HANDLER ParryClient dipanggil | ok", ok2, err or "")
+            end
         end
-        if n == 0 then hcache = {} end
         return n, n == 0 and "ParryClient ga nyambung ke Gui-mob.MouseButton1Down" or nil
     end
     -- coba handler asli dulu; kalau ga ketemu baru metode remote lama. Berhasil (remote) = Char.Parry nyala <= 0.3 dtk
     local function attempt(ch, hum)
         local P = S.parry
+        local hn, hwhy
+        local po = parryObj()
+        if po then
+            -- jalur cepat: instance ParryClient udah di-cache. Parry() nunggu animasi (yield) -> task.spawn biar ga ngeblok
+            task.spawn(function()
+                local okP, errP = pcall(po.Parry, po)
+                plog("  Parry() selesai | ok", okP, errP or "")
+            end)
+            hn = 1
+        else
+            hn, hwhy = pressHandlerSlow()
+        end
+        if hn > 0 then
+            task.delay(0.3, function()
+                plog("  +0.3s setelah handler | Parry attr", tostring(ch:GetAttribute("Parry")), "| ParrySpent", tostring(ch:GetAttribute("ParrySpent")), "| WalkSpeed", hum.WalkSpeed)
+            end)
+            return 0   -- 0 = handler asli (ga diverifikasi lewat attr Parry: belum ada bukti attr itu nyala di jalur asli)
+        end
+        plog("  handler asli ga bisa:", hwhy)
         local function on()
             local t0 = os.clock()
             repeat
                 if ch:GetAttribute("Parry") then return true end
                 task.wait()
-            until os.clock() - t0 > 0.2
+            until os.clock() - t0 > 0.3
             return false
-        end
-        local hn, hwhy = pressHandler()
-        if hn > 0 then
-            -- v3.10: handler "ok true" ternyata ga selalu nyalain Parry (log: 2 dari 3 tembakan Parry tetep false). Sekarang diverifikasi, kalau ga nyala -> remote.
-            if on() then
-                plog("  handler asli: Parry nyala | ParrySpent", tostring(ch:GetAttribute("ParrySpent")))
-                return 0
-            end
-            plog("  handler dipanggil tapi Parry ga nyala -> fallback remote | EquippedItem", attr("EquippedItem"), "| dagger di", toolLoc(ch), "| ParrySpent", tostring(ch:GetAttribute("ParrySpent")), "| ParryLands", tostring(ch:GetAttribute("ParryLands")), "| lp attr:", attrDump(lp))
-        else
-            plog("  handler asli ga bisa:", hwhy)
         end
         local steps = {
             function() pressReal(ch, hum) end,
@@ -2114,7 +2158,6 @@ do local function parryInit()
         -- v3.6: log nunjukin step 2 (remote doang) udah cukup bikin Char.Parry nyala, sedangkan step 1 (press) ga ngapa-ngapain kalau
         -- tombol/key belum kerekam dan malah buang 0.3 dtk. Sekarang remote duluan, press cuma dipake kalau ada tombol/key kerekam.
         local hasPress = P.btn or P.key or P.btnInst
-        local tStart = os.clock()
         local order = {}
         for _, i in ipairs({P.method, 2, 3, 1}) do
             local dup = false
@@ -2125,8 +2168,7 @@ do local function parryInit()
             local okc, err = pcall(steps[i])
             local good = on()
             plog("  step", i, "pcall", okc, err or "", "-> Parry nyala:", good, "| EquippedItem", attr("EquippedItem"), "| dagger di", toolLoc(ch), "| ParrySpent", ch:GetAttribute("ParrySpent"))
-            if good then P.method, P.methodOk = i, true return i end
-            if P.methodOk and os.clock() - tStart > 0.25 then break end   -- v3.9: metode udah pernah sukses -> gagal = cooldown, jangan nyoba semua metode
+            if good then P.method = i return i end
         end
         return nil
     end
@@ -2201,7 +2243,7 @@ do local function parryInit()
             if m then
                 if since and since < P.cdLo then P.cdLo = since end
                 P.okT = t0
-                P.block = t0 + math.max(P.cdLo, 0.8)
+                P.block = t0 + (parryObj() and 0.8 or math.max(P.cdLo, 0.8))   -- ada ParryClient: cooldown asli dicek CanUse() di ready(), ga perlu tebakan cdLo
                 P.res = ("parry DITEKAN via %s (%s, killer di %s) | cd>=%.1fs"):format(m == 0 and "handler asli" or ("remote metode " .. m), reason, front and "depan" or "samping/belakang", P.cdLo)
                 if m ~= 0 then notify("Auto parry", "Parry nyala (" .. reason .. ")") end   -- handler asli: ga ada bukti nyala, cek log
                 local pd = {id = id, front = front, t = os.clock()}
@@ -2274,14 +2316,8 @@ do local function parryInit()
     -- Jadi tunggu EVAL_DELAY (biar kecepatan lunge killer kebaca), ekstrapolasi posisi killer + kita sampai waktu hit, tembak kalau
     -- jarak prediksi <= hitReach dan kita masih di arah bidik (dot >= hitDot). hitReach / hitDot MELEBAR sendiri tiap kita kena hit
     -- yang tadinya diprediksi meleset (auto-kalibrasi, lihat watchHum).
-    local HIT_T, EVAL_DELAY = 0.2, 0.04
-    -- v3.9: EVAL_DELAY adaptif ping. Parry baru aktif di server ~0.13 dtk + ping/2 setelah ditembak, hit dateng ~0.2 dtk setelah anim mulai.
-    -- Ping tinggi -> delay tetap 0.04 bikin parry telat. Sekarang: makin gede ping, makin kecil delay (min 0 = tembak langsung).
-    local function evalDelay()
-        local ping = 0
-        pcall(function() ping = lp:GetNetworkPing() end)
-        return math.clamp(HIT_T - 0.13 - ping * 0.5 - 0.03, 0, EVAL_DELAY)
-    end
+    -- v3.9: log: anim killer baru kelihatan ~0.02 dtk sebelum hit (anim 121216847022485), jadi nunggu 0.04 dtk = pasti telat. Putusin langsung, ekstrapolasi 0.12 dtk.
+    local HIT_T, EVAL_DELAY = 0.12, 0
     local function willHit(k, hrp, tRem)
         local P = S.parry
         local kv, uv = k.hrp.AssemblyLinearVelocity, hrp.AssemblyLinearVelocity
@@ -2327,8 +2363,8 @@ do local function parryInit()
             local reach = P.dist * 1.3 + math.max(0, closing) * 0.25
             local why
             if not (known or (P.detect and looksLikeSwing(tr))) then why = "anim " .. id .. " ga dikenal sbg serangan"
-            elseif nopar[id] or NOPAR_FIX[id] then why = "anim " .. id .. " ga bisa / ga perlu di-parry"
-            elseif not known and not (k.char:GetAttribute("IsChasing") and k.char:GetAttribute("ChaseTargetUserId") == lp.UserId) then
+            elseif nopar[id] then why = "anim " .. id .. " ga bisa di-parry"
+            elseif not known and not (d <= P.dist or (k.char:GetAttribute("IsChasing") and k.char:GetAttribute("ChaseTargetUserId") == lp.UserId)) then
                 why = "tebakan: killer ga lagi ngejar kita"   -- anim belum dikenal cuma ditembak kalau killer ngejar KITA / udah deket banget
             elseif d > reach then why = ("killer %.0fm, di luar jarak (reach %.0fm)"):format(d, reach)
             else
@@ -2345,19 +2381,16 @@ do local function parryInit()
                 return
             end
             local reason = known and "ayunan" or "ayunan (tebakan)"
-            local ed = evalDelay()
-            task.delay(ed, function()
+            task.delay(EVAL_DELAY, function()
                 local P2 = S.parry
                 if not (running and P2.on and k.hrp.Parent) then return end
                 local c2 = lp.Character
                 local h2 = c2 and c2:FindFirstChild("HumanoidRootPart")
                 if not h2 then return end
-                local ok2, d2, dot2 = willHit(k, h2, HIT_T - ed)
+                local ok2, d2, dot2 = willHit(k, h2, HIT_T - EVAL_DELAY)
                 P2.lastEval = {id = id, t = os.clock(), d = d2, dot = dot2}
                 plog("EVAL anim", id, ("| d_prediksi %.1f (reach %.1f) | dot %.2f (min %.2f) | jarak skrg %.1f | ->"):format(d2, P2.hitReach, dot2, P2.hitDot, (h2.Position - k.hrp.Position).Magnitude), (ok2 or not P2.hitOnly) and "TEMBAK" or "SKIP (ga bakal kena)")
-                local dNow = (h2.Position - k.hrp.Position).Magnitude
-                local closeCall = known and dNow <= 4 and aimDot(aimOf(k), k.hrp.Position, h2.Position) >= 0.35   -- v3.9: nempel + dibidik = jangan percaya prediksi
-                if P2.hitOnly and not ok2 and not closeCall then
+                if P2.hitOnly and not ok2 then
                     P2.why, P2.whyT = ("ayunan diprediksi meleset (d %.1f > %.1f / dot %.2f)"):format(d2, P2.hitReach, dot2), os.clock()
                     return
                 end
@@ -2392,7 +2425,7 @@ do local function parryInit()
                 plog("HIT KITA | anim", best and best.id or "?", "| Parry", tostring(hum.Parent and hum.Parent:GetAttribute("Parry")), "| sejak FIRE", S.parry.firedT and ("%.3fs"):format(now - S.parry.firedT) or "-")
                 -- auto-kalibrasi: kena hit padahal prediksi bilang meleset -> lebarin hitReach / hitDot sesuai angka prediksi itu
                 local le, Pc = S.parry.lastEval, S.parry
-                if le and best and (le.id == best.id or ATTACK_ANIMS[le.id] or learned[le.id]) and now - le.t <= 0.5 then
+                if le and best and le.id == best.id and now - le.t <= 0.5 then
                     local oldR, oldD = Pc.hitReach, Pc.hitDot
                     if le.d > Pc.hitReach then Pc.hitReach = math.min(le.d * 1.05, 14) end
                     if le.dot < Pc.hitDot then Pc.hitDot = math.max(le.dot - 0.05, 0.2) end
@@ -2407,11 +2440,10 @@ do local function parryInit()
                     resolvePending(pd)
                 end
             end
-            local learnOK = best and (now - best.t) <= 0.45 and (vh.Position - best.pos).Magnitude <= 12
-            if best and learnOK and S.parry.learn and not (learned[best.id] or ATTACK_ANIMS[best.id] or NOPAR_FIX[best.id]) then
+            if best and S.parry.learn and not (learned[best.id] or ATTACK_ANIMS[best.id]) then
                 hits[best.id] = (hits[best.id] or 0) + 1
                 -- v3.4: 1 hit cuma cukup kalau anim-nya lolos heuristik swing. Selain itu butuh 2 hit, biar anim random (emote / interaksi) ga kepelajar permanen
-                if hits[best.id] >= 2 then addLearn(best.id, mine and "hit kita" or "hit survivor lain") end
+                if best.swing or hits[best.id] >= 2 then addLearn(best.id, mine and "hit kita" or "hit survivor lain") end
             end
         end))
     end
@@ -2430,16 +2462,6 @@ do local function parryInit()
         watchParryAttr()
         local ch, hum, hrp = ready()
         if not ch then render("Status: " .. hum) return end
-        if not warming and getconnections and (not hcache.btn or os.clock() - hcache.t > 8 or hcache.btn ~= parryBtn()) then
-            local wb = parryBtn()
-            if wb then
-                warming = true
-                task.spawn(function()
-                    pcall(resolveHandlers, wb)
-                    warming = false
-                end)
-            end
-        end
         local ping = 0
         pcall(function() ping = lp:GetNetworkPing() end)
         local nd = math.huge
@@ -2451,7 +2473,7 @@ do local function parryInit()
                 if P.aggr and d <= P.dist * 1.6 and k.char:GetAttribute("IsChasing") and k.char:GetAttribute("ChaseTargetUserId") == lp.UserId then
                     local u = off.Unit
                     local closing = (k.hrp.AssemblyLinearVelocity - hrp.AssemblyLinearVelocity):Dot(u)
-                    if closing > 4 and d / closing <= 0.4 + ping and targetsUs(k, hrp) and not nearInteract(k, u) then tryFire("predict", k) end
+                    if closing > 4 and d / closing <= 0.4 + ping / 2 and targetsUs(k, hrp) and not nearInteract(k, u) then tryFire("predict", k) end
                 end
             end
         end
@@ -2648,7 +2670,7 @@ loading = false
 pcall(refreshDash)
 setOpen(true)
 notify("Jìn Script", "Loaded")
-warn("[jin] v3.5 loaded")
+warn("[jin] v3.3 loaded")
 
 --[==[
 ======================================================================
@@ -2751,6 +2773,12 @@ LAGI DIKERJAIN (belum diverifikasi di game)
     metode remote-spam lama nembus gate itu. Metode remote cuma dipake kalau handler ga ketemu. Hasil handler ga diverifikasi lewat attr Parry (di recon attr Parry
     GA nyala sama sekali, ANIM useanim 81793464499285 juga ga kerekam) -> cek baris "+0.3s setelah handler" di log. BELUM dites di game.
     Info dagger: Model (bukan Tool) di karakter; attr useanim=81793464499285, parriedanim=72219761917132; LocalScript "parrying dagger" + "animation".
+    v3.9 (dari jin_parry_src.txt + log): ParryClient.Parry() = FireServer(char) -> puter badan -> anim -> slow(0) (berhenti) -> nunggu anim / ParryLands naik ->
+    bebas. CanUse() = equipped, ga silenced, ga cooldown, ga resolving (nunggu parryResult dari server), ga busy (vault/pallet/repair/heal/unhook/dibawa/digantung/
+    tag "doing action"), HP >= 50%. Jadi: (1) instance ParryClient di-cache dari upvalue closure Gui-mob (getconnections tiap tembakan = lambat, sempat 0.25 dtk),
+    (2) ready() pake CanUse() sbg sumber kebenaran cooldown (cdLo tebakan cuma fallback), (3) Parry() dipanggil langsung di task.spawn, (4) EVAL_DELAY 0 / HIT_T 0.12 karena
+    anim killer bisa kelihatan cuma 0.02 dtk sebelum hit, (5) baris PARRYRESULT di log = jawaban server (success, cooldown, permanent, chain, char).
+    Aggressive mode (FIRE predict) nembak tanpa ayunan -> matiin kalau mau parry cuma pas kena. BELUM dites di game.
   - PERFECT VAULT: BELUM ditulis. jin_remotes.txt ga ada satupun event vault (isinya cuma UpdateCharacterLook, PushRemote,
     GetPing, EmoteHandler, parry, anim idle/run/walk). Yang ada di dump: remote Window.VaultEvent / fastvault / VaultCommit /
     VaultReject / VaultCompleteEvent (argumen ga diketahui) dan attribute karakter isvaulting, VaultTier (medium), VaultReason (pace),
