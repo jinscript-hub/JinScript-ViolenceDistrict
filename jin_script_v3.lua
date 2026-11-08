@@ -1,4 +1,4 @@
--- Jìn Script v3.12 | Violence District
+-- Jìn Script v3.12.1 | Violence District
 -- Menu: RightShift (PC) / tap logo (HP) | F6 = skill check on/off
 -- Semua file (logo, ikon, config) ada di workspace/jin_hub/
 
@@ -2326,7 +2326,10 @@ do local function parryInit()
     local function targetsUs(k, hrp)
         local aim, kp = aimOf(k), k.hrp.Position
         local mine = aimDot(aim, kp, hrp.Position)
-        if mine < AIM_MIN then return false, "killer ga ngebidik kita" end
+        -- v3.12.1: log: killer lunge 12-13m, hit kena tapi CamLook belum ngadep (dot < 0.55) -> ke-skip. Kalau killer lagi mendekat cepet, batas dot dilonggarin.
+        local closeV = (k.hrp.AssemblyLinearVelocity - hrp.AssemblyLinearVelocity):Dot((hrp.Position - kp).Unit)
+        local minDot = closeV > 8 and 0.2 or AIM_MIN
+        if mine < minDot then return false, ("killer ga ngebidik kita (dot %.2f, mendekat %.0f)"):format(mine, closeV) end
         local dMine = (hrp.Position - kp).Magnitude
         for _, pl in ipairs(Players:GetPlayers()) do
             if pl ~= lp and roleOf(pl) ~= "killer" then
@@ -2361,7 +2364,7 @@ do local function parryInit()
     local hooked = setmetatable({}, {__mode = "k"})
     local hookedAttr = setmetatable({}, {__mode = "k"})
     local kanimT = {}
-    local KATTR_SKIP = {CamLook = true}
+    local KATTR_SKIP = {CamLook = true, VeilRenderedAt = true, AC_MovementGraceUntil = true, AC_StrictAllowedSpeedUntil = true, AC_AllowedSpeed = true, CorruptWaveAt = true, CorruptWaveFrom = true, CorruptWaveDir = true, CorruptWindupAt = true}
     -- KATTR: perubahan attribute di karakter killer (jarak <= 30m dari kita) -> cari attribute "lagi nyerang" (mis. ActionState/Attacking) biar id anim jadi opsional
     local function hookKillerAttrs(k)
         if not PARRY_DEBUG or hookedAttr[k.char] then return end
