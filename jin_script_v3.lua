@@ -1,4 +1,4 @@
--- Jìn Script v3.12.9 | Violence District
+-- Jìn Script v3.12.10 | Violence District
 -- Menu: RightShift (PC) / tap logo (HP) | F6 = skill check on/off
 -- Semua file (logo, ikon, config) ada di workspace/jin_hub/
 
@@ -2367,6 +2367,22 @@ do local function parryInit()
         if k.char:GetAttribute("IsChasing") and k.char:GetAttribute("ChaseTargetUserId") == lp.UserId then return true end
         local aim, kp = aimOf(k), k.hrp.Position
         local mine = aimDot(aim, kp, hrp.Position)
+        local dMine0 = (hrp.Position - kp).Magnitude
+        -- v3.12.10: log banti_914: killer ngejar survivor LAIN (ChaseTargetUserId = orang lain, 17-19m), ayunan ke dia tapi kita yang nembak parry -> meleset, cooldown 60 dtk.
+        -- Killer yang lagi ngejar orang lain yang masih idup + ga knocked dianggap ngincer dia, kecuali kita jelas lebih deket (>= 3m) dan ke-bidik (dot >= 0.55).
+        do
+            local cid = k.char:GetAttribute("ChaseTargetUserId")
+            if k.char:GetAttribute("IsChasing") and type(cid) == "number" and cid ~= 0 and cid ~= lp.UserId then
+                local pl = Players:GetPlayerByUserId(cid)
+                local c = pl and pl.Character
+                local h = c and c:FindFirstChild("HumanoidRootPart")
+                local hm = c and c:FindFirstChildOfClass("Humanoid")
+                if h and hm and hm.Health > 0 and not c:GetAttribute("Knocked") then
+                    local dT = (h.Position - kp).Magnitude
+                    if not (dMine0 < dT - 3 and mine >= AIM_MIN) then return false, "killer ngejar " .. pl.DisplayName end
+                end
+            end
+        end
         -- v3.12.1: log: killer lunge 12-13m, hit kena tapi CamLook belum ngadep (dot < 0.55) -> ke-skip. Kalau killer lagi mendekat cepet, batas dot dilonggarin.
         local closeV = (k.hrp.AssemblyLinearVelocity - hrp.AssemblyLinearVelocity):Dot((hrp.Position - kp).Unit)
         local minDot = closeV > 8 and 0.2 or AIM_MIN
@@ -2379,7 +2395,7 @@ do local function parryInit()
                 local hm = c and c:FindFirstChildOfClass("Humanoid")
                 if h and hm and hm.Health > 0 and not c:GetAttribute("Knocked") then
                     local dv = (h.Position - kp).Magnitude
-                    if dv <= dMine and aimDot(aim, kp, h.Position) >= math.max(AIM_MIN, mine + AIM_MARGIN) then
+                    if dv <= dMine + 3 and aimDot(aim, kp, h.Position) >= math.max(AIM_MIN, mine + AIM_MARGIN) then
                         return false, "killer ngincer " .. pl.DisplayName
                     end
                 end
