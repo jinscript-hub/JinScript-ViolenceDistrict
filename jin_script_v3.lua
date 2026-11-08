@@ -1,4 +1,4 @@
--- Jìn Script v3.12.2 | Violence District
+-- Jìn Script v3.12.3 | Violence District
 -- Menu: RightShift (PC) / tap logo (HP) | F6 = skill check on/off
 -- Semua file (logo, ikon, config) ada di workspace/jin_hub/
 
@@ -1865,7 +1865,7 @@ do local function parryInit()
         {id = "PAR_CircleCol", default = S.parry.color, cb = function(c) S.parry.color = c end})
     local stLbl = cPar:Label("Status: OFF")
     -- learned = anim serang hasil auto-learn. nopar = anim yang TEMBUS parry dari depan, di-skip. stats[id] = {pf,bf,po,bo}. Disimpen ke jin_parry.json
-    local learned, recent, nopar, stats = {}, {}, {}, {}
+    local learned, recent, nopar, stats, idReach = {}, {}, {}, {}, {}   -- idReach[id] = jangkauan khusus anim itu (killer jarak jauh), hasil kalibrasi
     local PFILE = BASE .. "jin_parry.json"
     local function saveP()
         if not writefile then return end
@@ -1873,7 +1873,7 @@ do local function parryInit()
             local a, n = {}, {}
             for id in pairs(learned) do a[#a + 1] = id end
             for id in pairs(nopar) do n[#n + 1] = id end
-            writefile(PFILE, HttpService:JSONEncode({anims = a, nopar = n, stats = stats, btn = S.parry.btn, key = S.parry.key and S.parry.key.Name}))
+            writefile(PFILE, HttpService:JSONEncode({anims = a, nopar = n, stats = stats, reach = idReach, btn = S.parry.btn, key = S.parry.key and S.parry.key.Name}))
         end)
     end
     local function addLearn(id, why)
@@ -1888,6 +1888,7 @@ do local function parryInit()
             for _, id in ipairs(d.anims or {}) do learned[tostring(id)] = true S.parry.nl = S.parry.nl + 1 end
             for _, id in ipairs(d.nopar or {}) do nopar[tostring(id)] = true end
             if type(d.stats) == "table" then stats = d.stats end
+            if type(d.reach) == "table" then for id, v in pairs(d.reach) do if tonumber(v) then idReach[tostring(id)] = tonumber(v) end end end
             if type(d.btn) == "table" then S.parry.btn = d.btn end
             if type(d.key) == "string" then S.parry.key = Enum.KeyCode[d.key] end
         end
@@ -2352,14 +2353,14 @@ do local function parryInit()
     -- yang tadinya diprediksi meleset (auto-kalibrasi, lihat watchHum).
     -- v3.9: log: anim killer baru kelihatan ~0.02 dtk sebelum hit (anim 121216847022485), jadi nunggu 0.04 dtk = pasti telat. Putusin langsung, ekstrapolasi 0.12 dtk.
     local HIT_T, EVAL_DELAY = 0.12, 0
-    local function willHit(k, hrp, tRem)
+    local function willHit(k, hrp, tRem, id)
         local P = S.parry
         local kv, uv = k.hrp.AssemblyLinearVelocity, hrp.AssemblyLinearVelocity
         local kp = k.hrp.Position + Vector3.new(kv.X, 0, kv.Z) * tRem
         local up = hrp.Position + Vector3.new(uv.X, 0, uv.Z) * tRem
         local d = Vector3.new(up.X - kp.X, 0, up.Z - kp.Z).Magnitude
         local dot = aimDot(aimOf(k), kp, up)
-        return d <= P.dist and dot >= P.hitDot, d, dot   -- P.dist = slider "Jangkauan parry"
+        return d <= math.max(P.dist, idReach[id or ""] or 0) and dot >= P.hitDot, d, dot   -- P.dist = slider "Jangkauan parry"
     end
     local hooked = setmetatable({}, {__mode = "k"})
     local hookedAttr = setmetatable({}, {__mode = "k"})
@@ -2428,7 +2429,7 @@ do local function parryInit()
             local known = ATTACK_ANIMS[id] or learned[id]
             -- killer lunge: log nunjukin killer mulai ayun dari 9m lalu tetep kena. Jarak dihitung + kecepatan dia ke arah kita x 0.25 dtk (delay hit ~0.2 dtk)
             local closing = (k.hrp.AssemblyLinearVelocity - hrp.AssemblyLinearVelocity):Dot(toUs)
-            local reach = P.dist * 1.5 + math.max(0, closing) * 0.25   -- gerbang kandidat otomatis dari slider; keputusan akhir di willHit()
+            local reach = math.max(P.dist, idReach[id] or 0) * 1.5 + math.max(0, closing) * 0.25   -- gerbang kandidat otomatis dari slider; keputusan akhir di willHit()
             local why
             if not (known or (P.detect and looksLikeSwing(tr))) then why = "anim " .. id .. " ga dikenal sbg serangan"
             elseif nopar[id] then why = "anim " .. id .. " ga bisa di-parry"
@@ -2457,7 +2458,7 @@ do local function parryInit()
                 local c2 = lp.Character
                 local h2 = c2 and c2:FindFirstChild("HumanoidRootPart")
                 if not h2 then return end
-                local ok2, d2, dot2 = willHit(k, h2, HIT_T - EVAL_DELAY)
+                local ok2, d2, dot2 = willHit(k, h2, HIT_T - EVAL_DELAY, id)
                 P2.lastEval = {id = id, t = os.clock(), d = d2, dot = dot2}
                 plog("EVAL anim", id, ("| d_prediksi %.1f (range %.1f) | dot %.2f (min %.2f) | jarak skrg %.1f | ->"):format(d2, P2.dist, dot2, P2.hitDot, (h2.Position - k.hrp.Position).Magnitude), (ok2 or not P2.hitOnly) and "TEMBAK" or "SKIP (ga bakal kena)")
                 if P2.hitOnly and not ok2 then
@@ -2495,10 +2496,15 @@ do local function parryInit()
                 plog("HIT KITA | HP", ("%.0f/%.0f"):format(hum.Health, hum.MaxHealth), "| anim", best and best.id or "?", "| Parry", tostring(hum.Parent and hum.Parent:GetAttribute("Parry")), "| sejak FIRE", S.parry.firedT and ("%.3fs"):format(now - S.parry.firedT) or "-")
                 -- auto-kalibrasi: kena hit padahal prediksi bilang meleset -> lebarin hitReach / hitDot sesuai angka prediksi itu
                 local le, Pc = S.parry.lastEval, S.parry
-                if le and best and le.id == best.id and now - le.t <= 0.5 then
+                if le and (not best or le.id == best.id) and now - le.t <= 0.5 then
                     local oldR, oldD = Pc.dist, Pc.hitDot
                     -- cap 14: slider ikut naik (kesimpen di config), cuma bisa naik, jangan sampe satu skill jarak jauh narik semua killer
-                    if le.d > Pc.dist then
+                    if le.d > 14 and le.d > (idReach[le.id] or 0) then
+                        -- v3.12.3: killer jarak jauh (log: hit kena di prediksi 13-17m, slider mentok 14). Jangkauan dinaikin cuma buat id anim itu, bukan semua killer.
+                        idReach[le.id] = math.min(le.d * 1.05, 22)
+                        plog("KALIBRASI per-anim", le.id, "| reach", ("%.1f"):format(idReach[le.id]))
+                        saveP()
+                    elseif le.d > Pc.dist and le.d <= 14 then
                         local nv = math.min(le.d * 1.05, 14)
                         local rg = Reg["PAR_Range"]
                         if rg and rg.set then pcall(rg.set, nv) end
