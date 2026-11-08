@@ -1,4 +1,4 @@
--- Jìn Script v3.12.7 | Violence District
+-- Jìn Script v3.12.8 | Violence District
 -- Menu: RightShift (PC) / tap logo (HP) | F6 = skill check on/off
 -- Semua file (logo, ikon, config) ada di workspace/jin_hub/
 
@@ -1861,7 +1861,7 @@ do local function parryInit()
     local EARLY_ANIMS = {["125430111937587"] = 0.048, ["127417297154354"] = 0.036}
     -- anim yang BUKAN serangan tapi dulu ke-"tebak": 81198376178242 = anim sesudah hit (nongol 0.01-0.12 dtk abis HP turun), 70719237641923 = ngelempar/ngangkat survivor.
     -- Parry yang kebuang kena cooldown 60 dtk, jadi satu tebakan salah = semua serangan berikutnya ga bisa di-parry.
-    local NOT_SWING = {["81198376178242"] = true, ["70719237641923"] = true, ["78196404793645"] = true, ["108286715411226"] = true}   -- 78196404793645 = anim sesudah hit (peezatime), 108286715411226 = bawa survivor
+    local NOT_SWING = {["81198376178242"] = true, ["70719237641923"] = true, ["78196404793645"] = true, ["108286715411226"] = true, ["75857500533792"] = true}   -- 78196404793645 = anim sesudah hit (peezatime), 108286715411226 = bawa survivor
     local cPar = tSC:Group("Auto parry (Dagger)", 2)
     cPar:Toggle("PAR_On", "Auto Parry", false, function(v) S.parry.on = v end)
     cPar:Toggle("PAR_Aggr", "Auto Parry Aggressive (Predict)", false, function(v) S.parry.aggr = v end)
@@ -2520,8 +2520,8 @@ do local function parryInit()
             elseif not (known or (P.detect and looksLikeSwing(tr))) then why = "anim " .. id .. " ga dikenal sbg serangan"
             elseif nopar[id] then why = "anim " .. id .. " ga bisa di-parry"
             elseif not known and nowT - (P.lastHitT or 0) < 0.6 then why = "tebakan: baru abis hit (anim recovery)"
-            elseif not known and (k.char:GetAttribute("IsCarrying") or k.char:GetAttribute("Immobile")) then why = "tebakan: killer lagi bawa / ga gerak"
-            elseif not known and not (d <= P.dist or (k.char:GetAttribute("IsChasing") and k.char:GetAttribute("ChaseTargetUserId") == lp.UserId)) then
+            elseif not known and (k.char:GetAttribute("IsCarrying") or k.char:GetAttribute("Immobile") or k.char:GetAttribute("IsStunned")) then why = "tebakan: killer lagi bawa / ga gerak / stun"
+            elseif not known and not (k.char:GetAttribute("IsChasing") and k.char:GetAttribute("ChaseTargetUserId") == lp.UserId) then   -- v3.12.8: "d <= jangkauan" dibuang, tebakan cuma kalau killer ngejar KITA
                 why = "tebakan: killer ga lagi ngejar kita"   -- anim belum dikenal cuma ditembak kalau killer ngejar KITA / udah deket banget
             elseif d > reach then why = ("killer %.0fm, di luar jarak (reach %.0fm)"):format(d, reach)
             else
@@ -3027,6 +3027,10 @@ LAGI DIKERJAIN (belum diverifikasi di game)
     -> killer yang ngejar KITA ga dicek bidik lagi. (3) 83333467665074 masuk ATTACK_ANIMS; 127417297154354 jadi anim ancang-ancang (EARLY_ANIMS, K per id, kalibrasi dari waktu
     HIT, log KALIBRASI); 78196404793645 + 108286715411226 masuk NOT_SWING. (4) hit ke-3 ga bisa dicegah: parry sukses 481.95 (PARRYRESULT true|0|true) -> dagger silenced, pesan
     ready() sekarang bedain "udah kepake" vs "cooldown". (5) log RECENT 1 baris per id. BELUM dites di game.
+    v3.12.8 (log: parry nembak padahal killer ga nyerang): FIRE "tebakan" 75857500533792 (Action4, 2 dtk) = anim killer NGELEPAS survivor yang dibawa (KATTR di frame yang sama:
+    IsStunned false->true, IsCarrying true->false); 2x muncul, 1x ditembak -> meleset -> cooldown 60 dtk. Lolos karena tebakan boleh ditembak kalau killer <= jangkauan (13.2m)
+    walau lagi ngejar survivor LAIN (ChaseTargetUserId bukan kita). Sekarang: 75857500533792 masuk NOT_SWING, tebakan di-skip pas killer IsStunned, dan tebakan cuma
+    ditembak kalau killer ngejar KITA (syarat "jarak <= jangkauan" dibuang). Anim serang yang udah dikenal ga berubah. BELUM dites di game.
   - PERFECT VAULT: BELUM ditulis. jin_remotes.txt ga ada satupun event vault (isinya cuma UpdateCharacterLook, PushRemote,
     GetPing, EmoteHandler, parry, anim idle/run/walk). Yang ada di dump: remote Window.VaultEvent / fastvault / VaultCommit /
     VaultReject / VaultCompleteEvent (argumen ga diketahui) dan attribute karakter isvaulting, VaultTier (medium), VaultReason (pace),
