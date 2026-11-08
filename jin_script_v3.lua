@@ -1,4 +1,4 @@
--- Jìn Script v3.9 | Violence District
+-- Jìn Script v3.10 | Violence District
 -- Menu: RightShift (PC) / tap logo (HP) | F6 = skill check on/off
 -- Semua file (logo, ikon, config) ada di workspace/jin_hub/
 
@@ -1839,7 +1839,7 @@ cSC:Dropdown("SC_Mode", "Mode", {"Instant", "Perfect", "Great", "Random"}, "Perf
 -- dan dicatat di baris Status. BELUM dites di game.
 -- Dibungkus fungsi: batas Lua 200 local per fungsi utama kelewat kalau semua local parry ditaruh di scope file (error "attempt to call a nil value" pas load).
 do local function parryInit()
-    S.parry = {on = false, aggr = false, dist = 9, last = 0, busy = false, method = 2, hitOnly = true, hitReach = 6, hitDot = 0.55, circle = false, color = Color3.fromRGB(170, 0, 255), detect = true, learn = true, block = 0, cdLo = 0, nl = 0, face = false}
+    S.parry = {on = false, aggr = false, dist = 9, last = 0, busy = false, method = 2, hitOnly = true, hitReach = 8, hitDot = 0.55, circle = false, color = Color3.fromRGB(170, 0, 255), detect = true, learn = true, block = 0, cdLo = 0, nl = 0, face = false}
     S.parry.detect = true    -- v3.6: ON lagi (biar killer baru ga perlu nyatet ID manual), tapi tebakan wajib lolos target gate + killer ngejar kita
     -- id animasi ayun killer. Slasher dari scan2 (2 anim ini muncul <0.2 dtk sebelum HP turun). FILL: killer lain, liat "anim" di baris Status pas dia ayun
     local ATTACK_ANIMS = {["135002183282873"] = true, ["121216847022485"] = true}
@@ -1851,7 +1851,7 @@ do local function parryInit()
     cPar:Toggle("PAR_Face", "Hadap killer pas parry (tes: parry depan doang?)", false, function(v) S.parry.face = v end)
     cPar:Slider("PAR_Dist", "Parry Distance", 4, 20, 9, 0.5, function(v) S.parry.dist = v end, "m")
     cPar:Toggle("PAR_HitOnly", "Parry cuma kalau ayunan bakal KENA (prediksi)", true, function(v) S.parry.hitOnly = v end)
-    cPar:Slider("PAR_HitReach", "Hit reach (jarak kena, prediksi)", 3, 15, 6, 0.5, function(v) S.parry.hitReach = v end, "m")
+    cPar:Slider("PAR_HitReach", "Hit reach (jarak kena, prediksi)", 3, 15, 8, 0.5, function(v) S.parry.hitReach = v end, "m")
     cPar:Toggle("PAR_Circle", "Show Parry Circle", false, function(v) S.parry.circle = v end,
         {id = "PAR_CircleCol", default = S.parry.color, cb = function(c) S.parry.color = c end})
     local stLbl = cPar:Label("Status: OFF")
@@ -2213,11 +2213,33 @@ do local function parryInit()
     -- cooldown dagger ga ada datanya -> diukur sendiri. okT = kapan terakhir parry NYALA, cdLo = batas bawah cooldown (dibuktiin dari tembakan gagal).
     -- gagal pas jarak dari okT = x -> cooldown > x -> cdLo = x + 0.25, tembak lagi nunggu segitu (ga spam 3 metode).
     -- sukses pas jarak x < cdLo -> cdLo turun ke x. Konvergen dalam 2-3 parry.
+    -- v3.10: rincian CanUse() buat log NOFIRE. Log v3.9: EVAL bilang TEMBAK tapi ga ada FIRE sama sekali, alasannya ketelen diem-diem di ready().
+    local function cuDetail()
+        local P = S.parry
+        local po = parryObj()
+        if not po then return "ParryClient: ga ketemu" end
+        local function f(name)
+            local ok, v = pcall(po[name], po)
+            return ok and tostring(v) or "err"
+        end
+        local ch = lp.Character
+        local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+        return ("ParryClient: equipped %s | silenced %s | cooldown %s | resolving %s | busy %s | lowHP %s | HP %s/%s | block %.1fs"):format(
+            f("_isEquipped"), tostring(po.isSilenced), tostring(po.isParryOnCooldown), tostring(po.isParryResolving), f("_isBusy"), f("_isLowHealth"),
+            hum and ("%.0f"):format(hum.Health) or "?", hum and ("%.0f"):format(hum.MaxHealth) or "?", math.max(0, P.block - os.clock()))
+    end
     local function tryFire(reason, k, id)
         local P = S.parry
         if P.busy then return end
         local ch, hum = ready()
-        if not ch then return end
+        if not ch then
+            local now = os.clock()
+            if P.nfWhy ~= hum or now - (P.nfT or 0) > 1 then   -- hum = alasan (string) kalau ready() nolak
+                P.nfWhy, P.nfT = hum, now
+                plog("NOFIRE", reason, "id", id, "|", hum, "|", cuDetail())
+            end
+            return
+        end
         P.busy = true
         local t0 = os.clock()
         plog("FIRE", reason, "id", id, "| sejak anim mulai", P.animT and ("%.3fs"):format(t0 - P.animT) or "-", "| ping", pcall(function() return lp:GetNetworkPing() end) and ("%.3f"):format(lp:GetNetworkPing()) or "?", "| char:", attrDump(ch))
@@ -2422,7 +2444,7 @@ do local function parryInit()
                 end
             end
             if mine then
-                plog("HIT KITA | anim", best and best.id or "?", "| Parry", tostring(hum.Parent and hum.Parent:GetAttribute("Parry")), "| sejak FIRE", S.parry.firedT and ("%.3fs"):format(now - S.parry.firedT) or "-")
+                plog("HIT KITA | HP", ("%.0f/%.0f"):format(hum.Health, hum.MaxHealth), "| anim", best and best.id or "?", "| Parry", tostring(hum.Parent and hum.Parent:GetAttribute("Parry")), "| sejak FIRE", S.parry.firedT and ("%.3fs"):format(now - S.parry.firedT) or "-")
                 -- auto-kalibrasi: kena hit padahal prediksi bilang meleset -> lebarin hitReach / hitDot sesuai angka prediksi itu
                 local le, Pc = S.parry.lastEval, S.parry
                 if le and best and le.id == best.id and now - le.t <= 0.5 then
@@ -2779,6 +2801,10 @@ LAGI DIKERJAIN (belum diverifikasi di game)
     (2) ready() pake CanUse() sbg sumber kebenaran cooldown (cdLo tebakan cuma fallback), (3) Parry() dipanggil langsung di task.spawn, (4) EVAL_DELAY 0 / HIT_T 0.12 karena
     anim killer bisa kelihatan cuma 0.02 dtk sebelum hit, (5) baris PARRYRESULT di log = jawaban server (success, cooldown, permanent, chain, char).
     Aggressive mode (FIRE predict) nembak tanpa ayunan -> matiin kalau mau parry cuma pas kena. BELUM dites di game.
+    v3.10 (dari log v3.9): (1) log NOFIRE: tiap EVAL "TEMBAK" yang ditolak ready() sekarang dicatat + rincian CanUse() (equipped / silenced / cooldown / resolving /
+    busy / lowHP / HP). Sebelumnya ketelen diem-diem, makanya "anim ketangkep tapi dagger ga jalan" ga ketahuan sebabnya. (2) HIT KITA nyatet HP/MaxHP (cek dugaan:
+    CanUse() nolak kalau HP < 50% = injured). (3) hitReach default 6 -> 8 (log: hit kena di jarak prediksi 7.2, kalibrasi manual 7.6). Catatan dari log: PARRYRESULT false|60 =
+    parry meleset kena cooldown 60 dtk; PARRYRESULT false|0 = server nolak tanpa cooldown. Dua-duanya muncul TANPA baris FIRE (bukan dari script).
   - PERFECT VAULT: BELUM ditulis. jin_remotes.txt ga ada satupun event vault (isinya cuma UpdateCharacterLook, PushRemote,
     GetPing, EmoteHandler, parry, anim idle/run/walk). Yang ada di dump: remote Window.VaultEvent / fastvault / VaultCommit /
     VaultReject / VaultCompleteEvent (argumen ga diketahui) dan attribute karakter isvaulting, VaultTier (medium), VaultReason (pace),
