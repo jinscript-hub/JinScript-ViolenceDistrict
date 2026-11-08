@@ -1,4 +1,4 @@
--- Jìn Script v3.12.12 | Violence District
+-- Jìn Script v3.12.14 | Violence District
 -- Menu: RightShift (PC) / tap logo (HP) | F6 = skill check on/off
 -- Semua file (logo, ikon, config) ada di workspace/jin_hub/
 
@@ -105,7 +105,7 @@ local S = {
     cat = {}, names = true, dist = true, textSize = 13, maxDist = 600, chaseDist = 40, hookNear = 10,
     hideSpec = true, palHideDown = true, genHideDone = true, genProgCol = true, genDoneCol = Color3.fromRGB(0, 255, 80), lobby = false,
     chaseCol = {Color3.fromRGB(0, 255, 80), Color3.fromRGB(255, 235, 0), Color3.fromRGB(255, 40, 40)}, -- ! ijo, !! kuning, !!! merah
-    cone = {on = true, range = 70, angle = 100, color = Color3.fromRGB(255, 60, 60), transp = 0.75},
+    cone = {on = true, range = 70, angle = 100, color = Color3.fromRGB(255, 60, 60), transp = 0.75, line = true, lineLen = 30, lineColor = Color3.fromRGB(255, 255, 255), body = false, bodyColor = Color3.fromRGB(60, 255, 90)},
     sc = {enabled = true, mode = "Perfect"},
     fov = {on = false, val = 70},
     fb = {on = false, bright = 2},
@@ -642,6 +642,25 @@ for i = 1, CONE_N * 2 do
     w.Parent = coneFolder
     coneW[i] = w
 end
+-- v3.12.14: garis lurus dari kepala killer (arah CamLook, putih) + garis badan (arah HumanoidRootPart, ijo, buat banding: bidik kamera vs badan beneran ngadep mana)
+local function mkLine(col)
+    local l = Instance.new("Part")
+    l.Anchored, l.CanCollide, l.CanQuery, l.CanTouch, l.CastShadow = true, false, false, false, false
+    l.Material = Enum.Material.Neon
+    l.Transparency = 0.15
+    l.Color = col
+    l.Size = Vector3.new(0.14, 0.14, 1)
+    l.Parent = coneFolder
+    return l
+end
+local coneLineA, coneLineB = mkLine(Color3.fromRGB(255, 255, 255)), mkLine(Color3.fromRGB(60, 255, 90))
+local function placeLine(l, origin, dir, len)
+    if dir.Magnitude < 0.01 then l.Transparency = 1 return end
+    dir = dir.Unit
+    l.Transparency = 0.15
+    l.Size = Vector3.new(0.14, 0.14, len)
+    l.CFrame = CFrame.lookAt(origin + dir * (len / 2), origin + dir * len)
+end
 local coneRP = RaycastParams.new()
 coneRP.FilterType = Enum.RaycastFilterType.Exclude
 coneRP.RespectCanCollide = true   -- abaikan part dekor yang ga collide
@@ -669,7 +688,7 @@ local function groundAt(p, fy)
     return Vector3.new(p.X, fy + 0.12, p.Z)
 end
 local function updateCone()
-    if S.lobby or not S.cone.on or roleOf(lp) == "killer" then coneFolder.Parent = nil return end
+    if S.lobby or not (S.cone.on or S.cone.line or S.cone.body) or roleOf(lp) == "killer" then coneFolder.Parent = nil return end
     local ks = getKillers()
     local k = ks[1]
     if not k then coneFolder.Parent = nil return end
@@ -694,16 +713,35 @@ local function updateCone()
 
     local o = groundAt(k.hrp.Position, k.hrp.Position.Y - 3)
     local half = math.rad(S.cone.angle / 2)
-    local pts = {}
-    for i = 0, CONE_N do
-        local dir = CFrame.Angles(0, -half + 2 * half * (i / CONE_N), 0):VectorToWorldSpace(look)
-        pts[i] = groundAt(o + dir * S.cone.range, o.Y)
+    if S.cone.on then
+        local pts = {}
+        for i = 0, CONE_N do
+            local dir = CFrame.Angles(0, -half + 2 * half * (i / CONE_N), 0):VectorToWorldSpace(look)
+            pts[i] = groundAt(o + dir * S.cone.range, o.Y)
+        end
+        for i = 1, CONE_N do
+            local w1, w2 = coneW[i * 2 - 1], coneW[i * 2]
+            w1.Color, w2.Color = S.cone.color, S.cone.color
+            w1.Transparency, w2.Transparency = S.cone.transp, S.cone.transp
+            tri3(o, pts[i - 1], pts[i], w1, w2)
+        end
+    else
+        for i = 1, CONE_N * 2 do coneW[i].Transparency = 1 end
     end
-    for i = 1, CONE_N do
-        local w1, w2 = coneW[i * 2 - 1], coneW[i * 2]
-        w1.Color, w2.Color = S.cone.color, S.cone.color
-        w1.Transparency, w2.Transparency = S.cone.transp, S.cone.transp
-        tri3(o, pts[i - 1], pts[i], w1, w2)
+    local head = k.char:FindFirstChild("Head")
+    local ho = head and head.Position or (k.hrp.Position + Vector3.new(0, 1.5, 0))
+    if S.cone.line then
+        coneLineA.Color = S.cone.lineColor
+        placeLine(coneLineA, ho, look, S.cone.lineLen)
+    else
+        coneLineA.Transparency = 1
+    end
+    if S.cone.body then
+        local lv = k.hrp.CFrame.LookVector
+        coneLineB.Color = S.cone.bodyColor
+        placeLine(coneLineB, ho - Vector3.new(0, 0.3, 0), Vector3.new(lv.X, 0, lv.Z), S.cone.lineLen)
+    else
+        coneLineB.Transparency = 1
     end
     coneFolder.Parent = workspace
 end
@@ -1825,6 +1863,11 @@ do
     local cCone = sK:Group("Area liat killer (tanah)", 1)
     cCone:Toggle("Cone_On", "Aktif", true, function(v) S.cone.on = v end)
     cCone:Slider("Cone_Angle", "Sudut area killer", 40, 180, 100, 5, function(v) S.cone.angle = v end)
+    cCone:Toggle("Cone_Line", "Garis lurus dari kepala (arah kamera killer)", true, function(v) S.cone.line = v end,
+        {id = "Cone_LineCol", default = S.cone.lineColor, cb = function(c) S.cone.lineColor = c end})
+    cCone:Toggle("Cone_Body", "Garis arah badan killer (banding)", false, function(v) S.cone.body = v end,
+        {id = "Cone_BodyCol", default = S.cone.bodyColor, cb = function(c) S.cone.bodyColor = c end})
+    cCone:Slider("Cone_LineLen", "Panjang garis", 10, 100, 30, 5, function(v) S.cone.lineLen = v end, "m")
     cCone:Slider("Cone_Range", "Jarak area killer", 20, 150, 70, 5, function(v) S.cone.range = v end, "m")
 end
 
@@ -1839,7 +1882,7 @@ cSC:Dropdown("SC_Mode", "Mode", {"Instant", "Perfect", "Great", "Random"}, "Perf
 -- dan dicatat di baris Status. BELUM dites di game.
 -- Dibungkus fungsi: batas Lua 200 local per fungsi utama kelewat kalau semua local parry ditaruh di scope file (error "attempt to call a nil value" pas load).
 do local function parryInit()
-    S.parry = {on = false, aggr = false, dist = 12, last = 0, busy = false, method = 2, hitOnly = false, circle = false, color = Color3.fromRGB(170, 0, 255), detect = false, learn = true, pre = false, hitDot = 0.55, block = 0, cdLo = 0, nl = 0, face = false, human = true, earlyK = 0.043}
+    S.parry = {on = false, aggr = false, dist = 9, last = 0, busy = false, method = 2, hitOnly = false, circle = false, color = Color3.fromRGB(170, 0, 255), detect = false, learn = true, pre = false, hitDot = 0.55, block = 0, cdLo = 0, nl = 0, face = false, human = true, earlyK = 0.043}
     -- v3.12: Parry Distance + Hit reach digabung jadi SATU slider "Jangkauan parry" (S.parry.dist, id config baru PAR_Range, ga bawa nilai lama).
     --   willHit() pake dist langsung; gerbang kandidat di hookKiller = dist*1.5 + lunge; lingkaran = dist; kalibrasi otomatis nambah slider-nya sendiri (maks 14).
     -- PARRY_DEBUG = true -> log file + id anim di Status (kayak v3.10). Set false sebelum publish (id ke-mask, file log ga ditulis).
@@ -1862,14 +1905,16 @@ do local function parryInit()
     local EARLY_ANIMS = {["125430111937587"] = 0.048, ["127417297154354"] = 0.036}
     -- anim yang BUKAN serangan tapi dulu ke-"tebak": 81198376178242 = anim sesudah hit (nongol 0.01-0.12 dtk abis HP turun), 70719237641923 = ngelempar/ngangkat survivor.
     -- Parry yang kebuang kena cooldown 60 dtk, jadi satu tebakan salah = semua serangan berikutnya ga bisa di-parry.
-    local NOT_SWING = {["117070354890871"] = true, ["81198376178242"] = true, ["70719237641923"] = true, ["78196404793645"] = true, ["108286715411226"] = true, ["75857500533792"] = true}   -- 78196404793645 = anim sesudah hit (peezatime), 108286715411226 = bawa survivor
+    local NOT_SWING = {["117070354890871"] = true, ["81198376178242"] = true, ["70719237641923"] = true, ["78196404793645"] = true, ["108286715411226"] = true, ["75857500533792"] = true,
+        -- v3.12.13: tombak (Veil spear) ga bisa di-parry (info user) -> jangan pernah ditembak / dipelajari. 77303734522729 = ngecas lempar, 101443662521580 / 127622545856523 = lemparan lepas,
+        -- 129669521834246 / 79809716042968 / 87436543050891 / 84404617799721 = pegang / siap tombak
+        ["77303734522729"] = true, ["101443662521580"] = true, ["127622545856523"] = true, ["129669521834246"] = true, ["79809716042968"] = true, ["87436543050891"] = true, ["84404617799721"] = true}   -- 78196404793645 = anim sesudah hit (peezatime), 108286715411226 = bawa survivor
     local cPar = tSC:Group("Auto parry (Dagger)", 2)
     cPar:Toggle("PAR_On", "Auto Parry", false, function(v) S.parry.on = v end)
     cPar:Toggle("PAR_Pre", "Parry sebelum ayunan (preemptive, tes)", false, function(v) S.parry.pre = v end)
     cPar:Toggle("PAR_Learn", "Auto-learn anim serang dari hit", true, function(v) S.parry.learn = v end)
     cPar:Toggle("PAR_Face", "Hadap killer pas parry (tes: parry depan doang?)", false, function(v) S.parry.face = v end)
     cPar:Toggle("PAR_Human", "Parry pas ayunan nyampe (ga keliatan bot)", true, function(v) S.parry.human = v end)
-    cPar:Slider("PAR_Range", "Jangkauan parry", 4, 16, 12, 0.5, function(v) S.parry.dist = v end, "m")
     cPar:Toggle("PAR_Circle", "Show Parry Circle", false, function(v) S.parry.circle = v end,
         {id = "PAR_CircleCol", default = S.parry.color, cb = function(c) S.parry.color = c end})
     local stLbl = cPar:Label("Status: OFF")
@@ -1905,6 +1950,15 @@ do local function parryInit()
     end)
     -- v3.12.9: anim rush chainsaw mulai dari ~12m dan kena 0.39 dtk kemudian -> jangkauan khusus anim ini 16m (sebelumnya "meleset" di prediksi karena slider 9m)
     idReach["106871536134254"] = math.max(idReach["106871536134254"] or 0, 16)
+    -- v3.12.13: jangkauan per-anim, di-seed dari log (jarak killer pas anim muncul di hit / parry sukses). Default id lain = P.dist (9). Melebar sendiri kalau ada hit yang ke-skip karena jarak.
+    for id, r in pairs({
+        ["83333467665074"] = 12,   -- chain: hit 1.9-8.8m, ancang-ayun sampai 11.9m
+        ["84926129581106"] = 15, ["81963230963908"] = 15,   -- Veil melee: lunge, hit dari 14.6m
+        ["129626174716003"] = 14, ["113691709436161"] = 14,   -- lunge 11-13m
+        ["75618342544502"] = 17, ["93902163029544"] = 17,   -- hit dari 13-17m
+        ["74968262036854"] = 17, ["113255068724446"] = 17,   -- banti: hit dari 15.2m
+        ["105374834496520"] = 10, ["111920872708571"] = 10,
+    }) do idReach[id] = math.max(idReach[id] or 0, r) end
     -- LOG (v3.5): tiap tembakan / hit / skip ditulis ke jin_parry_log.txt (200 baris terakhir) buat diagnosa "notif muncul tapi dagger ga kepake"
     local LOGF = BASE .. "jin_parry_log.txt"
     local logbuf, logBusy = {}, false
@@ -2536,7 +2590,10 @@ do local function parryInit()
             local known = ATTACK_ANIMS[id] or learned[id]
             -- killer lunge: log nunjukin killer mulai ayun dari 9m lalu tetep kena. Jarak dihitung + kecepatan dia ke arah kita x 0.25 dtk (delay hit ~0.2 dtk)
             local closing = (k.hrp.AssemblyLinearVelocity - hrp.AssemblyLinearVelocity):Dot(toUs)
-            local reach = math.max(P.dist, idReach[id] or 0) * 1.5 + math.max(0, closing) * 0.25   -- gerbang kandidat otomatis dari slider; keputusan akhir di willHit()
+            -- v3.12.13: jangkauan per-anim (idReach, belajar sendiri) + 1m; id yang belum punya = P.dist (9m). Slider dibuang. Lingkaran nunjukin angka ini.
+            local base = idReach[id] or P.dist
+            local reach = base + 1
+            if known then P.circR = base end
             local why
             if NOT_SWING[id] then why = "anim " .. id .. " = recovery / bukan serangan"
             elseif not (known or (P.detect and looksLikeSwing(tr))) then why = "anim " .. id .. " ga dikenal sbg serangan"
@@ -2545,7 +2602,7 @@ do local function parryInit()
             elseif not known and (k.char:GetAttribute("IsCarrying") or k.char:GetAttribute("Immobile") or k.char:GetAttribute("IsStunned")) then why = "tebakan: killer lagi bawa / ga gerak / stun"
             elseif not known and not (k.char:GetAttribute("IsChasing") and k.char:GetAttribute("ChaseTargetUserId") == lp.UserId) then   -- v3.12.8: "d <= jangkauan" dibuang, tebakan cuma kalau killer ngejar KITA
                 why = "tebakan: killer ga lagi ngejar kita"   -- anim belum dikenal cuma ditembak kalau killer ngejar KITA / udah deket banget
-            elseif d > reach then why = ("killer %.0fm, di luar jarak (reach %.0fm)"):format(d, reach)
+            elseif d > reach then why = ("killer %.0fm, di luar jarak (reach %.0fm)"):format(d, reach) P.lastSkip = {id = id, t = os.clock(), d = d}
             else
                 local ok, w = targetsUs(k, hrp)
                 if not ok then why = w
@@ -2616,7 +2673,7 @@ do local function parryInit()
             for i = 1, #recent do
                 local e = recent[i]
                 local dt = now - e.t
-                if dt <= 0.6 and dt >= 0.03 and (vh.Position - e.pos).Magnitude <= 16 then
+                if dt <= 0.6 and dt >= 0.03 and (vh.Position - e.pos).Magnitude <= 22 then
                     if not best or (e.swing and not best.swing) then best = e end
                 end
             end
@@ -2645,26 +2702,15 @@ do local function parryInit()
                 end
                 plog("HIT KITA | HP", ("%.0f/%.0f"):format(hum.Health, hum.MaxHealth), "| anim", best and best.id or "?", "| Parry", tostring(hum.Parent and hum.Parent:GetAttribute("Parry")), "| sejak FIRE", S.parry.firedT and ("%.3fs"):format(now - S.parry.firedT) or "-")
                 -- auto-kalibrasi: kena hit padahal prediksi bilang meleset -> lebarin hitReach / hitDot sesuai angka prediksi itu
-                local le, Pc = S.parry.lastEval, S.parry
-                if le and (not best or le.id == best.id) and now - le.t <= 0.5 then
-                    local oldR, oldD = Pc.dist, Pc.hitDot
-                    -- cap 14: slider ikut naik (kesimpen di config), cuma bisa naik, jangan sampe satu skill jarak jauh narik semua killer
-                    if le.d > 14 and le.d > (idReach[le.id] or 0) then
-                        -- v3.12.3: killer jarak jauh (log: hit kena di prediksi 13-17m, slider mentok 14). Jangkauan dinaikin cuma buat id anim itu, bukan semua killer.
-                        idReach[le.id] = math.min(le.d * 1.05, 22)
-                        plog("KALIBRASI per-anim", le.id, "| reach", ("%.1f"):format(idReach[le.id]))
-                        saveP()
-                    elseif le.d > Pc.dist and le.d <= 14 then
-                        local nv = math.min(le.d * 1.05, 14)
-                        local rg = Reg["PAR_Range"]
-                        if rg and rg.set then pcall(rg.set, nv) end
-                        if Pc.dist < nv - 0.01 then Pc.dist = nv end   -- fallback kalau slider ga ke-set
-                    end
-                    if le.dot < Pc.hitDot then Pc.hitDot = math.max(le.dot - 0.05, 0.2) end
-                    if Pc.dist ~= oldR or Pc.hitDot ~= oldD then
-                        plog("KALIBRASI kena hit | range", ("%.1f -> %.1f"):format(oldR, Pc.dist), "| hitDot", ("%.2f -> %.2f"):format(oldD, Pc.hitDot))
-                        notify("Auto parry: kalibrasi", "jangkauan dilebarin dari hit tadi")
-                    end
+                -- v3.12.13 kalibrasi per-anim: kena hit padahal ayunan itu ke-skip karena jarak -> jangkauan id itu dilebarin (d + 1.5, maks 22), kesimpen di jin_parry.json
+                local ls = S.parry.lastSkip
+                if ls and (not best or ls.id == best.id) and now - ls.t <= 0.8 and ls.d > (idReach[ls.id] or S.parry.dist) then
+                    local old = idReach[ls.id] or S.parry.dist
+                    idReach[ls.id] = math.min(ls.d + 1.5, 22)
+                    plog("KALIBRASI per-anim", ls.id, "| reach", ("%.1f -> %.1f"):format(old, idReach[ls.id]))
+                    saveP()
+                    notify("Auto parry: kalibrasi", "jangkauan serangan itu dilebarin dari hit tadi")
+                    S.parry.lastSkip = nil
                 end
                 local pd = S.parry.pending   -- kena hit pas parry kita lagi aktif = tembus
                 if pd and not pd.done and now - pd.t <= 0.8 then
@@ -2795,7 +2841,7 @@ do local function parryInit()
                 S.parryCircle = circ
             end
             circ.Color = S.parry.color
-            local r = S.parry.dist
+            local r = S.parry.circR or S.parry.dist
             circ.Size = Vector3.new(0.15, r * 2, r * 2)
             circ.CFrame = CFrame.new(hrp.Position - Vector3.new(0, hrp.Size.Y / 2 + hum.HipHeight - 0.05, 0)) * CFrame.Angles(0, 0, math.rad(90))
             -- pas map/ronde baru CurrentCamera diganti, circ ikut ke-Destroy (Parent locked) -> buang & bikin ulang frame berikutnya
@@ -3071,6 +3117,11 @@ LAGI DIKERJAIN (belum diverifikasi di game)
     busy / lowHP / HP). Sebelumnya ketelen diem-diem, makanya "anim ketangkep tapi dagger ga jalan" ga ketahuan sebabnya. (2) HIT KITA nyatet HP/MaxHP (cek dugaan:
     CanUse() nolak kalau HP < 50% = injured). (3) hitReach default 6 -> 8 (log: hit kena di jarak prediksi 7.2, kalibrasi manual 7.6). Catatan dari log: PARRYRESULT false|60 =
     parry meleset kena cooldown 60 dtk; PARRYRESULT false|0 = server nolak tanpa cooldown. Dua-duanya muncul TANPA baris FIRE (bukan dari script).
+    v3.12.14: garis lurus dari kepala killer (arah CamLook, putih) + garis arah badan (HumanoidRootPart, ijo, default off) di grup "Area liat killer"; panjang slider 10-100m. Area tanah tetap
+    ada (toggle Aktif bisa dimatiin, garis tetap jalan). BELUM dites di game.
+    v3.12.13 (log F12D51 / retyeyuuu + info user): (1) tombak (Veil spear) ga bisa di-parry -> id tombak masuk NOT_SWING (ga ditembak, ga dipelajari). (2) slider "Jangkauan parry" DIBUANG:
+    jangkauan per id animasi (idReach, seed dari log: basic 9, chain 12, lunge 14-17) + 1m, melebar sendiri kalau ada hit yang ke-skip karena jarak. Lingkaran = jangkauan serangan terakhir.
+    (3) auto-learn: jarak killer->korban 16 -> 22m (hit lunge 17m ga kepelajar). BELUM dites di game.
     v3.12.12 (log choivelcand, ping 0.19: ayunan muncul 0.05 dtk sebelum hit, parry nyala +0.267 dtk = telat + kena cooldown 60 dtk): (1) idLag: jeda anim->hit per id dicatat dari
     HIT KITA (jin_parry.json "lag"); id yang rata2 jedanya (>= 2 sampel) < ping + 0.08 di-skip "pasti telat" biar dagger ga kebuang. (2) toggle "Parry sebelum ayunan (preemptive, tes)"
     default OFF: nembak pas killer ngejar kita + ngadep + <= 5.5m / nabrak <= 0.35 dtk + ping; log PRE-FIRE. BELUM dites di game.
