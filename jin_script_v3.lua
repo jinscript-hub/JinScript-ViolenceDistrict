@@ -1,4 +1,4 @@
--- Jìn Script v3.12.3 | Violence District
+-- Jìn Script v3.12.4 | Violence District
 -- Menu: RightShift (PC) / tap logo (HP) | F6 = skill check on/off
 -- Semua file (logo, ikon, config) ada di workspace/jin_hub/
 
@@ -1880,7 +1880,7 @@ do local function parryInit()
         learned[id] = true
         S.parry.nl = S.parry.nl + 1
         saveP()
-        notify("Auto parry", "anim serang baru (" .. tostring(why) .. "): " .. id)
+        notify("Auto parry: belajar", ("dipelajari dari %s: %s"):format(tostring(why), id))
     end
     pcall(function()
         if isfile and readfile and isfile(PFILE) then
@@ -1995,8 +1995,13 @@ do local function parryInit()
         if ok and r then
             track(r.OnClientEvent:Connect(function(...)
                 local a = table.pack(...)
+                local cdSrv = tonumber(a[2])   -- v3.12.4: arg ke-2 = cooldown dari server (log: false|60 = meleset kena 60 dtk)
                 for i = 1, a.n do a[i] = tostring(a[i]) end
                 plog("PARRYRESULT", table.concat(a, " | ", 1, a.n))
+                if cdSrv and cdSrv > 0 and cdSrv <= 120 then
+                    local P = S.parry
+                    P.block = math.max(P.block or 0, os.clock() + cdSrv)   -- jalur remote ga punya CanUse(), jadi tanpa ini script nembak terus pas cooldown
+                end
             end))
         end
     end)
@@ -2017,7 +2022,18 @@ do local function parryInit()
         local po = parryObj()
         if po then
             local okC, can = pcall(po.CanUse, po)
-            if okC and can == false then return nil, "dagger ga bisa dipake (cooldown / resolving / busy / HP < 50%)" end
+            if okC and can == false then
+                -- v3.12.4: sebutin penyebab pastinya (dulu cuma "cooldown / resolving / busy / HP < 50%" -> ga ketahuan yang mana)
+                local function q(name) local okq, v = pcall(po[name], po) if okq then return v end return nil end
+                local why = {}
+                if q("_isEquipped") == false then why[#why + 1] = "dagger ga di-equip" end
+                if po.isSilenced then why[#why + 1] = "silenced" end
+                if po.isParryOnCooldown then why[#why + 1] = "cooldown" end
+                if po.isParryResolving then why[#why + 1] = "nunggu hasil server" end
+                if q("_isBusy") then why[#why + 1] = "lagi aksi (vault/pallet/gen/dll)" end
+                if q("_isLowHealth") then why[#why + 1] = "HP < 50%" end
+                return nil, "dagger ga bisa: " .. (#why > 0 and table.concat(why, ", ") or "?")
+            end
         end
         -- kalau game punya attribute cooldown (nama ada "cool") di karakter / tool: ditampilin di Status. boolean true = lagi cooldown
         local out = {}
@@ -2252,7 +2268,6 @@ do local function parryInit()
         end
         P.busy = true
         local t0 = os.clock()
-        plog("FIRE", reason, "id", id, "| sejak anim mulai", P.animT and ("%.3fs"):format(t0 - P.animT) or "-", "| ping", pcall(function() return lp:GetNetworkPing() end) and ("%.3f"):format(lp:GetNetworkPing()) or "?", "| char:", attrDump(ch))
         P.block = t0 + 0.35
         P.firedT = t0
         task.spawn(function()
@@ -2292,6 +2307,8 @@ do local function parryInit()
             end
             P.resT = os.clock()
         end)
+        -- v3.12.4: log DITARUH SESUDAH task.spawn (spawn jalan sinkron sampai yield pertama = Parry() udah ke-FireServer). Dulu attrDump + format string jalan sebelum tembakan.
+        plog("FIRE", reason, "id", id, "| sejak anim mulai", P.animT and ("%.3fs"):format(t0 - P.animT) or "-", "| ping", pcall(function() return lp:GetNetworkPing() end) and ("%.3f"):format(lp:GetNetworkPing()) or "?", "| char:", attrDump(ch))
     end
     -- reaktif: dengerin animasi killer.
     -- ATTACK_ANIMS = hardcode (Slasher). learned = anim yang kebukti nurunin HP SURVIVOR MANAPUN (bukan cuma kita), disimpen ke file.
@@ -2452,7 +2469,7 @@ do local function parryInit()
                 return
             end
             local reason = known and "ayunan" or "ayunan (tebakan)"
-            task.delay(EVAL_DELAY, function()
+            local function evalFire()
                 local P2 = S.parry
                 if not (running and P2.on and k.hrp.Parent) then return end
                 local c2 = lp.Character
@@ -2466,7 +2483,9 @@ do local function parryInit()
                     return
                 end
                 tryFire(reason, k, id)
-            end)
+            end
+            -- v3.12.4: EVAL_DELAY = 0 -> langsung jalan (task.delay(0) nunda ke frame berikutnya, buang ~16 ms+ padahal hit dateng ~0.02-0.2 dtk setelah anim)
+            if EVAL_DELAY > 0 then task.delay(EVAL_DELAY, evalFire) else evalFire() end
         end))
     end
     -- auto-learn: HP survivor mana pun turun -> anim non-loop killer yang MULAI paling awal dalam jendela 0.03-0.6 dtk sebelum hit
@@ -2513,13 +2532,38 @@ do local function parryInit()
                     if le.dot < Pc.hitDot then Pc.hitDot = math.max(le.dot - 0.05, 0.2) end
                     if Pc.dist ~= oldR or Pc.hitDot ~= oldD then
                         plog("KALIBRASI kena hit | range", ("%.1f -> %.1f"):format(oldR, Pc.dist), "| hitDot", ("%.2f -> %.2f"):format(oldD, Pc.hitDot))
-                        notify("Auto parry", "kalibrasi otomatis: jangkauan parry disesuaikan")
+                        notify("Auto parry: kalibrasi", "jangkauan dilebarin dari hit tadi")
                     end
                 end
                 local pd = S.parry.pending   -- kena hit pas parry kita lagi aktif = tembus
                 if pd and not pd.done and now - pd.t <= 0.8 then
                     pd.pierced, pd.pid = true, best and best.id
                     resolvePending(pd)
+                end
+                -- v3.12.4: kasih tau KENAPA kena hit padahal Auto Parry ON. Dulu yang nongol setelah hit cuma notif "belajar" / "kalibrasi", kesannya "notif muncul tapi ga parry".
+                local Pd = S.parry
+                if Pd.on and now - (Pd.hitNotifT or 0) > 1.5 then
+                    local nearK = best ~= nil
+                    if not nearK then
+                        for _, kk in ipairs(getKillers()) do
+                            if kk.hrp.Parent and (kk.hrp.Position - vh.Position).Magnitude <= 25 then nearK = true break end
+                        end
+                    end
+                    if nearK then
+                        local since = Pd.firedT and (now - Pd.firedT) or nil
+                        local why
+                        local keepRes = false
+                        if since and since <= 1.0 then
+                            if since < 0.15 then why = ("TELAT: parry ditembak %.2fs sebelum hit (anim killer telat kebaca / ping)"):format(since)
+                            else why = ("tembus: parry ditembak %.2fs sebelum hit"):format(since) keepRes = true end
+                        elseif Pd.why and now - (Pd.whyT or 0) < 1.5 then why = "di-skip: " .. Pd.why
+                        elseif Pd.nfWhy and now - (Pd.nfT or 0) < 1.5 then why = "ga bisa nembak: " .. tostring(Pd.nfWhy)
+                        else why = "ga ada anim serang ke-detect (anim belum dikenal?)" end
+                        Pd.hitNotifT = now
+                        if not keepRes then Pd.res, Pd.resT = "KENA HIT, " .. why, now end
+                        plog("HIT DIAG |", why)
+                        notify("Auto parry: kena hit", why)
+                    end
                 end
             end
             if best and S.parry.learn and not (learned[best.id] or ATTACK_ANIMS[best.id]) then
@@ -2870,6 +2914,11 @@ LAGI DIKERJAIN (belum diverifikasi di game)
     Mode Hemat/Sensitif dibuang; toggle v3.10 (Aggressive, Deteksi, Auto-learn, Hadap, Hit-only, Circle) balik. ATTACK_ANIMS sekarang 12 id. PARRY_DEBUG = true (false pas publish).
     Log baru: KATTR (attribute killer berubah <= 30m, CamLook di-skip, angka dibatasi 0.25 dtk) + KANIM (id/priority/panjang/loop/jarak, 0.5 dtk per id). Buffer log 600 baris.
     BELUM dites di game.
+    v3.12.4 (keluhan: kadang work kadang ngga, notif muncul tapi ga parry, notif muncul SETELAH kena hit): (1) notif yang nongol abis hit itu notif "belajar" / "kalibrasi"
+    (dipicu HP turun), bukan notif parry -> direname + tiap kena hit sekarang ada notif "Auto parry: kena hit" yang nyebut penyebabnya (TELAT / tembus / di-skip: alasan /
+    ga bisa nembak: alasan / anim belum dikenal), alasan lengkap di Status + log "HIT DIAG". (2) cooldown asli dari parryResult server (arg ke-2) masuk ke P.block,
+    biar jalur remote (kalau ParryClient ga ketemu) ga nembak pas cooldown 60 dtk. (3) alasan "dagger ga bisa" sekarang spesifik (ga di-equip / cooldown / nunggu server /
+    lagi aksi / HP < 50%). (4) latensi: tryFire nembak dulu baru nulis log, task.delay(0) di jalur deteksi dibuang. BELUM dites di game.
   - PERFECT VAULT: BELUM ditulis. jin_remotes.txt ga ada satupun event vault (isinya cuma UpdateCharacterLook, PushRemote,
     GetPing, EmoteHandler, parry, anim idle/run/walk). Yang ada di dump: remote Window.VaultEvent / fastvault / VaultCommit /
     VaultReject / VaultCompleteEvent (argumen ga diketahui) dan attribute karakter isvaulting, VaultTier (medium), VaultReason (pace),
