@@ -1,4 +1,4 @@
--- Jìn Script v3.12.11 | Violence District
+-- Jìn Script v3.12.12 | Violence District
 -- Menu: RightShift (PC) / tap logo (HP) | F6 = skill check on/off
 -- Semua file (logo, ikon, config) ada di workspace/jin_hub/
 
@@ -1839,7 +1839,7 @@ cSC:Dropdown("SC_Mode", "Mode", {"Instant", "Perfect", "Great", "Random"}, "Perf
 -- dan dicatat di baris Status. BELUM dites di game.
 -- Dibungkus fungsi: batas Lua 200 local per fungsi utama kelewat kalau semua local parry ditaruh di scope file (error "attempt to call a nil value" pas load).
 do local function parryInit()
-    S.parry = {on = false, aggr = false, dist = 12, last = 0, busy = false, method = 2, hitOnly = false, circle = false, color = Color3.fromRGB(170, 0, 255), detect = false, learn = true, hitDot = 0.55, block = 0, cdLo = 0, nl = 0, face = false, human = true, earlyK = 0.043}
+    S.parry = {on = false, aggr = false, dist = 12, last = 0, busy = false, method = 2, hitOnly = false, circle = false, color = Color3.fromRGB(170, 0, 255), detect = false, learn = true, pre = false, hitDot = 0.55, block = 0, cdLo = 0, nl = 0, face = false, human = true, earlyK = 0.043}
     -- v3.12: Parry Distance + Hit reach digabung jadi SATU slider "Jangkauan parry" (S.parry.dist, id config baru PAR_Range, ga bawa nilai lama).
     --   willHit() pake dist langsung; gerbang kandidat di hookKiller = dist*1.5 + lunge; lingkaran = dist; kalibrasi otomatis nambah slider-nya sendiri (maks 14).
     -- PARRY_DEBUG = true -> log file + id anim di Status (kayak v3.10). Set false sebelum publish (id ke-mask, file log ga ditulis).
@@ -1865,6 +1865,7 @@ do local function parryInit()
     local NOT_SWING = {["117070354890871"] = true, ["81198376178242"] = true, ["70719237641923"] = true, ["78196404793645"] = true, ["108286715411226"] = true, ["75857500533792"] = true}   -- 78196404793645 = anim sesudah hit (peezatime), 108286715411226 = bawa survivor
     local cPar = tSC:Group("Auto parry (Dagger)", 2)
     cPar:Toggle("PAR_On", "Auto Parry", false, function(v) S.parry.on = v end)
+    cPar:Toggle("PAR_Pre", "Parry sebelum ayunan (preemptive, tes)", false, function(v) S.parry.pre = v end)
     cPar:Toggle("PAR_Learn", "Auto-learn anim serang dari hit", true, function(v) S.parry.learn = v end)
     cPar:Toggle("PAR_Face", "Hadap killer pas parry (tes: parry depan doang?)", false, function(v) S.parry.face = v end)
     cPar:Toggle("PAR_Human", "Parry pas ayunan nyampe (ga keliatan bot)", true, function(v) S.parry.human = v end)
@@ -1873,7 +1874,7 @@ do local function parryInit()
         {id = "PAR_CircleCol", default = S.parry.color, cb = function(c) S.parry.color = c end})
     local stLbl = cPar:Label("Status: OFF")
     -- learned = anim serang hasil auto-learn. nopar = anim yang TEMBUS parry dari depan, di-skip. stats[id] = {pf,bf,po,bo}. Disimpen ke jin_parry.json
-    local learned, recent, nopar, stats, idReach = {}, {}, {}, {}, {}   -- idReach[id] = jangkauan khusus anim itu (killer jarak jauh), hasil kalibrasi
+    local learned, recent, nopar, stats, idReach, idLag = {}, {}, {}, {}, {}, {}   -- idLag[id] = {n, sum}: jeda anim muncul -> HP turun (dari HIT KITA)   -- idReach[id] = jangkauan khusus anim itu (killer jarak jauh), hasil kalibrasi
     local PFILE = BASE .. "jin_parry.json"
     local function saveP()
         if not writefile then return end
@@ -1881,7 +1882,7 @@ do local function parryInit()
             local a, n = {}, {}
             for id in pairs(learned) do a[#a + 1] = id end
             for id in pairs(nopar) do n[#n + 1] = id end
-            writefile(PFILE, HttpService:JSONEncode({anims = a, nopar = n, stats = stats, reach = idReach, btn = S.parry.btn, key = S.parry.key and S.parry.key.Name}))
+            writefile(PFILE, HttpService:JSONEncode({anims = a, nopar = n, stats = stats, reach = idReach, lag = idLag, btn = S.parry.btn, key = S.parry.key and S.parry.key.Name}))
         end)
     end
     local function addLearn(id, why)
@@ -1896,6 +1897,7 @@ do local function parryInit()
             for _, id in ipairs(d.anims or {}) do learned[tostring(id)] = true S.parry.nl = S.parry.nl + 1 end
             for _, id in ipairs(d.nopar or {}) do nopar[tostring(id)] = true end
             if type(d.stats) == "table" then stats = d.stats end
+            if type(d.lag) == "table" then for id, v in pairs(d.lag) do if type(v) == "table" and tonumber(v.n) and tonumber(v.sum) then idLag[tostring(id)] = {n = tonumber(v.n), sum = tonumber(v.sum)} end end end
             if type(d.reach) == "table" then for id, v in pairs(d.reach) do if tonumber(v) then idReach[tostring(id)] = tonumber(v) end end end
             if type(d.btn) == "table" then S.parry.btn = d.btn end
             if type(d.key) == "string" then S.parry.key = Enum.KeyCode[d.key] end
@@ -2574,6 +2576,20 @@ do local function parryInit()
                     P2.whyK, P2.whyKT = P2.why, P2.whyT
                     return
                 end
+                -- v3.12.12: id yang jeda anim->hit-nya (rata-rata dari HIT KITA, >= 2 sampel) lebih pendek dari latensi parry (ping + 0.08) = pasti telat.
+                -- Nembak cuma bikin parry meleset -> cooldown 60 dtk, dagger ga siap buat serangan berikutnya. Jadi di-skip (hitung dari data, bukan tebakan).
+                local lg = idLag[id]
+                if lg and lg.n >= 2 then
+                    local png = 0
+                    pcall(function() png = lp:GetNetworkPing() end)
+                    local avg, need = lg.sum / lg.n, png + 0.08
+                    if avg < need then
+                        P2.why, P2.whyT = ("anim %s pasti telat (jeda %.2fs < latensi parry %.2fs)"):format(id, avg, need), os.clock()
+                        P2.whyK, P2.whyKT = P2.why, P2.whyT
+                        plog("SKIP anim", id, "| pasti telat: jeda anim->hit rata2", ("%.3fs"):format(avg), "(n", lg.n, ") < latensi parry", ("%.3fs"):format(need))
+                        return
+                    end
+                end
                 tryFire(reason, k, id)
             end
             -- v3.12.4: EVAL_DELAY = 0 -> langsung jalan (task.delay(0) nunda ke frame berikutnya, buang ~16 ms+ padahal hit dateng ~0.02-0.2 dtk setelah anim)
@@ -2620,6 +2636,12 @@ do local function parryInit()
                     local obs = (now - Ee.t) / math.max(Ee.d, 1)
                     ks[Ee.id] = math.min(0.12, math.max(0.015, oldK * 0.6 + obs * 0.4))
                     plog("KALIBRASI ancang->hit", Ee.id, ("| %.2fs @ %.1fm | K %.3f -> %.3f"):format(now - Ee.t, Ee.d, oldK, ks[Ee.id]))
+                end
+                if best and best.id and not NOT_SWING[best.id] then
+                    local lg = idLag[best.id]
+                    if not lg then lg = {n = 0, sum = 0} idLag[best.id] = lg end
+                    if lg.n < 20 then lg.n = lg.n + 1 lg.sum = lg.sum + (now - best.t) end
+                    saveP()
                 end
                 plog("HIT KITA | HP", ("%.0f/%.0f"):format(hum.Health, hum.MaxHealth), "| anim", best and best.id or "?", "| Parry", tostring(hum.Parent and hum.Parent:GetAttribute("Parry")), "| sejak FIRE", S.parry.firedT and ("%.3fs"):format(now - S.parry.firedT) or "-")
                 -- auto-kalibrasi: kena hit padahal prediksi bilang meleset -> lebarin hitReach / hitDot sesuai angka prediksi itu
@@ -2713,6 +2735,33 @@ do local function parryInit()
                     local u = off.Unit
                     local closing = (k.hrp.AssemblyLinearVelocity - hrp.AssemblyLinearVelocity):Dot(u)
                     if closing > 4 and d / closing <= 0.4 + ping / 2 and targetsUs(k, hrp) and not nearInteract(k, u) then tryFire("predict", k) end
+                end
+            end
+        end
+        -- v3.12.12: PREEMPTIVE (toggle, default OFF). Basic attack killer: animasi baru nongol 0.02-0.08 dtk sebelum hit, parry butuh ping + ~0.08 dtk -> reaktif mustahil.
+        -- Jadi tembak SEBELUM ayunan: killer lagi ngejar KITA, ngadep kita, masuk jarak ayun (<= 5.5m) atau nabrak dalam <= 0.35 dtk + ping. Parry aktif ~0.8 dtk.
+        -- Resiko: killer ga jadi ayun = parry kebuang (cooldown 60 dtk). Tiap tembakan ditandai "PRE-FIRE" di log, hasilnya (HIT / PARRYRESULT) keliatan di baris sesudahnya.
+        if P.pre and P.on then
+            local nowP = os.clock()
+            if nowP - (P.preT or 0) > 1.0 and nowP - (P.lastHitT or 0) > 1.0 then
+                for _, k in ipairs(ks) do
+                    local ck = k.char
+                    if ck:GetAttribute("IsChasing") and ck:GetAttribute("ChaseTargetUserId") == lp.UserId
+                        and not (ck:GetAttribute("IsCarrying") or ck:GetAttribute("Immobile") or ck:GetAttribute("IsStunned")) then
+                        local off = hrp.Position - k.hrp.Position
+                        local d = off.Magnitude
+                        if d > 0 and d <= 12 then
+                            local u = off.Unit
+                            local closing = (k.hrp.AssemblyLinearVelocity - hrp.AssemblyLinearVelocity):Dot(u)
+                            local adot = aimDot(aimOf(k), k.hrp.Position, hrp.Position)
+                            if (d <= 5.5 or (closing > 3 and d / closing <= 0.35 + ping)) and adot >= 0.5 and not nearInteract(k, u) then
+                                P.preT = nowP
+                                plog("PRE-FIRE", k.char.Name, ("| %.1fm | closing %.1f | dot %.2f | ping %.3f"):format(d, closing, adot, ping))
+                                tryFire("preemptive", k)
+                                break
+                            end
+                        end
+                    end
                 end
             end
         end
@@ -3022,6 +3071,9 @@ LAGI DIKERJAIN (belum diverifikasi di game)
     busy / lowHP / HP). Sebelumnya ketelen diem-diem, makanya "anim ketangkep tapi dagger ga jalan" ga ketahuan sebabnya. (2) HIT KITA nyatet HP/MaxHP (cek dugaan:
     CanUse() nolak kalau HP < 50% = injured). (3) hitReach default 6 -> 8 (log: hit kena di jarak prediksi 7.2, kalibrasi manual 7.6). Catatan dari log: PARRYRESULT false|60 =
     parry meleset kena cooldown 60 dtk; PARRYRESULT false|0 = server nolak tanpa cooldown. Dua-duanya muncul TANPA baris FIRE (bukan dari script).
+    v3.12.12 (log choivelcand, ping 0.19: ayunan muncul 0.05 dtk sebelum hit, parry nyala +0.267 dtk = telat + kena cooldown 60 dtk): (1) idLag: jeda anim->hit per id dicatat dari
+    HIT KITA (jin_parry.json "lag"); id yang rata2 jedanya (>= 2 sampel) < ping + 0.08 di-skip "pasti telat" biar dagger ga kebuang. (2) toggle "Parry sebelum ayunan (preemptive, tes)"
+    default OFF: nembak pas killer ngejar kita + ngadep + <= 5.5m / nabrak <= 0.35 dtk + ping; log PRE-FIRE. BELUM dites di game.
     v3.12.11: TEBAKAN DIHAPUS (permintaan user: tebakan bikin parry gagal terus). Prediksi "bakal kena" (hitOnly), tebak anim tak dikenal (detect), dan Aggressive (prediktif)
     dimatiin permanen + toggle-nya dibuang. Sisa: anim serang YANG DIKENAL (ATTACK_ANIMS / hasil auto-learn dari hit) + gerbang target (ngejar kita / bukan ngejar orang lain)
     + gerbang jarak longgar (slider "Jangkauan parry" default 12, per-anim dari kalibrasi). Tembak sekali pas anim mulai. EVAL tetap dilog (info doang, ga nge-skip). BELUM dites di game.
