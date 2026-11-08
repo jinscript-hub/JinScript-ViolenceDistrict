@@ -1,4 +1,4 @@
--- Jìn Script v3.12.4 | Violence District
+-- Jìn Script v3.12.5 | Violence District
 -- Menu: RightShift (PC) / tap logo (HP) | F6 = skill check on/off
 -- Semua file (logo, ikon, config) ada di workspace/jin_hub/
 
@@ -1853,6 +1853,12 @@ do local function parryInit()
         "117042998468241", "133963973694098", "105374834496520", "111920872708571", "101636125032002",   -- HIT KITA terkonfirmasi
         "129626174716003", "113691709436161", "130593238885843",   -- hasil auto-learn lama, BELUM diverifikasi ulang
     }) do ATTACK_ANIMS[id] = true end
+    -- v3.12.5 (dari log killer kietnekk89): anim ayunan (101636125032002) baru kebaca 0.04-0.07 dtk SEBELUM HP turun -> reaktif mustahil (parry butuh ~0.13 dtk).
+    -- Yang kebaca duluan = anim ANCANG-ANCANG / lunge 125430111937587 (0.40 dtk dan 0.69 dtk sebelum hit, 2 dari 2 kejadian). Itu yang ditembak.
+    local EARLY_ANIMS = {["125430111937587"] = true}
+    -- anim yang BUKAN serangan tapi dulu ke-"tebak": 81198376178242 = anim sesudah hit (nongol 0.01-0.12 dtk abis HP turun), 70719237641923 = ngelempar/ngangkat survivor.
+    -- Parry yang kebuang kena cooldown 60 dtk, jadi satu tebakan salah = semua serangan berikutnya ga bisa di-parry.
+    local NOT_SWING = {["81198376178242"] = true, ["70719237641923"] = true}
     local cPar = tSC:Group("Auto parry (Dagger)", 2)
     cPar:Toggle("PAR_On", "Auto Parry", false, function(v) S.parry.on = v end)
     cPar:Toggle("PAR_Aggr", "Auto Parry Aggressive (Predict)", false, function(v) S.parry.aggr = v end)
@@ -2014,7 +2020,7 @@ do local function parryInit()
         if roleOf(lp) == "killer" then return nil, "kamu killer" end
         local eq = attr("EquippedItem")
         if eq ~= nil and eq ~= "Parrying Dagger" then return nil, "item = " .. tostring(eq) .. ", bukan dagger" end
-        if ch:GetAttribute("ParrySpent") then return nil, "ParrySpent aktif" end
+        if ch:GetAttribute("ParrySpent") then return nil, "cooldown dagger (ParrySpent, parry sebelumnya kepake / meleset = ~60 dtk)" end
         if ch:GetAttribute("Parry") or ch:GetAttribute("Knocked") then return nil, "parry lagi aktif / knocked" end
         local P = S.parry
         local now = os.clock()
@@ -2441,6 +2447,22 @@ do local function parryInit()
             P.anim = ("%s %.2fs %.0fm %s"):format(id, tr.Length, d, tr.Looped and "loop" or "once")
             P.animT = os.clock()
             if not P.on then return end
+            -- v3.12.5: ANCANG-ANCANG. Tembak langsung begitu killer mulai lunge, jangan nunggu anim ayunan (itu cuma 0.04-0.07 dtk sebelum hit = telat).
+            -- Parry nyala ~0.13 dtk abis ditembak dan tahan ~0.8 dtk -> nutup hit yang dateng 0.2-0.9 dtk kemudian. Syarat: killer ngejar KITA atau udah <= 10m
+            -- (arah bidik / prediksi posisi ga dipake: killer lagi lunge, CamLook-nya telat). Satu parry meleset = cooldown 60 dtk, jadi gerbangnya sengaja ketat.
+            if EARLY_ANIMS[id] and not nopar[id] then
+                local nowE = os.clock()
+                local chasingUs = k.char:GetAttribute("IsChasing") and k.char:GetAttribute("ChaseTargetUserId") == lp.UserId
+                local whyE
+                if d > 18 then whyE = ("ancang-ancang tapi killer %.0fm (> 18m)"):format(d)
+                elseif not (chasingUs or d <= 10) then whyE = ("ancang-ancang tapi killer ga ngejar kita (%.0fm)"):format(d)
+                elseif nowE - (P.lastHitT or 0) < 0.3 then whyE = "ancang-ancang tapi baru abis hit" end
+                plog("EARLY anim", id, ("| %.1fm | ngejar kita %s | ->"):format(d, tostring(chasingUs and true or false)), whyE and ("SKIP: " .. whyE) or "TEMBAK")
+                if whyE then P.why, P.whyT = whyE, nowE return end
+                P.lastEval = nil
+                tryFire("ancang-ancang", k, id)
+                return
+            end
             -- alasan skip ditulis ke Status (skip: ...) biar keliatan kenapa ga nembak
             local toUs = off.Unit
             local known = ATTACK_ANIMS[id] or learned[id]
@@ -2448,8 +2470,11 @@ do local function parryInit()
             local closing = (k.hrp.AssemblyLinearVelocity - hrp.AssemblyLinearVelocity):Dot(toUs)
             local reach = math.max(P.dist, idReach[id] or 0) * 1.5 + math.max(0, closing) * 0.25   -- gerbang kandidat otomatis dari slider; keputusan akhir di willHit()
             local why
-            if not (known or (P.detect and looksLikeSwing(tr))) then why = "anim " .. id .. " ga dikenal sbg serangan"
+            if NOT_SWING[id] then why = "anim " .. id .. " = recovery / bukan serangan"
+            elseif not (known or (P.detect and looksLikeSwing(tr))) then why = "anim " .. id .. " ga dikenal sbg serangan"
             elseif nopar[id] then why = "anim " .. id .. " ga bisa di-parry"
+            elseif not known and nowT - (P.lastHitT or 0) < 0.6 then why = "tebakan: baru abis hit (anim recovery)"
+            elseif not known and (k.char:GetAttribute("IsCarrying") or k.char:GetAttribute("Immobile")) then why = "tebakan: killer lagi bawa / ga gerak"
             elseif not known and not (d <= P.dist or (k.char:GetAttribute("IsChasing") and k.char:GetAttribute("ChaseTargetUserId") == lp.UserId)) then
                 why = "tebakan: killer ga lagi ngejar kita"   -- anim belum dikenal cuma ditembak kalau killer ngejar KITA / udah deket banget
             elseif d > reach then why = ("killer %.0fm, di luar jarak (reach %.0fm)"):format(d, reach)
@@ -2500,6 +2525,7 @@ do local function parryInit()
             local drop = h < last - 0.5
             last = h
             if not drop then return end
+            S.parry.lastHitT = os.clock()   -- v3.12.5: ada survivor kena hit -> anim yang nongol sesudahnya = recovery, bukan serangan baru
             local vh = hum.Parent and hum.Parent:FindFirstChild("HumanoidRootPart")
             if not vh then return end
             local now = os.clock()
@@ -2512,6 +2538,12 @@ do local function parryInit()
                 end
             end
             if mine then
+                local rl = {}
+                for i = 1, #recent do
+                    local e = recent[i]
+                    if now - e.t <= 1.2 then rl[#rl + 1] = ("%s(-%.2fs)"):format(e.id, now - e.t) end
+                end
+                plog("RECENT anim <= 1.2s sebelum hit:", #rl > 0 and table.concat(rl, ", ") or "-")   -- buat nyari anim ancang-ancang killer lain
                 plog("HIT KITA | HP", ("%.0f/%.0f"):format(hum.Health, hum.MaxHealth), "| anim", best and best.id or "?", "| Parry", tostring(hum.Parent and hum.Parent:GetAttribute("Parry")), "| sejak FIRE", S.parry.firedT and ("%.3fs"):format(now - S.parry.firedT) or "-")
                 -- auto-kalibrasi: kena hit padahal prediksi bilang meleset -> lebarin hitReach / hitDot sesuai angka prediksi itu
                 local le, Pc = S.parry.lastEval, S.parry
@@ -2919,6 +2951,12 @@ LAGI DIKERJAIN (belum diverifikasi di game)
     ga bisa nembak: alasan / anim belum dikenal), alasan lengkap di Status + log "HIT DIAG". (2) cooldown asli dari parryResult server (arg ke-2) masuk ke P.block,
     biar jalur remote (kalau ParryClient ga ketemu) ga nembak pas cooldown 60 dtk. (3) alasan "dagger ga bisa" sekarang spesifik (ga di-equip / cooldown / nunggu server /
     lagi aksi / HP < 50%). (4) latensi: tryFire nembak dulu baru nulis log, task.delay(0) di jalur deteksi dibuang. BELUM dites di game.
+    v3.12.5 (dari jin_parry_log.txt, killer kietnekk89): (1) PENYEBAB "TELAT": anim ayunan 101636125032002 baru kebaca 0.04-0.07 dtk sebelum HP turun, parry butuh ~0.13 dtk
+    -> reaktif ga mungkin. Anim 125430111937587 (ancang-ancang / lunge) kebaca 0.40 & 0.69 dtk sebelum hit -> sekarang DITEMBAK pas itu (EARLY_ANIMS, syarat killer ngejar kita
+    atau <= 10m, maks 18m, log baris EARLY). Cuma 2 sampel, cek baris "EARLY" vs "HIT KITA" di log berikutnya. (2) PENYEBAB "kadang ngga": 1x FIRE di log = tebakan salah
+    (81198376178242 = anim sesudah hit) -> PARRYRESULT false|60 -> cooldown 60 dtk -> semua ayunan berikutnya NOFIRE. NOT_SWING nahan id itu + 70719237641923 (angkat survivor),
+    tebakan juga di-skip 0.6 dtk abis ada hit dan pas killer bawa / ga gerak. (3) log RECENT: daftar anim 1.2 dtk sebelum tiap hit, buat nyari anim ancang-ancang killer lain.
+    BELUM dites di game.
   - PERFECT VAULT: BELUM ditulis. jin_remotes.txt ga ada satupun event vault (isinya cuma UpdateCharacterLook, PushRemote,
     GetPing, EmoteHandler, parry, anim idle/run/walk). Yang ada di dump: remote Window.VaultEvent / fastvault / VaultCommit /
     VaultReject / VaultCompleteEvent (argumen ga diketahui) dan attribute karakter isvaulting, VaultTier (medium), VaultReason (pace),
