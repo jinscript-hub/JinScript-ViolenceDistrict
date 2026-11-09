@@ -1886,7 +1886,8 @@ do local function parryInit()
     -- v3.12: Parry Distance + Hit reach digabung jadi SATU slider "Jangkauan parry" (S.parry.dist, id config baru PAR_Range, ga bawa nilai lama).
     --   willHit() pake dist langsung; gerbang kandidat di hookKiller = dist*1.5 + lunge; lingkaran = dist; kalibrasi otomatis nambah slider-nya sendiri (maks 14).
     -- PARRY_DEBUG = true -> log file + id anim di Status (kayak v3.10). Set false sebelum publish (id ke-mask, file log ga ditulis).
-    local PARRY_DEBUG = true
+    local PARRY_DEBUG = false   -- v3.13: berat (hook KATTR + KANIM, mask UI). Nyalain cuma buat cari sinyal baru.
+    local PARRY_LOG = true      -- v3.13: log inti (FIRE / HIT / EVAL / SKIP / PARRYRESULT / AIMGATE) tetap ditulis, ringan
     -- id animasi ayun killer, ditanem di script. Sumber: baris "HIT KITA" / parry sukses di jin_parry_log.txt.
     -- SENGAJA ga dimasukin: 87833180786200, 110466971021611 (muncul berkala pas killer deket 3.5m dot 1.0 = bukan serangan), 101443662521580 (muncul abis kena hit).
     local ATTACK_ANIMS = {}
@@ -1911,7 +1912,9 @@ do local function parryInit()
         ["77303734522729"] = true, ["101443662521580"] = true, ["127622545856523"] = true, ["129669521834246"] = true, ["79809716042968"] = true, ["87436543050891"] = true, ["84404617799721"] = true}   -- 78196404793645 = anim sesudah hit (peezatime), 108286715411226 = bawa survivor
     local cPar = tSC:Group("Auto parry (Dagger)", 2)
     cPar:Toggle("PAR_On", "Auto Parry", false, function(v) S.parry.on = v end)
-    cPar:Toggle("PAR_Pre", "Parry sebelum ayunan (preemptive, tes)", false, function(v) S.parry.pre = v end)
+    S.parry.pre = false   -- v3.13: preemptive dibuang (log: PRE-FIRE meleset -> cooldown 60 dtk -> hit berikutnya tembus)
+    S.parry.aimGate, S.parry.aimMin, S.parry.closeMin = true, -0.25, 8   -- v3.13: gerbang arah pas nembak
+    cPar:Toggle("PAR_Gate", "Skip ayunan yang jelas ga ngadep kita", true, function(v) S.parry.aimGate = v end)
     cPar:Toggle("PAR_Learn", "Auto-learn anim serang dari hit", true, function(v) S.parry.learn = v end)
     cPar:Toggle("PAR_Face", "Hadap killer pas parry (tes: parry depan doang?)", false, function(v) S.parry.face = v end)
     cPar:Toggle("PAR_Human", "Parry pas ayunan nyampe (ga keliatan bot)", true, function(v) S.parry.human = v end)
@@ -1957,20 +1960,21 @@ do local function parryInit()
         ["129626174716003"] = 14, ["113691709436161"] = 14,   -- lunge 11-13m
         ["75618342544502"] = 17, ["93902163029544"] = 17,   -- hit dari 13-17m
         ["74968262036854"] = 17, ["113255068724446"] = 17,   -- banti: hit dari 15.2m
-        ["105374834496520"] = 10, ["111920872708571"] = 10,
+        ["105374834496520"] = 17, ["111920872708571"] = 17,   -- v3.13: log: hit dari 15-17m (sebelumnya 10 -> ke-skip di awal ronde)
+        ["130593238885843"] = 22, ["115244153053858"] = 17,   -- v3.13: log: hit dari 20m (kalibrasi 9 -> 21.8)
     }) do idReach[id] = math.max(idReach[id] or 0, r) end
     -- LOG (v3.5): tiap tembakan / hit / skip ditulis ke jin_parry_log.txt (200 baris terakhir) buat diagnosa "notif muncul tapi dagger ga kepake"
     local LOGF = BASE .. "jin_parry_log.txt"
     local logbuf, logBusy = {}, false
     local function plog(...)
-        if not PARRY_DEBUG then return end
+        if not (PARRY_DEBUG or PARRY_LOG) then return end
         local a = table.pack(...)
         for i = 1, a.n do a[i] = tostring(a[i]) end
         logbuf[#logbuf + 1] = ("[%.2f] %s"):format(os.clock(), table.concat(a, " ", 1, a.n))
         if #logbuf > 600 then table.remove(logbuf, 1) end
         if writefile and not logBusy then   -- debounce: writefile tiap baris bikin burst event nge-lag
             logBusy = true
-            task.delay(1, function()
+            task.delay(3, function()   -- v3.13: 1 -> 3 dtk, kurangi writefile di HP
                 logBusy = false
                 pcall(writefile, LOGF, table.concat(logbuf, "\n"))
             end)
@@ -2628,6 +2632,22 @@ do local function parryInit()
                 local ok2, d2, dot2 = willHit(k, h2, HIT_T - EVAL_DELAY, id)
                 P2.lastEval = {id = id, t = os.clock(), d = d2, dot = dot2}
                 plog("EVAL anim", id, ("| d_prediksi %.1f (range %.1f) | dot %.2f (min %.2f) | jarak skrg %.1f | ->"):format(d2, P2.dist, dot2, P2.hitDot, (h2.Position - k.hrp.Position).Magnitude), (ok2 or not P2.hitOnly) and "TEMBAK" or "SKIP (ga bakal kena)")
+                -- v3.13: gerbang arah. Log: ayunan dot -0.98 / -0.97 tetap ditembak -> meleset -> cooldown 60 dtk. Skip kalau killer jelas ngebelakangi kita
+                -- (dot < aimMin) DAN ga lagi nerjang ke arah kita (closing < closeMin) DAN bukan nempel (<= 2.5m). Lunge/chain tetap lolos lewat closing.
+                if P2.aimGate then
+                    local offv = h2.Position - k.hrp.Position
+                    local closing2 = 0
+                    if offv.Magnitude > 0.01 then
+                        closing2 = (k.hrp.AssemblyLinearVelocity - h2.AssemblyLinearVelocity):Dot(offv.Unit)
+                    end
+                    local bad = dot2 < P2.aimMin and d2 > 2.5 and closing2 < P2.closeMin
+                    plog("AIMGATE", id, (" | dot %.2f (min %.2f) | closing %.1f (min %.1f) | d_prediksi %.1f | ->"):format(dot2, P2.aimMin, closing2, P2.closeMin, d2), bad and "SKIP" or "ok")
+                    if bad then
+                        P2.why, P2.whyT = (" ayunan ga ngadep kita (dot %.2f, closing %.1f)"):format(dot2, closing2), os.clock()
+                        P2.whyK, P2.whyKT = P2.why, P2.whyT
+                        return
+                    end
+                end
                 if P2.hitOnly and not ok2 then
                     P2.why, P2.whyT = ("ayunan diprediksi meleset (d %.1f > %.1f / dot %.2f)"):format(d2, P2.dist, dot2), os.clock()
                     P2.whyK, P2.whyKT = P2.why, P2.whyT
