@@ -1916,6 +1916,11 @@ do local function parryInit()
     S.parry.pre = false   -- v3.13: preemptive dibuang (log: PRE-FIRE meleset -> cooldown 60 dtk -> hit berikutnya tembus)
     S.parry.aimGate, S.parry.aimMin, S.parry.closeMin = true, -0.25, 8   -- v3.13: gerbang arah pas nembak
     cPar:Toggle("PAR_Gate", "Skip ayunan yang jelas ga ngadep kita", true, function(v) S.parry.aimGate = v end)
+    -- v3.13.6: garis bidik killer + slider zona. Log: ayunan dari 15.6m dot -0.04 (garis bidik meleset jauh) tetap ditembak -> parry kebuang, cooldown 60 dtk.
+    S.parry.rayGate, S.parry.rayTol, S.parry.zoneManual = true, 4, false
+    cPar:Toggle("PAR_Ray", "Garis bidik killer: parry cuma kalau garis nyampe ke kita", true, function(v) S.parry.rayGate = v end)
+    cPar:Slider("PAR_RayTol", "Toleransi garis bidik (boleh melenceng)", 1, 10, 4, 0.5, function(v) S.parry.rayTol = v end, "m")
+    cPar:Slider("PAR_Zone", "Zona parry (jarak killer)", 4, 22, 9, 1, function(v) S.parry.dist = v S.parry.zoneManual = true end, "m")
     cPar:Toggle("PAR_Learn", "Auto-learn anim serang dari hit", true, function(v) S.parry.learn = v end)
     cPar:Toggle("PAR_Face", "Hadap killer pas parry (tes: parry depan doang?)", false, function(v) S.parry.face = v end)
     -- v3.13.3: tunda tembakan ancang-ancang default OFF. Log: tunda 0.05s + lead 0.20 (salah, parry skin Katana baru nyala 0.19 dtk) -> parry nyala SETELAH hit.
@@ -2467,6 +2472,15 @@ do local function parryInit()
         if v.Magnitude < 0.01 then return 1 end
         return aim:Dot(v.Unit)
     end
+    -- v3.13.6: GARIS BIDIK killer (CamLook dari kepala, bidang datar). rayMiss = jarak posisi target ke garis itu: 0 = tepat di garis, makin gede = makin melenceng.
+    -- Target di belakang garis (along <= 0) = titik terdekat itu asal garis, jadi meleset = jarak killer ke target.
+    local function rayMiss(k, to)
+        local aim = aimOf(k)
+        local v = Vector3.new(to.X - k.hrp.Position.X, 0, to.Z - k.hrp.Position.Z)
+        local along = v:Dot(aim)
+        if along <= 0 then return v.Magnitude, along end
+        return math.sqrt(math.max(0, v.Magnitude * v.Magnitude - along * along)), along
+    end
     local AIM_MIN, AIM_MARGIN = 0.55, 0.15   -- ~57 derajat dari bidik; survivor lain dianggap target kalau lebih lurus >= 0.15
     local function targetsUs(k, hrp)
         -- v3.12.7: log peezatime (chain): 2 dari 3 hit ke-skip "ga ngebidik kita (dot -0.57 / -0.99)" padahal ChaseTargetUserId = kita. Pas killer chain/lunge, CamLook + kecepatan
@@ -2524,7 +2538,7 @@ do local function parryInit()
         local d = Vector3.new(up.X - kp.X, 0, up.Z - kp.Z).Magnitude
         local dot = aimDot(aimOf(k), kp, up)
         -- v3.12.9: log rip_fernando0914: 2 ayunan ke-skip "d_prediksi 1.2, dot 0.04" lalu kena hit 0.2 dtk kemudian. Pas killer nempel (<= 2.5m) arah ke kita jadi noise -> dot ga dihitung.
-        return d <= math.max(P.dist, idReach[id or ""] or 0) and (dot >= P.hitDot or d <= 2.5), d, dot   -- P.dist = slider "Jangkauan parry"
+        return d <= (P.zoneManual and P.dist or math.max(P.dist, idReach[id or ""] or 0)) and (dot >= P.hitDot or d <= 2.5), d, dot   -- P.dist = slider "Jangkauan parry"
     end
     local hooked = setmetatable({}, {__mode = "k"})
     local hookedAttr = setmetatable({}, {__mode = "k"})
@@ -2601,7 +2615,10 @@ do local function parryInit()
                 local nowE = os.clock()
                 local chasingUs = k.char:GetAttribute("IsChasing") and k.char:GetAttribute("ChaseTargetUserId") == lp.UserId
                 local whyE
-                if d > 18 then whyE = ("ancang-ancang tapi killer %.0fm (> 18m)"):format(d)
+                local missE = P.rayGate and rayMiss(k, hrp.Position) or 0
+                local zoneE = P.zoneManual and (P.dist + 1) or 18   -- v3.13.6: slider zona (kalau digeser) jadi batas jarak ancang-ancang juga
+                if d > zoneE then whyE = ("ancang-ancang tapi killer %.0fm (> zona %.0fm)"):format(d, zoneE)
+                elseif P.rayGate and missE > P.rayTol * 1.5 and d > 2.5 then whyE = ("ancang-ancang tapi garis bidik meleset %.1fm (toleransi %.1f x1.5)"):format(missE, P.rayTol)
                 elseif not (chasingUs or d <= 10) then whyE = ("ancang-ancang tapi killer ga ngejar kita (%.0fm)"):format(d)
                 elseif nowE - (P.lastHitT or 0) < 0.3 then whyE = "ancang-ancang tapi baru abis hit" end
                 plog("EARLY anim", id, ("| %.1fm | ngejar kita %s | ->"):format(d, tostring(chasingUs and true or false)), whyE and ("SKIP: " .. whyE) or "TEMBAK")
@@ -2646,7 +2663,7 @@ do local function parryInit()
             -- killer lunge: log nunjukin killer mulai ayun dari 9m lalu tetep kena. Jarak dihitung + kecepatan dia ke arah kita x 0.25 dtk (delay hit ~0.2 dtk)
             local closing = (k.hrp.AssemblyLinearVelocity - hrp.AssemblyLinearVelocity):Dot(toUs)
             -- v3.12.13: jangkauan per-anim (idReach, belajar sendiri) + 1m; id yang belum punya = P.dist (9m). Slider dibuang. Lingkaran nunjukin angka ini.
-            local base = idReach[id] or P.dist
+            local base = (not P.zoneManual and idReach[id]) or P.dist   -- v3.13.6: slider zona digeser = user yang atur, jangkauan per-anim ga dipake
             local reach = base + 1
             if known then P.circR = base end
             local why
@@ -2685,7 +2702,22 @@ do local function parryInit()
                 plog("EVAL anim", id, ("| d_prediksi %.1f (range %.1f) | dot %.2f (min %.2f) | jarak skrg %.1f | ->"):format(d2, P2.dist, dot2, P2.hitDot, (h2.Position - k.hrp.Position).Magnitude), (ok2 or not P2.hitOnly) and "TEMBAK" or "SKIP (ga bakal kena)")
                 -- v3.13: gerbang arah. Log: ayunan dot -0.98 / -0.97 tetap ditembak -> meleset -> cooldown 60 dtk. Skip kalau killer jelas ngebelakangi kita
                 -- (dot < aimMin) DAN ga lagi nerjang ke arah kita (closing < closeMin) DAN bukan nempel (<= 2.5m). Lunge/chain tetap lolos lewat closing.
-                if P2.aimGate then
+                if P2.rayGate then
+                    local offv = h2.Position - k.hrp.Position
+                    local closing2 = 0
+                    if offv.Magnitude > 0.01 then
+                        closing2 = (k.hrp.AssemblyLinearVelocity - h2.AssemblyLinearVelocity):Dot(offv.Unit)
+                    end
+                    local miss, along = rayMiss(k, h2.Position)
+                    local bad = miss > P2.rayTol and closing2 < P2.closeMin   -- lunge (closing tinggi) tetap lolos: CamLook killer lagi nerjang ga bisa dipercaya
+                    local cs = P2.inClose and P2.inClose[k.char]
+                    plog("RAYGATE", id, (" | garis meleset %.1fm (toleransi %.1f) | sepanjang garis %.1fm | closing %.1f (min %.1f) | di <=4m sejak %s | ->"):format(miss, P2.rayTol, along, closing2, P2.closeMin, cs and ("%.2fs"):format(os.clock() - cs) or "-"), bad and "SKIP" or "ok")
+                    if bad then
+                        P2.why, P2.whyT = (" garis bidik killer meleset %.1fm dari kita (toleransi %.1f)"):format(miss, P2.rayTol), os.clock()
+                        P2.whyK, P2.whyKT = P2.why, P2.whyT
+                        return
+                    end
+                elseif P2.aimGate then
                     local offv = h2.Position - k.hrp.Position
                     local closing2 = 0
                     if offv.Magnitude > 0.01 then
