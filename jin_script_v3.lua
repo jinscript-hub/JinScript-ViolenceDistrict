@@ -1918,7 +1918,8 @@ do local function parryInit()
     cPar:Toggle("PAR_Gate", "Skip ayunan yang jelas ga ngadep kita", true, function(v) S.parry.aimGate = v end)
     cPar:Toggle("PAR_Learn", "Auto-learn anim serang dari hit", true, function(v) S.parry.learn = v end)
     cPar:Toggle("PAR_Face", "Hadap killer pas parry (tes: parry depan doang?)", false, function(v) S.parry.face = v end)
-    cPar:Toggle("PAR_Human", "Parry pas ayunan nyampe (ga keliatan bot)", true, function(v) S.parry.human = v end)
+    -- v3.13.3: tunda tembakan ancang-ancang default OFF. Log: tunda 0.05s + lead 0.20 (salah, parry skin Katana baru nyala 0.19 dtk) -> parry nyala SETELAH hit.
+    cPar:Toggle("PAR_HumanDelay", "Tunda parry pas ayunan nyampe (ga keliatan bot, lebih sering telat)", false, function(v) S.parry.humanDelay = v end)
     cPar:Toggle("PAR_Circle", "Show Parry Circle", false, function(v) S.parry.circle = v end,
         {id = "PAR_CircleCol", default = S.parry.color, cb = function(c) S.parry.color = c end})
     local stLbl = cPar:Label("Status: OFF")
@@ -1964,6 +1965,9 @@ do local function parryInit()
         ["105374834496520"] = 17, ["111920872708571"] = 17,   -- v3.13: log: hit dari 15-17m (sebelumnya 10 -> ke-skip di awal ronde)
         ["130593238885843"] = 22, ["115244153053858"] = 17, ["98163597193511"] = 12,   -- v3.13: log: hit dari 20m (kalibrasi 9 -> 21.8)
     }) do idReach[id] = math.max(idReach[id] or 0, r) end
+    -- v3.13.3: 101636125032002 (ayunan setelah ancang-ancang) baru kebaca 0.01-0.07 dtk sebelum hit (log) -> reaktif mustahil, parry cuma kebuang (cooldown 60 dtk).
+    -- Yang bisa ditembak cuma anim ancang-ancangnya (125430111937587, jalur EARLY).
+    if not idLag["101636125032002"] then idLag["101636125032002"] = {n = 3, sum = 0.12} end
     -- LOG (v3.5): tiap tembakan / hit / skip ditulis ke jin_parry_log.txt (200 baris terakhir) buat diagnosa "notif muncul tapi dagger ga kepake"
     local LOGF = BASE .. "jin_parry_log.txt"
     local logbuf, logBusy = {}, false
@@ -2147,6 +2151,11 @@ do local function parryInit()
         ["127096285501517"] = "Katana/Enten", ["123307242865945"] = "Fish/Fih", ["81793464499285"] = "Watcher/StopWatch",
     }
     local skinStats = {}   -- [skinId] = {n, sum, min, max}: delay FIRE -> attr Parry nyala (dari client). Cuma di memori, belum dipakai buat keputusan.
+    local function startupEst()   -- v3.13.3: delay parry skin (tembak -> nyala), ping-independent (log: 0.187 @ ping 4.17, 0.189 @ 0.06, 0.193 @ 0.14)
+        local st = skinStats[S.parry.fireSkin or ""]
+        if st and st.n >= 1 then return math.min(math.max(st.sum / st.n, 0.1), 0.35) end
+        return 0.19
+    end
     local parryHooked = setmetatable({}, {__mode = "k"})
     local function watchParryAttr()
         local ch = lp.Character
@@ -2577,7 +2586,7 @@ do local function parryInit()
                 if whyE then P.why, P.whyT = whyE, nowE P.whyK, P.whyKT = whyE, nowE return end
                 P.lastEval = nil
                 P.early = {id = id, t = nowE, d = d, k = k}
-                if not P.human then
+                if not P.humanDelay then
                     tryFire("ancang-ancang", k, id)
                     return
                 end
@@ -2587,7 +2596,8 @@ do local function parryInit()
                 -- hit kena padahal dot 0.00), belum ada hit, belum ditembak jalur lain.
                 local ping = 0
                 pcall(function() ping = lp:GetNetworkPing() end)
-                local lead = math.min(0.06 + ping, 0.3)
+                ping = math.min(ping, 0.25)
+                local lead = math.min(startupEst() + ping, 0.5)
                 local K = (P.earlyKs and P.earlyKs[id]) or EARLY_ANIMS[id]
                 local tFire = nowE + math.max(0, K * d - lead)
                 local d0 = d
@@ -2601,7 +2611,7 @@ do local function parryInit()
                     local why3
                     if os.clock() - (P3.firedT or 0) < 1 then why3 = "udah ditembak lewat jalur lain"
                     elseif (P3.lastHitT or 0) > nowE then why3 = "udah ada hit sebelum waktunya"
-                    elseif d3 > 18 or d3 > d0 + 1.5 then why3 = ("killer ngejauh (%.1fm -> %.1fm), kemungkinan pancingan"):format(d0, d3) end
+                    elseif d3 > 18 or d3 > d0 + 4 then why3 = ("killer ngejauh (%.1fm -> %.1fm), kemungkinan pancingan"):format(d0, d3) end
                     plog("EARLY tunda", ("%.2fs"):format(tFire - nowE), ("| jarak %.1f -> %.1f | K %.3f | lead %.2f |"):format(d0, d3, K, lead), why3 and ("BATAL: " .. why3) or "TEMBAK")
                     if why3 then P3.why, P3.whyT = why3, os.clock() P3.whyK, P3.whyKT = why3, os.clock() return end
                     tryFire("ancang-ancang (ditunda)", k, id)
@@ -2679,7 +2689,7 @@ do local function parryInit()
                     local png = 0
                     pcall(function() png = lp:GetNetworkPing() end)
                     png = math.min(png, 0.25)   -- v3.13.2: log: GetNetworkPing sempat 4.171 / 1.5 (spike) -> "latensi 4.25s" -> semua ayunan ke-skip
-                    local avg, need = lg.sum / lg.n, png + 0.08
+                    local avg, need = lg.sum / lg.n, png + startupEst()
                     if avg < need then
                         P2.why, P2.whyT = ("anim %s pasti telat (jeda %.2fs < latensi parry %.2fs)"):format(id, avg, need), os.clock()
                         P2.whyK, P2.whyKT = P2.why, P2.whyT
