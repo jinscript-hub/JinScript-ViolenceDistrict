@@ -1897,6 +1897,7 @@ do local function parryInit()
         "117042998468241", "133963973694098", "105374834496520", "111920872708571", "101636125032002",   -- HIT KITA terkonfirmasi
         "129626174716003", "113691709436161", "130593238885843",   -- hasil auto-learn lama, BELUM diverifikasi ulang
         "83333467665074",   -- killer peezatime (chain): HIT KITA 3x + 1x ke-parry sukses (log v3.12.6)
+        "98163597193511",   -- v3.13.2: skill killer "hidden" (info user: ini anim nyerang). Log: anim muncul 0.78 dtk SEBELUM hit -> reaktif cukup. Belum tahu bisa di-parry; kalau tembus, nopar belajar sendiri
         "106871536134254",  -- killer rip_fernando0914 (chainsaw): RUSH dari 12.2m, hit 0.39 dtk kemudian (KATTR ChainsawRushActive false->true bareng anim ini)
     }) do ATTACK_ANIMS[id] = true end
     -- v3.12.5 (dari log killer kietnekk89): anim ayunan (101636125032002) baru kebaca 0.04-0.07 dtk SEBELUM HP turun -> reaktif mustahil (parry butuh ~0.13 dtk).
@@ -1961,7 +1962,7 @@ do local function parryInit()
         ["75618342544502"] = 17, ["93902163029544"] = 17,   -- hit dari 13-17m
         ["74968262036854"] = 17, ["113255068724446"] = 17,   -- banti: hit dari 15.2m
         ["105374834496520"] = 17, ["111920872708571"] = 17,   -- v3.13: log: hit dari 15-17m (sebelumnya 10 -> ke-skip di awal ronde)
-        ["130593238885843"] = 22, ["115244153053858"] = 17,   -- v3.13: log: hit dari 20m (kalibrasi 9 -> 21.8)
+        ["130593238885843"] = 22, ["115244153053858"] = 17, ["98163597193511"] = 12,   -- v3.13: log: hit dari 20m (kalibrasi 9 -> 21.8)
     }) do idReach[id] = math.max(idReach[id] or 0, r) end
     -- LOG (v3.5): tiap tembakan / hit / skip ditulis ke jin_parry_log.txt (200 baris terakhir) buat diagnosa "notif muncul tapi dagger ga kepake"
     local LOGF = BASE .. "jin_parry_log.txt"
@@ -2087,7 +2088,7 @@ do local function parryInit()
         if ch:GetAttribute("ParrySpent") then
             -- v3.12.7: log: parry sukses (PARRYRESULT true|0|true) -> ParryClient.isSilenced = true; parry meleset (false|60) -> cuma cooldown. Beda penyebab, beda pesan.
             if pc.self and pc.self.isSilenced then return nil, "dagger udah kepake (silenced, parry berhasil sebelumnya; kemungkinan sekali pakai)" end
-            return nil, "cooldown dagger (parry sebelumnya meleset = ~60 dtk)"
+            return nil, "cooldown dagger (abis parry: meleset 60 dtk, sukses juga kena cooldown, log: > 17 dtk)"
         end
         if ch:GetAttribute("Parry") or ch:GetAttribute("Knocked") then return nil, "parry lagi aktif / knocked" end
         local P = S.parry
@@ -2363,7 +2364,7 @@ do local function parryInit()
             local okp, pgv = pcall(function() return lp:GetNetworkPing() end)
             P.firePing = okp and pgv or 0
             local dg = ch:FindFirstChild("Parrying Dagger")
-            P.fireSkin = dg and tostring(dg:GetAttribute("useanim")) or "?"
+            P.fireSkin = dg and (tostring(dg:GetAttribute("useanim")):gsub("rbxassetid://", "")) or "?"
         end
         task.spawn(function()
             local hrp = ch:FindFirstChild("HumanoidRootPart")
@@ -2677,6 +2678,7 @@ do local function parryInit()
                 if lg and lg.n >= 2 then
                     local png = 0
                     pcall(function() png = lp:GetNetworkPing() end)
+                    png = math.min(png, 0.25)   -- v3.13.2: log: GetNetworkPing sempat 4.171 / 1.5 (spike) -> "latensi 4.25s" -> semua ayunan ke-skip
                     local avg, need = lg.sum / lg.n, png + 0.08
                     if avg < need then
                         P2.why, P2.whyT = ("anim %s pasti telat (jeda %.2fs < latensi parry %.2fs)"):format(id, avg, need), os.clock()
