@@ -1917,7 +1917,7 @@ do local function parryInit()
     S.parry.aimGate, S.parry.aimMin, S.parry.closeMin = true, -0.25, 8   -- v3.13: gerbang arah pas nembak
     cPar:Toggle("PAR_Gate", "Skip ayunan yang jelas ga ngadep kita", true, function(v) S.parry.aimGate = v end)
     -- v3.13.6: garis bidik killer + slider zona. Log: ayunan dari 15.6m dot -0.04 (garis bidik meleset jauh) tetap ditembak -> parry kebuang, cooldown 60 dtk.
-    S.parry.rayGate, S.parry.rayTol, S.parry.zoneManual = true, 4, false
+    S.parry.rayGate, S.parry.rayTol, S.parry.zoneManual, S.parry.rayMinD = true, 4, false, 5   -- v3.13.7: garis bidik cuma dipakai kalau killer > rayMinD m (dekat: CamLook ga bisa dipercaya)
     cPar:Toggle("PAR_Ray", "Garis bidik killer: parry cuma kalau garis nyampe ke kita", true, function(v) S.parry.rayGate = v end)
     cPar:Slider("PAR_RayTol", "Toleransi garis bidik (boleh melenceng)", 1, 10, 4, 0.5, function(v) S.parry.rayTol = v end, "m")
     cPar:Slider("PAR_Zone", "Zona parry (jarak killer)", 4, 22, 9, 1, function(v) S.parry.dist = v S.parry.zoneManual = true end, "m")
@@ -1927,8 +1927,9 @@ do local function parryInit()
     cPar:Toggle("PAR_HumanDelay", "Tunda parry pas ayunan nyampe (ga keliatan bot, lebih sering telat)", false, function(v) S.parry.humanDelay = v end)
     -- v3.13.5: mode dekat (tes, default OFF). Ayunan jarak 1.5-4m: anim baru nongol ~0.13 dtk sebelum hit, parry butuh ~0.18 dtk -> reaktif mustahil.
     -- Jadi tembak SEBELUM ayunan: killer ngejar kita, ngadep kita, masuk <= closeR meter. Resiko: killer ga ayun dalam ~1 dtk = parry kebuang (cooldown 60 dtk).
-    S.parry.close, S.parry.closeR = false, 4.0
-    cPar:Toggle("PAR_Close", "Parry nekat jarak dekat (tes, resiko cooldown 60 dtk)", false, function(v) S.parry.close = v end)
+    S.parry.close, S.parry.closeR = true, 4.0   -- v3.13.7: default ON (log: 2 dari 2 parry reaktif di 1.7-2.2m telat, killer ayun 0.2-0.28 dtk setelah masuk 4m)
+    cPar:Toggle("PAR_Close", "Parry nekat jarak dekat (killer ngejar kita, tanpa nunggu ayunan)", true, function(v) S.parry.close = v end)
+    cPar:Slider("PAR_CloseR", "Jarak parry nekat", 2, 6, 4, 0.5, function(v) S.parry.closeR = v end, "m")
     cPar:Toggle("PAR_Circle", "Show Parry Circle", false, function(v) S.parry.circle = v end,
         {id = "PAR_CircleCol", default = S.parry.color, cb = function(c) S.parry.color = c end})
     local stLbl = cPar:Label("Status: OFF")
@@ -2580,6 +2581,7 @@ do local function parryInit()
             if not tr.Looped then   -- log SEMUA anim non-loop killer (jarak berapa pun) buat auto-learn dari hit survivor lain
                 local now = os.clock()
                 recent[#recent + 1] = {id = id, t = now, pos = k.hrp.Position, swing = looksLikeSwing(tr)}
+                if ATTACK_ANIMS[id] or learned[id] then P.lastAtkT = now end   -- v3.13.7: dipakai mode dekat (jeda abis ayunan)
                 while #recent > 0 and (now - recent[1].t > 2 or #recent > 30) do table.remove(recent, 1) end
             end
             local ch = lp.Character
@@ -2618,7 +2620,7 @@ do local function parryInit()
                 local missE = P.rayGate and rayMiss(k, hrp.Position) or 0
                 local zoneE = P.zoneManual and (P.dist + 1) or 18   -- v3.13.6: slider zona (kalau digeser) jadi batas jarak ancang-ancang juga
                 if d > zoneE then whyE = ("ancang-ancang tapi killer %.0fm (> zona %.0fm)"):format(d, zoneE)
-                elseif P.rayGate and missE > P.rayTol * 1.5 and d > 2.5 then whyE = ("ancang-ancang tapi garis bidik meleset %.1fm (toleransi %.1f x1.5)"):format(missE, P.rayTol)
+                elseif P.rayGate and missE > P.rayTol * 1.5 and d > P.rayMinD then whyE = ("ancang-ancang tapi garis bidik meleset %.1fm (toleransi %.1f x1.5)"):format(missE, P.rayTol)
                 elseif not (chasingUs or d <= 10) then whyE = ("ancang-ancang tapi killer ga ngejar kita (%.0fm)"):format(d)
                 elseif nowE - (P.lastHitT or 0) < 0.3 then whyE = "ancang-ancang tapi baru abis hit" end
                 plog("EARLY anim", id, ("| %.1fm | ngejar kita %s | ->"):format(d, tostring(chasingUs and true or false)), whyE and ("SKIP: " .. whyE) or "TEMBAK")
@@ -2709,7 +2711,7 @@ do local function parryInit()
                         closing2 = (k.hrp.AssemblyLinearVelocity - h2.AssemblyLinearVelocity):Dot(offv.Unit)
                     end
                     local miss, along = rayMiss(k, h2.Position)
-                    local bad = miss > P2.rayTol and closing2 < P2.closeMin   -- lunge (closing tinggi) tetap lolos: CamLook killer lagi nerjang ga bisa dipercaya
+                    local bad = miss > P2.rayTol and closing2 < P2.closeMin and d2 > P2.rayMinD   -- lunge (closing tinggi) tetap lolos: CamLook killer lagi nerjang ga bisa dipercaya
                     local cs = P2.inClose and P2.inClose[k.char]
                     plog("RAYGATE", id, (" | garis meleset %.1fm (toleransi %.1f) | sepanjang garis %.1fm | closing %.1f (min %.1f) | di <=4m sejak %s | ->"):format(miss, P2.rayTol, along, closing2, P2.closeMin, cs and ("%.2fs"):format(os.clock() - cs) or "-"), bad and "SKIP" or "ok")
                     if bad then
@@ -2909,7 +2911,8 @@ do local function parryInit()
         end
         if P.close and P.on then
             local nowP = os.clock()
-            if nowP - (P.closeT or 0) > 1.0 and nowP - (P.lastHitT or 0) > 1.0 then
+            -- v3.13.7: jeda 3 dtk abis hit / abis ayunan killer (killer lagi recovery, log: 6 dtk di <=4m tanpa ayun abis hit). Arah bidik ga dipake (CamLook dekat = ga bisa dipercaya).
+            if nowP - (P.closeT or 0) > 1.0 and nowP - (P.lastHitT or 0) > 3.0 and nowP - (P.lastAtkT or 0) > 3.0 then
                 for _, k in ipairs(ks) do
                     local ck = k.char
                     if ck:GetAttribute("IsChasing") and ck:GetAttribute("ChaseTargetUserId") == lp.UserId
@@ -2920,7 +2923,7 @@ do local function parryInit()
                             local u = off.Unit
                             local closing = (k.hrp.AssemblyLinearVelocity - hrp.AssemblyLinearVelocity):Dot(u)
                             local adot = aimDot(aimOf(k), k.hrp.Position, hrp.Position)
-                            if adot >= 0.7 and closing > -3 and not nearInteract(k, u) then
+                            if closing > -8 and not nearInteract(k, u) then
                                 P.closeT = nowP
                                 plog("CLOSE-FIRE", k.char.Name, (" | %.1fm | closing %.1f | dot %.2f | ping %.3f"):format(d, closing, adot, ping))
                                 tryFire("dekat", k)
