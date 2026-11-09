@@ -2041,7 +2041,7 @@ do local function parryInit()
                     for _, u in pairs(us) do
                         if type(u) == "table" and rawget(u, "parryEvent") then
                             pc.self = u
-                            plog("PARRYOBJ ketemu | tool", tostring(u.tool and u.tool:GetFullName()), "| lockDuration", tostring(u.lockDuration))
+                            plog("PARRYOBJ ketemu | tool", tostring(u.tool and u.tool:GetFullName()), "| lockDuration", tostring(u.lockDuration), "| attr dagger:", attrDump(u.tool))   -- v3.13.1: attr dagger (useanim = id anim skin)
                             return u
                         end
                     end
@@ -2140,6 +2140,12 @@ do local function parryInit()
     track(UIS.InputBegan:Connect(function(i)
         if i.UserInputType == Enum.UserInputType.Keyboard then lastKey = {t = os.clock(), code = i.KeyCode} end
     end))
+    -- v3.13.1: nama skin dari tabel ParryV2Anim (script Ox) -> dicocokin ke attr useanim di dagger
+    local SKIN_NAME = {
+        ["109133187196613"] = "Default", ["75939529748815"] = "Shield/BloodShield", ["126894569253341"] = "Robot/Feedbacker",
+        ["127096285501517"] = "Katana/Enten", ["123307242865945"] = "Fish/Fih", ["81793464499285"] = "Watcher/StopWatch",
+    }
+    local skinStats = {}   -- [skinId] = {n, sum, min, max}: delay FIRE -> attr Parry nyala (dari client). Cuma di memori, belum dipakai buat keputusan.
     local parryHooked = setmetatable({}, {__mode = "k"})
     local function watchParryAttr()
         local ch = lp.Character
@@ -2149,6 +2155,11 @@ do local function parryInit()
             local P = S.parry
             if ch:GetAttribute("Parry") and P.firedT and os.clock() - P.firedT < 1.2 then   -- v3.12.9: ukur berapa lama parry baru NYALA sejak ditembak (log: hit +0.17 dtk lolos, attr baru kebaca true <= 0.40 dtk)
                 plog("PARRY ATTR nyala", ("+%.3fs sejak FIRE"):format(os.clock() - P.firedT))
+                local dly, pg0, sk = os.clock() - P.firedT, P.firePing or 0, P.fireSkin or "?"
+                local st = skinStats[sk]
+                if not st then st = {n = 0, sum = 0, min = 9, max = 0} skinStats[sk] = st end
+                st.n, st.sum, st.min, st.max = st.n + 1, st.sum + dly, math.min(st.min, dly), math.max(st.max, dly)
+                plog("PARRYTIME skin", sk, SKIN_NAME[sk] or "?", ("| delay %.3f | ping %.3f | delay-ping %.3f | n %d avg %.3f min %.3f max %.3f"):format(dly, pg0, dly - pg0, st.n, st.sum / st.n, st.min, st.max))
             end
             if not ch:GetAttribute("Parry") or os.clock() - (P.firedT or 0) < 1.2 then return end   -- bukan parry manual
             local now, info = os.clock(), {}
@@ -2347,6 +2358,13 @@ do local function parryInit()
         local t0 = os.clock()
         P.block = t0 + 0.35
         P.firedT = t0
+        -- v3.13.1: catat ping + skin (attr useanim di dagger) pas nembak, buat ngukur delay parry per skin (baris PARRYTIME)
+        do
+            local okp, pgv = pcall(function() return lp:GetNetworkPing() end)
+            P.firePing = okp and pgv or 0
+            local dg = ch:FindFirstChild("Parrying Dagger")
+            P.fireSkin = dg and tostring(dg:GetAttribute("useanim")) or "?"
+        end
         task.spawn(function()
             local hrp = ch:FindFirstChild("HumanoidRootPart")
             if P.face and hrp and k and k.hrp.Parent then
