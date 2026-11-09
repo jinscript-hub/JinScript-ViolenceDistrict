@@ -1920,6 +1920,10 @@ do local function parryInit()
     cPar:Toggle("PAR_Face", "Hadap killer pas parry (tes: parry depan doang?)", false, function(v) S.parry.face = v end)
     -- v3.13.3: tunda tembakan ancang-ancang default OFF. Log: tunda 0.05s + lead 0.20 (salah, parry skin Katana baru nyala 0.19 dtk) -> parry nyala SETELAH hit.
     cPar:Toggle("PAR_HumanDelay", "Tunda parry pas ayunan nyampe (ga keliatan bot, lebih sering telat)", false, function(v) S.parry.humanDelay = v end)
+    -- v3.13.5: mode dekat (tes, default OFF). Ayunan jarak 1.5-4m: anim baru nongol ~0.13 dtk sebelum hit, parry butuh ~0.18 dtk -> reaktif mustahil.
+    -- Jadi tembak SEBELUM ayunan: killer ngejar kita, ngadep kita, masuk <= closeR meter. Resiko: killer ga ayun dalam ~1 dtk = parry kebuang (cooldown 60 dtk).
+    S.parry.close, S.parry.closeR = false, 4.0
+    cPar:Toggle("PAR_Close", "Parry nekat jarak dekat (tes, resiko cooldown 60 dtk)", false, function(v) S.parry.close = v end)
     cPar:Toggle("PAR_Circle", "Show Parry Circle", false, function(v) S.parry.circle = v end,
         {id = "PAR_CircleCol", default = S.parry.color, cb = function(c) S.parry.color = c end})
     local stLbl = cPar:Label("Status: OFF")
@@ -1968,6 +1972,24 @@ do local function parryInit()
     -- v3.13.3: 101636125032002 (ayunan setelah ancang-ancang) baru kebaca 0.01-0.07 dtk sebelum hit (log) -> reaktif mustahil, parry cuma kebuang (cooldown 60 dtk).
     -- Yang bisa ditembak cuma anim ancang-ancangnya (125430111937587, jalur EARLY).
     if not idLag["101636125032002"] then idLag["101636125032002"] = {n = 3, sum = 0.12} end
+    -- v3.13.4: jeda anim->hit ternyata NAIK sama jarak (log: 2.2m = 0.13s, 7.0m = 0.22s, 8.5m = 0.24s), jadi rata-rata doang nyesatin. Regresi lag = a + b x jarak (per anim, di memori).
+    local idLagD = {}
+    local function lagAdd(id, dist, lag)
+        local r = idLagD[id]
+        if not r then r = {n = 0, sx = 0, sy = 0, sxx = 0, sxy = 0} idLagD[id] = r end
+        if r.n >= 40 then return end
+        r.n, r.sx, r.sy, r.sxx, r.sxy = r.n + 1, r.sx + dist, r.sy + lag, r.sxx + dist * dist, r.sxy + dist * lag
+    end
+    local function lagPredict(id, dist)   -- nil kalau datanya belum cukup / jaraknya ga bervariasi
+        local r = idLagD[id]
+        if not (r and r.n >= 3) then return nil end
+        local den = r.n * r.sxx - r.sx * r.sx
+        if den < 4 then return nil end
+        local b = math.max(0, (r.n * r.sxy - r.sx * r.sy) / den)
+        local a = (r.sy - b * r.sx) / r.n
+        return math.min(1.5, math.max(0.02, a + b * dist))
+    end
+    for _, pt in ipairs({{2.2, 0.13}, {8.5, 0.24}, {7.0, 0.22}}) do lagAdd("129626174716003", pt[1], pt[2]) end   -- seed dari log
     -- LOG (v3.5): tiap tembakan / hit / skip ditulis ke jin_parry_log.txt (200 baris terakhir) buat diagnosa "notif muncul tapi dagger ga kepake"
     local LOGF = BASE .. "jin_parry_log.txt"
     local logbuf, logBusy = {}, false
@@ -2670,7 +2692,8 @@ do local function parryInit()
                         closing2 = (k.hrp.AssemblyLinearVelocity - h2.AssemblyLinearVelocity):Dot(offv.Unit)
                     end
                     local bad = dot2 < P2.aimMin and d2 > 2.5 and closing2 < P2.closeMin
-                    plog("AIMGATE", id, (" | dot %.2f (min %.2f) | closing %.1f (min %.1f) | d_prediksi %.1f | ->"):format(dot2, P2.aimMin, closing2, P2.closeMin, d2), bad and "SKIP" or "ok")
+                    local cs = P2.inClose and P2.inClose[k.char]
+                    plog("AIMGATE", id, (" | dot %.2f (min %.2f) | closing %.1f (min %.1f) | d_prediksi %.1f | di <=4m sejak %s | ->"):format(dot2, P2.aimMin, closing2, P2.closeMin, d2, cs and ("%.2fs"):format(os.clock() - cs) or "-"), bad and "SKIP" or "ok")
                     if bad then
                         P2.why, P2.whyT = (" ayunan ga ngadep kita (dot %.2f, closing %.1f)"):format(dot2, closing2), os.clock()
                         P2.whyK, P2.whyKT = P2.why, P2.whyT
@@ -2685,15 +2708,16 @@ do local function parryInit()
                 -- v3.12.12: id yang jeda anim->hit-nya (rata-rata dari HIT KITA, >= 2 sampel) lebih pendek dari latensi parry (ping + 0.08) = pasti telat.
                 -- Nembak cuma bikin parry meleset -> cooldown 60 dtk, dagger ga siap buat serangan berikutnya. Jadi di-skip (hitung dari data, bukan tebakan).
                 local lg = idLag[id]
-                if lg and lg.n >= 2 then
+                local lagD = lagPredict(id, d2)   -- v3.13.4: prediksi jeda di jarak ini (kalau datanya cukup)
+                if (lg and lg.n >= 2) or lagD then
                     local png = 0
                     pcall(function() png = lp:GetNetworkPing() end)
                     png = math.min(png, 0.25)   -- v3.13.2: log: GetNetworkPing sempat 4.171 / 1.5 (spike) -> "latensi 4.25s" -> semua ayunan ke-skip
-                    local avg, need = lg.sum / lg.n, png + startupEst()
+                    local avg, need = lagD or (lg.sum / lg.n), png + startupEst()
                     if avg < need then
                         P2.why, P2.whyT = ("anim %s pasti telat (jeda %.2fs < latensi parry %.2fs)"):format(id, avg, need), os.clock()
                         P2.whyK, P2.whyKT = P2.why, P2.whyT
-                        plog("SKIP anim", id, "| pasti telat: jeda anim->hit rata2", ("%.3fs"):format(avg), "(n", lg.n, ") < latensi parry", ("%.3fs"):format(need))
+                        plog("SKIP anim", id, "| pasti telat: jeda anim->hit", (lagD and "(prediksi @ %.1fm)" or "(rata2)"):format(d2), ("%.3fs"):format(avg), "< latensi parry", ("%.3fs"):format(need), "| dagger dihemat biar ga kena cooldown 60 dtk")
                         return
                     end
                 end
@@ -2748,6 +2772,7 @@ do local function parryInit()
                     local lg = idLag[best.id]
                     if not lg then lg = {n = 0, sum = 0} idLag[best.id] = lg end
                     if lg.n < 20 then lg.n = lg.n + 1 lg.sum = lg.sum + (now - best.t) end
+                    if (now - best.t) < 1 then lagAdd(best.id, (vh.Position - best.pos).Magnitude, now - best.t) end
                     saveP()
                 end
                 plog("HIT KITA | HP", ("%.0f/%.0f"):format(hum.Health, hum.MaxHealth), "| anim", best and best.id or "?", "| Parry", tostring(hum.Parent and hum.Parent:GetAttribute("Parry")), "| sejak FIRE", S.parry.firedT and ("%.3fs"):format(now - S.parry.firedT) or "-")
@@ -2837,6 +2862,43 @@ do local function parryInit()
         -- v3.12.12: PREEMPTIVE (toggle, default OFF). Basic attack killer: animasi baru nongol 0.02-0.08 dtk sebelum hit, parry butuh ping + ~0.08 dtk -> reaktif mustahil.
         -- Jadi tembak SEBELUM ayunan: killer lagi ngejar KITA, ngadep kita, masuk jarak ayun (<= 5.5m) atau nabrak dalam <= 0.35 dtk + ping. Parry aktif ~0.8 dtk.
         -- Resiko: killer ga jadi ayun = parry kebuang (cooldown 60 dtk). Tiap tembakan ditandai "PRE-FIRE" di log, hasilnya (HIT / PARRYRESULT) keliatan di baris sesudahnya.
+        -- v3.13.5: catat sejak kapan tiap killer ada <= 4m dari kita (buat log AIMGATE: nunjukin seberapa cepat killer ayun setelah masuk jarak dekat)
+        if P.on then
+            local nowC = os.clock()
+            P.inClose = P.inClose or setmetatable({}, {__mode = "k"})
+            for _, k in ipairs(ks) do
+                local dC = (hrp.Position - k.hrp.Position).Magnitude
+                if dC <= 4 then
+                    if not P.inClose[k.char] then P.inClose[k.char] = nowC end
+                elseif dC > 5 then
+                    P.inClose[k.char] = nil
+                end
+            end
+        end
+        if P.close and P.on then
+            local nowP = os.clock()
+            if nowP - (P.closeT or 0) > 1.0 and nowP - (P.lastHitT or 0) > 1.0 then
+                for _, k in ipairs(ks) do
+                    local ck = k.char
+                    if ck:GetAttribute("IsChasing") and ck:GetAttribute("ChaseTargetUserId") == lp.UserId
+                        and not (ck:GetAttribute("IsCarrying") or ck:GetAttribute("Immobile") or ck:GetAttribute("IsStunned")) then
+                        local off = hrp.Position - k.hrp.Position
+                        local d = off.Magnitude
+                        if d > 0 and d <= P.closeR then
+                            local u = off.Unit
+                            local closing = (k.hrp.AssemblyLinearVelocity - hrp.AssemblyLinearVelocity):Dot(u)
+                            local adot = aimDot(aimOf(k), k.hrp.Position, hrp.Position)
+                            if adot >= 0.7 and closing > -3 and not nearInteract(k, u) then
+                                P.closeT = nowP
+                                plog("CLOSE-FIRE", k.char.Name, (" | %.1fm | closing %.1f | dot %.2f | ping %.3f"):format(d, closing, adot, ping))
+                                tryFire("dekat", k)
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+        end
         if P.pre and P.on then
             local nowP = os.clock()
             if nowP - (P.preT or 0) > 1.0 and nowP - (P.lastHitT or 0) > 1.0 then
