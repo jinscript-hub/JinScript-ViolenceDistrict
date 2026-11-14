@@ -1898,6 +1898,13 @@ do local function parryInit()
         "129626174716003", "113691709436161", "130593238885843",   -- hasil auto-learn lama, BELUM diverifikasi ulang
         "83333467665074",   -- killer peezatime (chain): HIT KITA 3x + 1x ke-parry sukses (log v3.12.6)
         "98163597193511",   -- v3.13.2: skill killer "hidden" (info user: ini anim nyerang). Log: anim muncul 0.78 dtk SEBELUM hit -> reaktif cukup. Belum tahu bisa di-parry; kalau tembus, nopar belajar sendiri
+        -- v3.13.8: referensi script HANX HUB (nama killer dari sana) + daftar Ox. BELUM kebukti di game sendiri; kalau ada yang salah, ada di NOT_SWING / nopar belajar sendiri.
+        "122812055447896",  -- Veil lunge
+        "132817836308238", "129784271201071", "82666958311998",   -- Jeff Basic / lunge / Frenzy
+        "78432063483146", "118907603246885", "80411309607666",    -- Abyssal Basic / lunge / S1
+        "139369275981139", "110355011987939",                     -- Jason Basic / lunge
+        "138720291317243", "115244153053858",                     -- Masked Tony / Cobra lunge
+        "74968262036854", "113255068724446",                      -- Hidden Basic / lunge
         "106871536134254",  -- killer rip_fernando0914 (chainsaw): RUSH dari 12.2m, hit 0.39 dtk kemudian (KATTR ChainsawRushActive false->true bareng anim ini)
     }) do ATTACK_ANIMS[id] = true end
     -- v3.12.5 (dari log killer kietnekk89): anim ayunan (101636125032002) baru kebaca 0.04-0.07 dtk SEBELUM HP turun -> reaktif mustahil (parry butuh ~0.13 dtk).
@@ -1973,7 +1980,8 @@ do local function parryInit()
         ["75618342544502"] = 17, ["93902163029544"] = 17,   -- hit dari 13-17m
         ["74968262036854"] = 17, ["113255068724446"] = 17,   -- banti: hit dari 15.2m
         ["105374834496520"] = 17, ["111920872708571"] = 17,   -- v3.13: log: hit dari 15-17m (sebelumnya 10 -> ke-skip di awal ronde)
-        ["130593238885843"] = 22, ["115244153053858"] = 17, ["98163597193511"] = 12,   -- v3.13: log: hit dari 20m (kalibrasi 9 -> 21.8)
+        ["130593238885843"] = 22, ["115244153053858"] = 17, ["98163597193511"] = 12,
+        ["122812055447896"] = 15, ["129784271201071"] = 15, ["118907603246885"] = 15, ["110355011987939"] = 15,   -- v3.13.8: lunge, tebakan   -- v3.13: log: hit dari 20m (kalibrasi 9 -> 21.8)
     }) do idReach[id] = math.max(idReach[id] or 0, r) end
     -- v3.13.3: 101636125032002 (ayunan setelah ancang-ancang) baru kebaca 0.01-0.07 dtk sebelum hit (log) -> reaktif mustahil, parry cuma kebuang (cooldown 60 dtk).
     -- Yang bisa ditembak cuma anim ancang-ancangnya (125430111937587, jalur EARLY).
@@ -2123,6 +2131,16 @@ do local function parryInit()
             return nil, "cooldown dagger (abis parry: meleset 60 dtk, sukses juga kena cooldown, log: > 17 dtk)"
         end
         if ch:GetAttribute("Parry") or ch:GetAttribute("Knocked") then return nil, "parry lagi aktif / knocked" end
+        -- v3.13.8: ide dari script temen. Atribut boolean yang namanya mengandung knock/downed/carried/hooked/incap/grab dan bernilai true = ga bisa parry, jangan buang dagger.
+        if hum.PlatformStand then return nil, "PlatformStand (kena stun / ragdoll)" end
+        for an, av in pairs(ch:GetAttributes()) do
+            if av == true then
+                local ln = string.lower(tostring(an))
+                if ln:find("knock") or ln:find("downed") or ln:find("carried") or ln:find("hooked") or ln:find("incap") or ln:find("grab") then
+                    return nil, "kamu lagi downed / digendong / di-hook (" .. tostring(an) .. ")"
+                end
+            end
+        end
         local P = S.parry
         local now = os.clock()
         if now < P.block then return nil, ("dagger cooldown ~%.1f dtk"):format(P.block - now) end
@@ -2713,7 +2731,11 @@ do local function parryInit()
                     local miss, along = rayMiss(k, h2.Position)
                     local bad = miss > P2.rayTol and closing2 < P2.closeMin and d2 > P2.rayMinD   -- lunge (closing tinggi) tetap lolos: CamLook killer lagi nerjang ga bisa dipercaya
                     local cs = P2.inClose and P2.inClose[k.char]
-                    plog("RAYGATE", id, (" | garis meleset %.1fm (toleransi %.1f) | sepanjang garis %.1fm | closing %.1f (min %.1f) | di <=4m sejak %s | ->"):format(miss, P2.rayTol, along, closing2, P2.closeMin, cs and ("%.2fs"):format(os.clock() - cs) or "-"), bad and "SKIP" or "ok")
+                    -- v3.13.8: arah BADAN killer (HRP.LookVector, dipakai script temen) buat dibandingin sama CamLook. Cuma di-log, belum jadi syarat.
+                    local bl = Vector3.new(k.hrp.CFrame.LookVector.X, 0, k.hrp.CFrame.LookVector.Z)
+                    local tu = Vector3.new(offv.X, 0, offv.Z)
+                    local bodyDot = (bl.Magnitude > 0.1 and tu.Magnitude > 0.1) and bl.Unit:Dot(tu.Unit) or -1
+                    plog("RAYGATE", id, (" | garis meleset %.1fm (toleransi %.1f) | sepanjang garis %.1fm | badan dot %.2f | closing %.1f (min %.1f) | di <=4m sejak %s | ->"):format(miss, P2.rayTol, along, bodyDot, closing2, P2.closeMin, cs and ("%.2fs"):format(os.clock() - cs) or "-"), bad and "SKIP" or "ok")
                     if bad then
                         P2.why, P2.whyT = (" garis bidik killer meleset %.1fm dari kita (toleransi %.1f)"):format(miss, P2.rayTol), os.clock()
                         P2.whyK, P2.whyKT = P2.why, P2.whyT
