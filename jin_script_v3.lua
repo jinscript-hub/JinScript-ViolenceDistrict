@@ -615,20 +615,20 @@ local function groundAt(p, fy)
     if r and r.Normal.Y > 0.6 then return r.Position + Vector3.new(0, 0.12, 0) end
     return Vector3.new(p.X, fy + 0.12, p.Z)
 end
-local coneT, coneKs, coneSelfK = 0, {}, false
+local coneC = {t = 0, ks = {}, selfK = false}
 local function updateCone()
     if S.lobby or not (S.cone.on or S.cone.line or S.cone.body) then coneFolder.Parent = nil return end
     local now = os.clock()
-    if now - coneT > 0.15 then
-        coneT = now
-        coneSelfK = roleOf(lp) == "killer"
-        coneKs = getKillers()
+    if now - coneC.t > 0.15 then
+        coneC.t = now
+        coneC.selfK = roleOf(lp) == "killer"
+        coneC.ks = getKillers()
         local ex = {coneFolder}
         for _, p in ipairs(Players:GetPlayers()) do if p.Character then ex[#ex + 1] = p.Character end end
         coneRP.FilterDescendantsInstances = ex
     end
-    local k = coneKs[1]
-    if coneSelfK or not (k and k.hrp.Parent) then coneFolder.Parent = nil return end
+    local k = coneC.ks[1]
+    if coneC.selfK or not (k and k.hrp.Parent) then coneFolder.Parent = nil return end
     local cl = k.char:GetAttribute("CamLook")
     local look = (typeof(cl) == "Vector3") and cl or k.hrp.CFrame.LookVector
     look = Vector3.new(look.X, 0, look.Z)
@@ -877,8 +877,10 @@ end
 local function tw(o, t, p, style, dir)
     TS:Create(o, TweenInfo.new(t, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out), p):Play()
 end
+local fadeIn
+do
 local origT = setmetatable({}, {__mode = "k"})
-local function fadeIn(root, dur)
+fadeIn = function(root, dur)
     local list = {root}
     for _, d in ipairs(root:GetDescendants()) do list[#list + 1] = d end
     for _, o in ipairs(list) do
@@ -904,6 +906,7 @@ local function fadeIn(root, dur)
             if next(goal) then tw(o, dur or 0.16, goal) end
         end
     end
+end
 end
 local function hover(btn, normal, over)
     track(btn.MouseEnter:Connect(function() tw(btn, 0.12, {BackgroundColor3 = over}) end))
@@ -1216,6 +1219,7 @@ else
 end
 draggable(fab, fab, function() setOpen(not isOpen) end)
 end
+do
 local notifs = {}
 local function layoutNotifs()
     for i, n in ipairs(notifs) do
@@ -1243,6 +1247,7 @@ notify = function(t, c)
         task.wait(0.3)
         pcall(function() f:Destroy() end)
     end)
+end
 end
 local Tab, Card = {}, {}
 Tab.__index = Tab
