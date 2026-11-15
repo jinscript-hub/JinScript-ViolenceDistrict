@@ -89,7 +89,8 @@ local S = {
     sc = {enabled = true, mode = "Perfect"},
     fov = {on = false, val = 70},
     fb = {on = false, bright = 2},
-    al = {particles = false, post = false, shadows = false, quality = false},
+    al = {particles = false, post = false, shadows = false, quality = false, sky = false, tex = false, white = false, grass = false, trees = false, lights = false, perf = false},
+    ar = {on = false, ratio = 0.75},
 }
 for _, c in ipairs(CATS) do
     S.cat[c.key] = {on = c.on, color = Color3.fromRGB(c.color[1], c.color[2], c.color[3])}
@@ -2737,12 +2738,266 @@ do local function parryInit()
         end)
     end))
 end parryInit() end
+local AL2 = {}
+do
+    local Terrain = workspace:FindFirstChildOfClass("Terrain")
+    local flags = S.al
+    local orig = setmetatable({}, {__mode = "k"})
+    local held = {sky = {}, surf = {}}
+    local charSet = setmetatable({}, {__mode = "k"})
+    local gsave = {}
+    local sweepId = 0
+    local WHITE3 = Color3.new(1, 1, 1)
+    local VEG_GRASS = {"grass", "rumput", "weed", "fern", "flower", "bunga"}
+    local VEG_TREE = {"tree", "leaf", "leaves", "foliage", "bush", "pohon", "daun", "palm", "branch", "canopy", "shrub", "hedge"}
+    local MATS = {}
+    for _, n in ipairs({"Grass", "Sand", "Rock", "Slate", "Mud", "Ground", "Concrete", "Pavement", "Asphalt", "Cobblestone", "Brick",
+        "Basalt", "Salt", "Ice", "Snow", "Glacier", "LeafyGrass", "Limestone", "Sandstone", "WoodPlanks", "CrackedLava"}) do
+        local ok, m = pcall(function() return Enum.Material[n] end)
+        if ok and m then MATS[#MATS + 1] = m end
+    end
+    local function anyOn()
+        return flags.sky or flags.tex or flags.white or flags.grass or flags.trees or flags.lights or flags.perf
+    end
+    local function skip(i)
+        local p = i
+        while p and p ~= workspace do
+            if charSet[p] or p == espFolder or p == coneFolder then return true end
+            p = p.Parent
+        end
+        local cam = workspace.CurrentCamera
+        return cam ~= nil and i:IsDescendantOf(cam)
+    end
+    local function save(i, prop)
+        local o = orig[i]
+        if not o then o = {} orig[i] = o end
+        if o[prop] == nil then o[prop] = i[prop] end
+    end
+    local function nameHas(n, list)
+        n = string.lower(n)
+        for _, w in ipairs(list) do
+            if string.find(n, "%f[%a]" .. w) then return true end
+        end
+        return false
+    end
+    local function vegMatch(i, list)
+        local p, depth = i, 0
+        while p and p ~= workspace and depth < 4 do
+            if nameHas(p.Name, list) then return true end
+            p = p.Parent
+            depth = depth + 1
+        end
+        return false
+    end
+    local function applyOne(i)
+        if not anyOn() then return end
+        local cn = i.ClassName
+        if cn == "Sky" or cn == "Atmosphere" or cn == "Clouds" then
+            if flags.sky and i.Name ~= "JinBlankSky" then
+                held.sky[#held.sky + 1] = {inst = i, parent = i.Parent}
+                i.Parent = nil
+            end
+            return
+        end
+        if i:IsA("BasePart") then
+            if i == Terrain then return end
+            if not (flags.white or flags.perf or flags.tex or flags.grass or flags.trees) then return end
+            if skip(i) then return end
+            if flags.white then
+                save(i, "Color") save(i, "Material") save(i, "Reflectance")
+                i.Color = WHITE3
+                i.Material = Enum.Material.SmoothPlastic
+                i.Reflectance = 0
+            end
+            local hide = (flags.grass and vegMatch(i, VEG_GRASS)) or (flags.trees and vegMatch(i, VEG_TREE))
+            if hide then save(i, "Transparency") i.Transparency = 1 end
+            if flags.perf or hide then save(i, "CastShadow") i.CastShadow = false end
+            if flags.perf and i:IsA("MeshPart") then
+                save(i, "RenderFidelity")
+                i.RenderFidelity = Enum.RenderFidelity.Performance
+            end
+            if flags.tex and i:IsA("MeshPart") and i.TextureID ~= "" then
+                save(i, "TextureID")
+                i.TextureID = ""
+            end
+        elseif i:IsA("Decal") then
+            if flags.tex and not skip(i) then save(i, "Transparency") i.Transparency = 1 end
+        elseif cn == "SurfaceAppearance" then
+            if flags.tex and not skip(i) then
+                held.surf[#held.surf + 1] = {inst = i, parent = i.Parent}
+                i.Parent = nil
+            end
+        elseif cn == "SpecialMesh" then
+            if flags.tex and i.TextureId ~= "" and not skip(i) then save(i, "TextureId") i.TextureId = "" end
+        elseif cn == "PointLight" or cn == "SpotLight" or cn == "SurfaceLight" then
+            if flags.lights and i.Enabled and not skip(i) then save(i, "Enabled") i.Enabled = false end
+        end
+    end
+    local function restoreProps(props, filter)
+        local list = {}
+        for inst in pairs(orig) do list[#list + 1] = inst end
+        task.spawn(function()
+            for idx, inst in ipairs(list) do
+                local o = orig[inst]
+                if o and inst.Parent and (not filter or filter(inst)) then
+                    for _, pr in ipairs(props) do
+                        if o[pr] ~= nil then
+                            pcall(function() inst[pr] = o[pr] end)
+                            o[pr] = nil
+                        end
+                    end
+                end
+                if idx % 400 == 0 then task.wait() end
+            end
+        end)
+    end
+    local function heldRestore(kind)
+        local list = held[kind]
+        held[kind] = {}
+        for _, h in ipairs(list) do
+            if h.parent and h.parent.Parent then pcall(function() h.inst.Parent = h.parent end) end
+        end
+    end
+    local WATER = {"WaterWaveSize", "WaterWaveSpeed", "WaterReflectance"}
+    local function applyGlobal()
+        if Terrain then
+            if flags.grass then
+                if gsave.decor == nil then pcall(function() gsave.decor = Terrain.Decoration end) end
+                pcall(function() Terrain.Decoration = false end)
+                pcall(function() if sethiddenproperty then sethiddenproperty(Terrain, "Decoration", false) end end)
+            elseif gsave.decor ~= nil then
+                local d = gsave.decor
+                gsave.decor = nil
+                pcall(function() Terrain.Decoration = d end)
+            end
+            if flags.white then
+                if not gsave.tcol then
+                    gsave.tcol = {}
+                    for _, m in ipairs(MATS) do pcall(function() gsave.tcol[m] = Terrain:GetMaterialColor(m) end) end
+                end
+                for _, m in ipairs(MATS) do pcall(function() Terrain:SetMaterialColor(m, WHITE3) end) end
+            elseif gsave.tcol then
+                local t = gsave.tcol
+                gsave.tcol = nil
+                for m, c in pairs(t) do pcall(function() Terrain:SetMaterialColor(m, c) end) end
+            end
+            if flags.perf then
+                if not gsave.water then
+                    gsave.water = {}
+                    for _, pr in ipairs(WATER) do pcall(function() gsave.water[pr] = Terrain[pr] end) end
+                end
+                for _, pr in ipairs(WATER) do pcall(function() Terrain[pr] = 0 end) end
+            elseif gsave.water then
+                local w = gsave.water
+                gsave.water = nil
+                for pr, v in pairs(w) do pcall(function() Terrain[pr] = v end) end
+            end
+        end
+        if flags.sky then
+            if not (gsave.blank and gsave.blank.Parent) then
+                pcall(function()
+                    local sk = Instance.new("Sky")
+                    sk.Name = "JinBlankSky"
+                    sk.SkyboxBk, sk.SkyboxDn, sk.SkyboxFt, sk.SkyboxLf, sk.SkyboxRt, sk.SkyboxUp = "", "", "", "", "", ""
+                    sk.StarCount = 0
+                    sk.CelestialBodiesShown = false
+                    sk.Parent = Lighting
+                    gsave.blank = sk
+                end)
+            end
+        elseif gsave.blank then
+            pcall(function() gsave.blank:Destroy() end)
+            gsave.blank = nil
+        end
+    end
+    local function sweepAll()
+        sweepId = sweepId + 1
+        local my = sweepId
+        task.spawn(function()
+            for _, i in ipairs(Lighting:GetDescendants()) do pcall(applyOne, i) end
+            local list = workspace:GetDescendants()
+            for idx, i in ipairs(list) do
+                if not running or sweepId ~= my then return end
+                pcall(applyOne, i)
+                if idx % 400 == 0 then task.wait() end
+            end
+        end)
+    end
+    function AL2.set(name, v)
+        flags[name] = v and true or false
+        if v then
+            applyGlobal()
+            sweepAll()
+            return
+        end
+        if name == "white" then
+            restoreProps({"Color", "Material", "Reflectance"}, function(i) return i:IsA("BasePart") end)
+        elseif name == "perf" then
+            restoreProps({"RenderFidelity"})
+            if not (flags.grass or flags.trees) then restoreProps({"CastShadow"}) end
+        elseif name == "tex" then
+            restoreProps({"TextureID", "TextureId"})
+            restoreProps({"Transparency"}, function(i) return i:IsA("Decal") end)
+            heldRestore("surf")
+        elseif name == "grass" or name == "trees" then
+            restoreProps({"Transparency"}, function(i) return i:IsA("BasePart") end)
+            if not flags.perf then restoreProps({"CastShadow"}) end
+        elseif name == "lights" then
+            restoreProps({"Enabled"}, function(i) return string.find(i.ClassName, "Light") ~= nil end)
+        elseif name == "sky" then
+            heldRestore("sky")
+        end
+        applyGlobal()
+        if flags.grass or flags.trees or flags.perf or flags.white or flags.tex or flags.lights then task.delay(1.5, sweepAll) end
+    end
+    function AL2.restoreAll()
+        for _, n in ipairs({"sky", "tex", "white", "grass", "trees", "lights", "perf"}) do
+            if flags[n] then AL2.set(n, false) end
+        end
+        if AL2.fpsChanged and setfpscap then pcall(setfpscap, 60) end
+    end
+    track(workspace.DescendantAdded:Connect(function(i) if anyOn() then pcall(applyOne, i) end end))
+    track(Lighting.DescendantAdded:Connect(function(i) if flags.sky then pcall(applyOne, i) end end))
+    local function onChar(c)
+        charSet[c] = true
+        task.defer(function()
+            for _, i in ipairs(c:GetDescendants()) do
+                local o = orig[i]
+                if o then
+                    for pr, v in pairs(o) do pcall(function() i[pr] = v end) end
+                    orig[i] = nil
+                end
+            end
+        end)
+    end
+    for _, pl in ipairs(Players:GetPlayers()) do
+        track(pl.CharacterAdded:Connect(onChar))
+        if pl.Character then charSet[pl.Character] = true end
+    end
+    track(Players.PlayerAdded:Connect(function(pl) track(pl.CharacterAdded:Connect(onChar)) end))
+    task.spawn(function()
+        while running do
+            task.wait(2)
+            if flags.sky then
+                for _, c in ipairs(Lighting:GetChildren()) do pcall(applyOne, c) end
+                pcall(applyGlobal)
+            end
+        end
+    end)
+end
 local cView = tMisc:Group("View", 1)
 cView:Toggle("FOV_On", "Custom FOV", false, function(v)
     S.fov.on = v
     if not v then pcall(function() workspace.CurrentCamera.FieldOfView = 70 end) end
 end)
 cView:Slider("FOV_Val", "FOV", 30, 120, 70, 1, function(v) S.fov.val = v end)
+cView:Toggle("AR_On", "Rasio layar custom (stretch)", false, function(v) S.ar.on = v end)
+cView:Slider("AR_Val", "Rasio (kecil = gepeng melebar, besar = tinggi)", 0.3, 1.5, 0.75, 0.05, function(v) S.ar.ratio = v end)
+cView:Dropdown("AR_Tpl", "Template rasio", {"Pilih template", "Normal (1.00)", "Stretch ringan (0.85)", "4:3 stretch (0.75)", "Stretch sedang (0.65)", "Stretch berat (0.55)", "Gepeng banget (0.45)", "Tinggi / renggang (1.25)"}, "Pilih template", function(v)
+    local n = tonumber(string.match(tostring(v), "%(([%d%.]+)%)"))
+    local r = Reg["AR_Val"]
+    if n and r then r.set(n) end
+end)
 local cLight = tMisc:Group("Fullbright", 1)
 cLight:Toggle("FB_On", "Fullbright", false, function(v) S.fb.on = v if v then fbSave() else fbRestore() end end)
 cLight:Slider("FB_Bright", "Brightness", 1, 5, 2, 1, function(v) S.fb.bright = v end)
@@ -2754,6 +3009,28 @@ cAL:Toggle("AL_PostFX", "Matiin bloom / blur / DOF", false,
 cAL:Toggle("AL_Shadows", "Matiin shadow", false,
     function(v) S.al.shadows = v if v then shadowsSave() else shadowsRestore() end end)
 cAL:Toggle("AL_Quality", "Render quality terendah", false, function(v) S.al.quality = v setQuality(v) end)
+cAL:Toggle("AL_Sky", "Hapus skybox / atmosfer / awan (semua map)", false, function(v) AL2.set("sky", v) end)
+cAL:Toggle("AL_Tex", "Hapus tekstur (decal, texture, mesh texture)", false, function(v) AL2.set("tex", v) end)
+cAL:Toggle("AL_White", "Semua jadi putih (kecuali player)", false, function(v) AL2.set("white", v) end)
+cAL:Toggle("AL_Grass", "Hapus rumput", false, function(v) AL2.set("grass", v) end)
+cAL:Toggle("AL_Trees", "Hapus pohon & daun", false, function(v) AL2.set("trees", v) end)
+cAL:Toggle("AL_Lights", "Matiin lampu (Point / Spot / Surface)", false, function(v) AL2.set("lights", v) end)
+cAL:Toggle("AL_Perf", "Ringanin part (shadow off, mesh LOD rendah, air datar)", false, function(v) AL2.set("perf", v) end)
+cAL:Slider("AL_FPS", "FPS cap (0 = jangan ubah)", 0, 240, 0, 10, function(v)
+    if v > 0 and setfpscap then
+        AL2.fpsChanged = true
+        pcall(setfpscap, v)
+    end
+end)
+local AL_IDS = {"AL_Particles", "AL_PostFX", "AL_Shadows", "AL_Quality", "AL_Sky", "AL_Tex", "AL_White", "AL_Grass", "AL_Trees", "AL_Lights", "AL_Perf"}
+cAL:Button("SUPER ANTI LAG: nyalain semua", function()
+    for _, id in ipairs(AL_IDS) do local r = Reg[id] if r then r.set(true) end end
+    notify("Anti lag", "Semua nyala")
+end)
+cAL:Button("Matiin semua anti lag", function()
+    for _, id in ipairs(AL_IDS) do local r = Reg[id] if r then r.set(false) end end
+    notify("Anti lag", "Semua mati")
+end)
 do
     local cPred = tMisc:Group("Prediksi killer berikutnya", 2)
     local mlbl = cPred:Label("Map: nunggu pengumuman server...")
@@ -2835,11 +3112,19 @@ task.spawn(function()
         task.wait(1)
     end
 end)
+local arLast
 track(RS.RenderStepped:Connect(function(dt)
     pcall(updateCone)
     fpsAcc, fpsN = fpsAcc + dt, fpsN + 1
     local c = workspace.CurrentCamera
     if c and S.fov.on then c.FieldOfView = S.fov.val end
+    if c and S.ar.on then
+        local cf = c.CFrame
+        if cf ~= arLast then
+            arLast = cf * CFrame.new(0, 0, 0, 1, 0, 0, 0, S.ar.ratio, 0, 0, 0, 1)
+            c.CFrame = arLast
+        end
+    end
     if S.fb.on then fbApply() end
     if S.al.shadows or S.fb.on then Lighting.GlobalShadows = false end
 end))
@@ -2866,6 +3151,7 @@ function cleanup()
     S.fb.on, S.al.shadows = false, false
     pcall(fbRestore) pcall(shadowsRestore) pcall(particlesRestore) pcall(postRestore)
     pcall(setQuality, false)
+    pcall(AL2.restoreAll)
     pcall(function() workspace.CurrentCamera.FieldOfView = 70 end)
     pcall(function() gui:Destroy() end)
     getgenv().JinHub = nil
