@@ -92,6 +92,8 @@ local S = {
     al = {particles = false, post = false, shadows = false, quality = false, sky = false, tex = false, white = false, grass = false, trees = false, lights = false, perf = false},
     ar = {on = false, ratio = 0.75},
 }
+local roleOf, isSpectator, found, classify, getKillers, survivorState, espFolder, pvis, ovis, selfBB, destroyPlayerVis, destroyObj, update, coneFolder, updateCone, scUnbind, scBind, fbSave, fbApply, fbRestore, shadowsSave, shadowsRestore
+do
 for _, c in ipairs(CATS) do
     S.cat[c.key] = {on = c.on, color = Color3.fromRGB(c.color[1], c.color[2], c.color[3])}
 end
@@ -110,7 +112,7 @@ local function attrRole(inst)
     end
     return nil
 end
-local function roleOf(plr)
+function roleOf(plr)
     if plr.Team then
         local t = plr.Team.Name:lower()
         if t:find("killer") or t:find("slasher") then return "killer" end
@@ -126,7 +128,7 @@ local function specWord(str)
     end
     return false
 end
-local function isSpectator(plr)
+function isSpectator(plr)
     if plr.Team and specWord(plr.Team.Name) then return true end
     local ch = plr.Character
     for _, inst in ipairs({plr, ch}) do
@@ -158,7 +160,7 @@ local MATCH = {
         return n:find("pumpkin") ~= nil or n:find("labu") ~= nil
     end,
 }
-local found = {}
+found = {}
 for cat in pairs(MATCH) do found[cat] = {} end
 local function topmost(cat, i)
     local p = i.Parent
@@ -172,7 +174,7 @@ local function inCharacter(i)
     end
     return false
 end
-local function classify(i)
+function classify(i)
     local n = i.Name:lower()
     if not (n:find("generator") or n:find("window") or n:find("pallet") or n:find("hook") or n:find("pumpkin") or n:find("labu") or n:find("gate") or n:find("exit") or n:find("escape")) then return end
     for cat, f in pairs(MATCH) do
@@ -239,7 +241,7 @@ local function scanAnims(hum, st)
 end
 local chaseRP = RaycastParams.new()
 chaseRP.FilterType = Enum.RaycastFilterType.Exclude
-local function getKillers()
+function getKillers()
     local list = {}
     for _, p in ipairs(Players:GetPlayers()) do
         if roleOf(p) == "killer" then
@@ -261,7 +263,7 @@ local function nearHook(pos)
     end
     return false, have
 end
-local function survivorState(plr, char, hum, hrp, killers)
+function survivorState(plr, char, hum, hrp, killers)
     local st = {}
     scanObj(plr, st)
     scanObj(char, st)
@@ -288,10 +290,10 @@ local function survivorState(plr, char, hum, hrp, killers)
     elseif hum.Health < hum.MaxHealth - 0.5 then key = "injured" end
     return key, st.chased and true or false
 end
-local espFolder = Instance.new("Folder")
+espFolder = Instance.new("Folder")
 espFolder.Name = "JinESP"
 attach(espFolder)
-local pvis, ovis, selfBB = {}, {}, {}
+pvis, ovis, selfBB = {}, {}, {}
 local function makeBB(part, offsetY, h)
     local bb = Instance.new("BillboardGui")
     bb.Size = UDim2.fromOffset(200, h or 24)
@@ -311,11 +313,11 @@ local function setLabel(bb, lbl, text, color, size)
     lbl.Text, lbl.TextColor3, lbl.TextSize = text, color, size
     bb.Enabled = text ~= ""
 end
-local function destroyPlayerVis(plr)
+function destroyPlayerVis(plr)
     local v = pvis[plr]
     if v then pcall(function() v.hl:Destroy() v.nameBB:Destroy() v.distBB:Destroy() end) pvis[plr] = nil end
 end
-local function destroyObj(inst)
+function destroyObj(inst)
     local o = ovis[inst]
     if o then
         pcall(function()
@@ -447,7 +449,7 @@ local function palletDown(inst)
     if v == nil then palCache[inst] = nil return false end
     return v == true
 end
-local function update()
+function update()
     local lc = lp.Character
     local lhrp = lc and lc:FindFirstChild("HumanoidRootPart")
     local maxD = S.maxDist > 0 and S.maxDist or math.huge
@@ -562,7 +564,7 @@ local function update()
     end
 end
 local CONE_N = 12
-local coneFolder = Instance.new("Folder")
+coneFolder = Instance.new("Folder")
 coneFolder.Name = tostring(math.random(1000000, 9999999))
 local coneW = {}
 for i = 1, CONE_N * 2 do
@@ -616,7 +618,7 @@ local function groundAt(p, fy)
     return Vector3.new(p.X, fy + 0.12, p.Z)
 end
 local coneC = {t = 0, ks = {}, selfK = false}
-local function updateCone()
+function updateCone()
     if S.lobby or not (S.cone.on or S.cone.line or S.cone.body) then coneFolder.Parent = nil return end
     local now = os.clock()
     if now - coneC.t > 0.15 then
@@ -725,11 +727,11 @@ local function arm()
         if running and S.sc.enabled and C.Visible and G.Rotation ~= handled then arm() end
     end)
 end
-local function scUnbind()
+function scUnbind()
     for _, c in ipairs(scBound) do pcall(function() c:Disconnect() end) end
     scBound = {}
 end
-local function scBind()
+function scBind()
     local g = pg:FindFirstChild("SkillCheckPromptGui")
     local c = g and g:FindFirstChild("Check")
     local l = c and c:FindFirstChild("Line")
@@ -746,7 +748,7 @@ local function scBind()
     scBound[#scBound + 1] = Goal:GetPropertyChangedSignal("Rotation"):Connect(function() if Check.Visible then arm() end end)
 end
 local fbOrig
-local function fbSave()
+function fbSave()
     if fbOrig then return end
     local atm = Lighting:FindFirstChildOfClass("Atmosphere")
     fbOrig = {
@@ -755,7 +757,7 @@ local function fbSave()
         OutdoorAmbient = Lighting.OutdoorAmbient, atm = atm, Density = atm and atm.Density, Haze = atm and atm.Haze,
     }
 end
-local function fbApply()
+function fbApply()
     Lighting.Brightness = S.fb.bright
     Lighting.ClockTime = 14
     Lighting.FogStart = 0
@@ -766,7 +768,7 @@ local function fbApply()
     local atm = Lighting:FindFirstChildOfClass("Atmosphere")
     if atm then atm.Density = 0 atm.Haze = 0 end
 end
-local function fbRestore()
+function fbRestore()
     local o = fbOrig
     if not o then return end
     fbOrig = nil
@@ -779,15 +781,16 @@ local function fbRestore()
     end)
 end
 local shadowOrig
-local function shadowsSave()
+function shadowsSave()
     if shadowOrig ~= nil then return end
     if fbOrig then shadowOrig = fbOrig.GlobalShadows else shadowOrig = Lighting.GlobalShadows end
 end
-local function shadowsRestore()
+function shadowsRestore()
     if shadowOrig ~= nil then
         if not S.fb.on then Lighting.GlobalShadows = shadowOrig end
         shadowOrig = nil
     end
+end
 end
 local FX = {ParticleEmitter = 1, Trail = 1, Beam = 1, Smoke = 1, Fire = 1, Sparkles = 1}
 local fxOff = {}
@@ -808,9 +811,11 @@ local function particlesRestore()
     for i in pairs(fxOff) do if i.Parent then pcall(function() i.Enabled = true end) end end
     fxOff = {}
 end
+local postSweep, postRestore, setQuality, Reg, CFG_FILE, loading, dirty, loadConfig, gui, HEAD, PADL, PADR, curSize, curRatio, isOpen, setOpen, applyLayout, tabHolder, content, selectTab, tHome, tKill, tMisc, tSet, curFps, refreshDash
+do
 local POST = {BloomEffect = 1, BlurEffect = 1, ColorCorrectionEffect = 1, DepthOfFieldEffect = 1, SunRaysEffect = 1}
 local postOff = {}
-local function postSweep()
+function postSweep()
     for _, root in ipairs({Lighting, workspace.CurrentCamera}) do
         if root then
             for _, e in ipairs(root:GetChildren()) do
@@ -819,12 +824,12 @@ local function postSweep()
         end
     end
 end
-local function postRestore()
+function postRestore()
     for e in pairs(postOff) do if e.Parent then pcall(function() e.Enabled = true end) end end
     postOff = {}
 end
 local origQuality
-local function setQuality(low)
+function setQuality(low)
     pcall(function()
         local r = settings().Rendering
         if low then
@@ -1063,9 +1068,9 @@ local function mkIcon(parent, name, color, px)
     end
     return icon
 end
-local Reg = {}
-local CFG_FILE = "jin_config.json"
-local loading, dirty = true, false
+Reg = {}
+CFG_FILE = "jin_config.json"
+loading, dirty = true, false
 local function saveConfig()
     if not writefile then return end
     local data = {}
@@ -1080,7 +1085,7 @@ local function touch()
         if running then saveConfig() end
     end)
 end
-local function loadConfig()
+function loadConfig()
     local p = findFile(CFG_FILE)
     if not (p and readfile) then return end
     local ok, data = pcall(function() return HttpService:JSONDecode(readfile(p)) end)
@@ -1090,7 +1095,6 @@ local function loadConfig()
         end
     end
 end
-local gui, HEAD, PADL, PADR, curSize, curRatio, isOpen, setOpen, applyLayout, tabHolder, content
 do
 gui = Instance.new("ScreenGui")
 gui.Name = "JinScript"
@@ -1253,7 +1257,7 @@ local Tab, Card = {}, {}
 Tab.__index = Tab
 Card.__index = Card
 local tabList = {}
-local function selectTab(t)
+function selectTab(t)
     for _, o in ipairs(tabList) do
         local sel = (o == t)
         o.sel = sel
@@ -1558,13 +1562,12 @@ function Card:Label(txt)
     l.LayoutOrder = self:nextOrder()
     return l
 end
-local tHome = addTab("Dashboard", "home", true)
+tHome = addTab("Dashboard", "home", true)
 local tSurv = addTab("Survivor", "user")
-local tKill = addTab("Killer", "blade")
+tKill = addTab("Killer", "blade")
 local tESP = addTab("ESP", "eye")
-local tMisc = addTab("Misc", "sliders")
-local tSet = addTab("Settings", "gear")
-local curFps, refreshDash
+tMisc = addTab("Misc", "sliders")
+tSet = addTab("Settings", "gear")
 do
 local homeCol = tHome.cols[1]
 local selectedUid = lp.UserId
@@ -2911,6 +2914,8 @@ do local function parryInit()
         end)
     end))
 end parryInit() end
+end
+do
 local AL2 = {}
 do
     local Terrain = workspace:FindFirstChildOfClass("Terrain")
@@ -3390,6 +3395,7 @@ function cleanup()
     getgenv().JinHub = nil
 end
 getgenv().JinHub = {Unload = cleanup, Refresh = refreshDash}
+end
 loadConfig()
 loading = false
 pcall(refreshDash)
