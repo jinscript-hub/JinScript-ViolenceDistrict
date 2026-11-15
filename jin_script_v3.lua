@@ -615,14 +615,20 @@ local function groundAt(p, fy)
     if r and r.Normal.Y > 0.6 then return r.Position + Vector3.new(0, 0.12, 0) end
     return Vector3.new(p.X, fy + 0.12, p.Z)
 end
+local coneT, coneKs, coneSelfK = 0, {}, false
 local function updateCone()
-    if S.lobby or not (S.cone.on or S.cone.line or S.cone.body) or roleOf(lp) == "killer" then coneFolder.Parent = nil return end
-    local ks = getKillers()
-    local k = ks[1]
-    if not k then coneFolder.Parent = nil return end
-    local ex = {coneFolder}
-    for _, p in ipairs(Players:GetPlayers()) do if p.Character then ex[#ex + 1] = p.Character end end
-    coneRP.FilterDescendantsInstances = ex
+    if S.lobby or not (S.cone.on or S.cone.line or S.cone.body) then coneFolder.Parent = nil return end
+    local now = os.clock()
+    if now - coneT > 0.15 then
+        coneT = now
+        coneSelfK = roleOf(lp) == "killer"
+        coneKs = getKillers()
+        local ex = {coneFolder}
+        for _, p in ipairs(Players:GetPlayers()) do if p.Character then ex[#ex + 1] = p.Character end end
+        coneRP.FilterDescendantsInstances = ex
+    end
+    local k = coneKs[1]
+    if coneSelfK or not (k and k.hrp.Parent) then coneFolder.Parent = nil return end
     local cl = k.char:GetAttribute("CamLook")
     local look = (typeof(cl) == "Vector3") and cl or k.hrp.CFrame.LookVector
     look = Vector3.new(look.X, 0, look.Z)
@@ -868,8 +874,36 @@ local function mkLabel(parent, txt, size, color, font, align)
     return new("TextLabel", {BackgroundTransparency = 1, Text = txt, TextSize = size or 12, TextColor3 = color or T.text,
         Font = font or F_MED, TextXAlignment = align or LEFT}, parent)
 end
-local function tw(o, t, p)
-    TS:Create(o, TweenInfo.new(t, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), p):Play()
+local function tw(o, t, p, style, dir)
+    TS:Create(o, TweenInfo.new(t, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out), p):Play()
+end
+local origT = setmetatable({}, {__mode = "k"})
+local function fadeIn(root, dur)
+    local list = {root}
+    for _, d in ipairs(root:GetDescendants()) do list[#list + 1] = d end
+    for _, o in ipairs(list) do
+        local props
+        if o:IsA("GuiObject") then
+            props = {"BackgroundTransparency"}
+            if o:IsA("TextLabel") or o:IsA("TextButton") then props[#props + 1] = "TextTransparency" end
+            if o:IsA("ImageLabel") or o:IsA("ImageButton") then props[#props + 1] = "ImageTransparency" end
+        elseif o:IsA("UIStroke") then
+            props = {"Transparency"}
+        end
+        if props then
+            local rec = origT[o]
+            if not rec then
+                rec = {}
+                for _, k in ipairs(props) do rec[k] = o[k] end
+                origT[o] = rec
+            end
+            local goal = {}
+            for _, k in ipairs(props) do
+                if rec[k] < 1 then o[k] = 1 goal[k] = rec[k] end
+            end
+            if next(goal) then tw(o, dur or 0.16, goal) end
+        end
+    end
 end
 local function hover(btn, normal, over)
     track(btn.MouseEnter:Connect(function() tw(btn, 0.12, {BackgroundColor3 = over}) end))
@@ -1005,6 +1039,13 @@ local function mkIcon(parent, name, color, px)
     elseif name == "down" then
         shape(5.2, 7, 7.5, 2, 45)
         shape(10.8, 7, 7.5, 2, -45)
+    elseif name == "user" then
+        shape(8, 4.8, 5.5, 5.5, 0, true)
+        shape(8, 12.2, 11, 5.5, 0, true)
+    elseif name == "blade" then
+        shape(10, 6, 2.2, 9, 45)
+        shape(6.8, 9.2, 7, 2, 45)
+        shape(4.6, 11.4, 2.2, 4, 45)
     end
     local icon = {box = box}
     function icon:Set(c)
@@ -1082,8 +1123,8 @@ function setOpen(v)
     isOpen = v
     if v then
         main.Visible = true
-        uiScale.Scale = layoutScale() * 0.94
-        tw(uiScale, 0.18, {Scale = layoutScale()})
+        uiScale.Scale = layoutScale() * 0.9
+        tw(uiScale, 0.28, {Scale = layoutScale()}, Enum.EasingStyle.Back)
     else
         tw(uiScale, 0.12, {Scale = layoutScale() * 0.94})
         task.delay(0.12, function() if not isOpen and main then main.Visible = false end end)
@@ -1119,7 +1160,7 @@ local header = new("Frame", {Size = UDim2.new(1, 0, 0, HEAD), BackgroundTranspar
 new("Frame", {Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = T.stroke, BorderSizePixel = 0}, header)
 local ttl = mkLabel(header, "JÌN SCRIPT", 12, T.text, F_BOLD)
 ttl.Position = UDim2.fromOffset(14, 0); ttl.Size = UDim2.fromOffset(78, HEAD - 1)
-local ver = mkLabel(header, "v3.3", 10, T.dim)
+local ver = mkLabel(header, "v3.4", 10, T.dim)
 ver.Position = UDim2.fromOffset(92, 1); ver.Size = UDim2.fromOffset(30, HEAD - 1)
 local closeBtn = new("TextButton", {Size = UDim2.fromOffset(24, 24), AnchorPoint = Vector2.new(1, 0.5),
     Position = UDim2.new(1, -8, 0.5, -1), BackgroundTransparency = 1, Text = "", AutoButtonColor = false}, header)
@@ -1175,6 +1216,12 @@ else
 end
 draggable(fab, fab, function() setOpen(not isOpen) end)
 end
+local notifs = {}
+local function layoutNotifs()
+    for i, n in ipairs(notifs) do
+        tw(n, 0.3, {Position = UDim2.new(0.5, 0, 0, 16 + (i - 1) * 48)}, Enum.EasingStyle.Quint)
+    end
+end
 notify = function(t, c)
     local f = new("Frame", {Size = UDim2.fromOffset(240, 42), AnchorPoint = Vector2.new(0.5, 0),
         Position = UDim2.new(0.5, 0, 0, -56), BackgroundColor3 = T.card, BorderSizePixel = 0}, gui)
@@ -1186,9 +1233,13 @@ notify = function(t, c)
     local b = mkLabel(f, c or "", 11, T.dim)
     b.Position = UDim2.fromOffset(14, 22); b.Size = UDim2.new(1, -28, 0, 14)
     b.TextTruncate = Enum.TextTruncate.AtEnd
-    tw(f, 0.3, {Position = UDim2.new(0.5, 0, 0, 16)})
+    notifs[#notifs + 1] = f
+    layoutNotifs()
     task.delay(2.3, function()
-        if f.Parent then tw(f, 0.25, {Position = UDim2.new(0.5, 0, 0, -56)}) end
+        local idx = table.find(notifs, f)
+        if idx then table.remove(notifs, idx) end
+        if f.Parent then tw(f, 0.25, {Position = UDim2.new(0.5, 0, 0, -56)}, Enum.EasingStyle.Quint, Enum.EasingDirection.In) end
+        layoutNotifs()
         task.wait(0.3)
         pcall(function() f:Destroy() end)
     end)
@@ -1200,10 +1251,21 @@ local tabList = {}
 local function selectTab(t)
     for _, o in ipairs(tabList) do
         local sel = (o == t)
-        o.page.Visible = sel
-        tw(o.btn, 0.15, {BackgroundTransparency = sel and 0 or 1})
-        o.ic:Tween(sel and T.text or T.dim, 0.15)
-        tw(o.bar, 0.15, {BackgroundTransparency = sel and 0 or 1})
+        o.sel = sel
+        if sel and not o.page.Visible then
+            o.page.Position = UDim2.fromOffset(0, HEAD + 10)
+            o.page.Visible = true
+            tw(o.page, 0.3, {Position = UDim2.fromOffset(0, HEAD)}, Enum.EasingStyle.Quint)
+        elseif not sel then
+            o.page.Visible = false
+        end
+        tw(o.btn, 0.18, {BackgroundTransparency = sel and 0 or 1})
+        o.ic:Tween(sel and T.text or T.dim, 0.18)
+        tw(o.bar, 0.24, {
+            BackgroundTransparency = sel and 0 or 1,
+            Size = sel and UDim2.fromOffset(2, 16) or UDim2.fromOffset(2, 6),
+            Position = sel and UDim2.new(0, -5, 0.5, -8) or UDim2.new(0, -5, 0.5, -3),
+        }, Enum.EasingStyle.Quint)
     end
 end
 local function addTab(name, iconKey, single)
@@ -1212,7 +1274,7 @@ local function addTab(name, iconKey, single)
     round(btn, 8)
     local ic = mkIcon(btn, iconKey, T.dim, 16)
     ic.box.Position = UDim2.new(0.5, 0, 0.5, 0)
-    local bar = new("Frame", {Size = UDim2.fromOffset(2, 16), Position = UDim2.new(0, -5, 0.5, -8),
+    local bar = new("Frame", {Size = UDim2.fromOffset(2, 6), Position = UDim2.new(0, -5, 0.5, -3),
         BackgroundColor3 = WHITE, BackgroundTransparency = 1, BorderSizePixel = 0}, btn)
     round(bar, 1)
     local page = new("Frame", {Size = UDim2.new(1, 0, 1, -HEAD), Position = UDim2.fromOffset(0, HEAD),
@@ -1244,6 +1306,8 @@ local function addTab(name, iconKey, single)
         cols = colList, nextCol = 1}, Tab)
     tabList[#tabList + 1] = t
     track(btn.MouseButton1Click:Connect(function() selectTab(t) end))
+    track(btn.MouseEnter:Connect(function() if not t.sel then tw(btn, 0.12, {BackgroundTransparency = 0.6}) end end))
+    track(btn.MouseLeave:Connect(function() if not t.sel then tw(btn, 0.15, {BackgroundTransparency = 1}) end end))
     return t
 end
 local function sectionLabel(parent, text, order)
@@ -1272,8 +1336,15 @@ end
 function Tab:SelectSub(sub)
     for _, o in ipairs(self.subs) do
         local sel = (o == sub)
-        o.frame.Visible = sel
-        tw(o.btn, 0.15, {BackgroundTransparency = sel and 0 or 1, TextColor3 = sel and T.text or T.dim})
+        o.sel = sel
+        if sel and not o.frame.Visible then
+            o.frame.Position = UDim2.fromOffset(0, 10)
+            o.frame.Visible = true
+            tw(o.frame, 0.28, {Position = UDim2.new()}, Enum.EasingStyle.Quint)
+        elseif not sel then
+            o.frame.Visible = false
+        end
+        tw(o.btn, 0.18, {BackgroundTransparency = sel and 0 or 1, TextColor3 = sel and T.text or T.dim})
     end
     self.scroll.CanvasPosition = Vector2.new(0, 0)
 end
@@ -1299,6 +1370,8 @@ function Tab:Sub(name)
     self.subs[#self.subs + 1] = sub
     local owner = self
     track(btn.MouseButton1Click:Connect(function() owner:SelectSub(sub) end))
+    track(btn.MouseEnter:Connect(function() if not sub.sel then tw(btn, 0.12, {BackgroundTransparency = 0.6}) end end))
+    track(btn.MouseLeave:Connect(function() if not sub.sel then tw(btn, 0.15, {BackgroundTransparency = 1}) end end))
     if #self.subs == 1 then self:SelectSub(sub) end
     return sub
 end
@@ -1325,11 +1398,11 @@ function Card:Toggle(id, txt, default, cb, color)
     local hit = new("TextButton", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = "", ZIndex = 2}, row)
     local function set(v, silent)
         state = v and true or false
-        tw(sw, 0.16, {BackgroundColor3 = state and WHITE or T.off})
-        tw(knob, 0.16, {
+        tw(sw, 0.22, {BackgroundColor3 = state and WHITE or T.off}, Enum.EasingStyle.Quint)
+        tw(knob, 0.22, {
             Position = state and UDim2.new(1, -16, 0.5, -7) or UDim2.new(0, 2, 0.5, -7),
             BackgroundColor3 = state and KNOB_ON or KNOB_OFF,
-        })
+        }, Enum.EasingStyle.Quint)
         if not silent then cb(state) touch() end
     end
     track(hit.MouseButton1Click:Connect(function() set(not state) end))
@@ -1368,7 +1441,10 @@ function Card:Toggle(id, txt, default, cb, color)
             local p = math.clamp((x - hue.AbsolutePosition.X) / hue.AbsoluteSize.X, 0, 1)
             setColor(Color3.fromHSV(p, 1, 1))
         end)
-        track(dot.MouseButton1Click:Connect(function() pop.Visible = not pop.Visible end))
+        track(dot.MouseButton1Click:Connect(function()
+            pop.Visible = not pop.Visible
+            if pop.Visible then fadeIn(pop, 0.18) end
+        end))
         Reg[color.id] = {
             get = function() return {math.floor(col.R * 255 + 0.5), math.floor(col.G * 255 + 0.5), math.floor(col.B * 255 + 0.5)} end,
             set = function(v) if type(v) == "table" and #v == 3 then setColor(Color3.fromRGB(v[1], v[2], v[3])) end end,
@@ -1389,13 +1465,18 @@ function Card:Slider(id, txt, min, max, default, step, cb, suffix)
     grad(fill, T.acc0, T.acc1, 0)
     local knob = new("Frame", {Size = UDim2.fromOffset(12, 12), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0, 0, 0.5, 0),
         BackgroundColor3 = WHITE, BorderSizePixel = 0}, bar)
-    round(knob, 6)
+    new("UICorner", {CornerRadius = UDim.new(0.5, 0)}, knob)
     local hit = new("TextButton", {Size = UDim2.new(1, 0, 0, 26), Position = UDim2.fromOffset(0, 16), BackgroundTransparency = 1, Text = "", ZIndex = 2}, row)
     local value = default
-    local function render()
+    local function render(instant)
         local p = (value - min) / (max - min)
-        fill.Size = UDim2.new(p, 0, 1, 0)
-        knob.Position = UDim2.new(p, 0, 0.5, 0)
+        if instant then
+            fill.Size = UDim2.new(p, 0, 1, 0)
+            knob.Position = UDim2.new(p, 0, 0.5, 0)
+        else
+            tw(fill, 0.09, {Size = UDim2.new(p, 0, 1, 0)})
+            tw(knob, 0.09, {Position = UDim2.new(p, 0, 0.5, 0)})
+        end
         val.Text = tostring(value) .. (suffix or "")
     end
     local function set(v, silent)
@@ -1405,11 +1486,13 @@ function Card:Slider(id, txt, min, max, default, step, cb, suffix)
         render()
         if not silent then cb(v) touch() end
     end
-    render()
+    render(true)
     dragBar(hit, self.tab.scroll, function(x)
         local p = math.clamp((x - bar.AbsolutePosition.X) / bar.AbsoluteSize.X, 0, 1)
         set(min + p * (max - min))
     end)
+    track(hit.MouseEnter:Connect(function() tw(knob, 0.12, {Size = UDim2.fromOffset(15, 15)}, Enum.EasingStyle.Quint) end))
+    track(hit.MouseLeave:Connect(function() tw(knob, 0.16, {Size = UDim2.fromOffset(12, 12)}, Enum.EasingStyle.Quint) end))
     Reg[id] = {get = function() return value end, set = function(v) if type(v) == "number" then set(v) end end}
 end
 function Card:Dropdown(id, txt, values, default, cb)
@@ -1447,7 +1530,8 @@ function Card:Dropdown(id, txt, values, default, cb)
     end
     track(row.MouseButton1Click:Connect(function()
         lst.Visible = not lst.Visible
-        tw(arrow.box, 0.15, {Rotation = lst.Visible and 180 or 0})
+        tw(arrow.box, 0.2, {Rotation = lst.Visible and 180 or 0}, Enum.EasingStyle.Quint)
+        if lst.Visible then fadeIn(lst, 0.2) end
     end))
     Reg[id] = {get = function() return value end, set = function(v) if table.find(values, v) then set(v) end end}
 end
@@ -1457,6 +1541,7 @@ function Card:Button(txt, cb)
     round(b, 7)
     hover(b, T.btn, Color3.fromRGB(46, 46, 52))
     track(b.MouseButton1Down:Connect(function() tw(b, 0.08, {BackgroundColor3 = T.off}) end))
+    track(b.MouseButton1Up:Connect(function() tw(b, 0.14, {BackgroundColor3 = Color3.fromRGB(46, 46, 52)}) end))
     track(b.MouseButton1Click:Connect(function() cb() end))
 end
 function Card:Label(txt)
@@ -1469,8 +1554,9 @@ function Card:Label(txt)
     return l
 end
 local tHome = addTab("Dashboard", "home", true)
+local tSurv = addTab("Survivor", "user")
+local tKill = addTab("Killer", "blade")
 local tESP = addTab("ESP", "eye")
-local tSC = addTab("Skill Check", "target")
 local tMisc = addTab("Misc", "sliders")
 local tSet = addTab("Settings", "gear")
 local curFps, refreshDash
@@ -1667,7 +1753,7 @@ end
 end
 do
     local sP, sW = tESP:Sub("Player"), tESP:Sub("World")
-    local sD, sK = tESP:Sub("Tampilan"), tESP:Sub("Area Killer")
+    local sD = tESP:Sub("Tampilan")
     local cPlayers, cObj = sP:Group("Players", 1), sW:Group("Objek", 1)
     for _, c in ipairs(CATS) do
         local key = c.key
@@ -1676,7 +1762,7 @@ do
             function(v) S.cat[key].on = v end,
             key ~= "chased" and {id = "C_" .. key, default = S.cat[key].color, cb = function(col) S.cat[key].color = col end} or nil)
     end
-    local cChase = sP:Group("Chase", 2)
+    local cChase = tKill:Group("Chase (deteksi dikejar)", 2)
     cChase:Slider("ESP_ChaseDist", "Jarak deteksi chase (0 = off)", 0, 120, 40, 5, function(v) S.chaseDist = v end, "m")
     local cRange = sW:Group("Jarak", 2)
     cRange:Slider("ESP_MaxDist", "Jarak max objek (0 = bebas)", 0, 3000, 600, 50, function(v) S.maxDist = v end, "m")
@@ -1684,7 +1770,7 @@ do
     cLbl:Toggle("ESP_Names", "Nama (di atas)", true, function(v) S.names = v end)
     cLbl:Toggle("ESP_Dist", "Jarak (di bawah)", true, function(v) S.dist = v end)
     cLbl:Slider("ESP_TextSize", "Ukuran teks", 10, 24, 13, 1, function(v) S.textSize = v end)
-    local cCone = sK:Group("Area liat killer (tanah)", 1)
+    local cCone = tKill:Group("Area liat killer (tanah)", 1)
     cCone:Toggle("Cone_On", "Aktif", true, function(v) S.cone.on = v end)
     cCone:Slider("Cone_Angle", "Sudut area killer", 40, 180, 100, 5, function(v) S.cone.angle = v end)
     cCone:Toggle("Cone_Line", "Garis lurus dari kepala (arah kamera killer)", true, function(v) S.cone.line = v end,
@@ -1694,7 +1780,7 @@ do
     cCone:Slider("Cone_LineLen", "Panjang garis", 10, 100, 30, 5, function(v) S.cone.lineLen = v end, "m")
     cCone:Slider("Cone_Range", "Jarak area killer", 20, 150, 70, 5, function(v) S.cone.range = v end, "m")
 end
-local cSC = tSC:Group("Auto skill check", 1)
+local cSC = tSurv:Group("Auto skill check", 1)
 cSC:Toggle("SC_Enabled", "Enabled (F6)", true, function(v) S.sc.enabled = v end)
 cSC:Dropdown("SC_Mode", "Mode", {"Instant", "Perfect", "Great", "Random"}, "Perfect", function(v) S.sc.mode = v end)
 do local function parryInit()
@@ -1720,7 +1806,7 @@ do local function parryInit()
     local EARLY_ANIMS = {["125430111937587"] = 0.048, ["127417297154354"] = 0.036}
     local NOT_SWING = {["117070354890871"] = true, ["81198376178242"] = true, ["70719237641923"] = true, ["78196404793645"] = true, ["108286715411226"] = true, ["75857500533792"] = true,
         ["77303734522729"] = true, ["101443662521580"] = true, ["127622545856523"] = true, ["129669521834246"] = true, ["79809716042968"] = true, ["87436543050891"] = true, ["84404617799721"] = true}
-    local cPar = tSC:Group("Auto parry (Dagger)", 2)
+    local cPar = tSurv:Group("Auto parry (Dagger)", 2)
     cPar:Toggle("PAR_On", "Auto Parry", false, function(v) S.parry.on = v end)
     S.parry.pre = false
     S.parry.aimGate, S.parry.aimMin, S.parry.closeMin = false, -0.25, 8
@@ -1731,8 +1817,10 @@ do local function parryInit()
     S.parry.baitCheck, S.parry.baitDot = true, 0.3
     S.parry.close, S.parry.closeR, S.parry.lateSkip = false, 4.0, false
     S.parry.circle = true
-    cPar:Toggle("PAR_Circle", "Show Parry Circle", true, function(v) S.parry.circle = v end,
+    S.parry.circShow = 8
+    cPar:Toggle("PAR_Circle", "Zona parry (garis putus-putus)", true, function(v) S.parry.circle = v end,
         {id = "PAR_CircleCol", default = S.parry.color, cb = function(c) S.parry.color = c end})
+    cPar:Slider("PAR_CircleNear", "Zona muncul (m di luar zona parry)", 0, 30, 8, 1, function(v) S.parry.circShow = v end, "m")
     local stLbl = cPar:Label("Status: OFF")
     local learned, recent, nopar, stats, idReach, idLag = {}, {}, {}, {}, {}, {}
     local PFILE = BASE .. "jin_parry.json"
@@ -2708,32 +2796,112 @@ do local function parryInit()
             task.wait(0.05)
         end
     end)
-    local circ
-    track(RS.RenderStepped:Connect(function()
+    local RING_MAX, DASH_W, DASH_H = 64, 0.3, 0.12
+    local ring = {folder = Instance.new("Folder"), pool = {}, act = {}, cfs = {}, n = 0, len = 0, a = 0, hot = 0,
+        near = false, inZone = false, spin = 0, tr = -1, col = nil}
+    ring.folder.Name = tostring(math.random(1000000, 9999999))
+    S.parryCircle = ring.folder
+    for i = 1, RING_MAX do
+        local p = Instance.new("Part")
+        p.Anchored, p.CanCollide, p.CanQuery, p.CanTouch, p.CastShadow = true, false, false, false, false
+        p.Material = Enum.Material.Neon
+        p.Transparency = 1
+        p.Size = Vector3.new(1, DASH_H, DASH_W)
+        ring.pool[i] = p
+    end
+    local function ringCount(n)
+        ring.n, ring.len, ring.tr, ring.col = n, 0, -1, nil
+        ring.act, ring.cfs = {}, {}
+        for i = 1, RING_MAX do
+            local p = ring.pool[i]
+            if i <= n then
+                ring.act[i] = p
+                p.Parent = ring.folder
+            else
+                p.Parent = nil
+            end
+        end
+    end
+    local ringKs, ringT, ringSelfK = {}, 0, false
+    -- circle is visual only: auto parry reads S.parry.dist directly and never touches this
+    track(RS.RenderStepped:Connect(function(dt)
         pcall(function()
+            local P = S.parry
             local ch = lp.Character
             local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
             local hum = ch and ch:FindFirstChildOfClass("Humanoid")
             local cam = workspace.CurrentCamera
-            if not (S.parry.circle and hrp and hum and cam) then
-                if circ then circ.Parent = nil end
+            if not (hrp and hum and cam) then
+                ring.a = 0
+                if ring.folder.Parent then ring.folder.Parent = nil end
                 return
             end
-            if not circ then
-                circ = Instance.new("Part")
-                circ.Name = "JinParryCircle"
-                circ.Shape = Enum.PartType.Cylinder
-                circ.Anchored, circ.CanCollide, circ.CanQuery, circ.CanTouch, circ.CastShadow = true, false, false, false, false
-                circ.Material = Enum.Material.Neon
-                circ.Transparency = 0.75
-                S.parryCircle = circ
+            local r = P.circR or P.dist
+            local want = false
+            if P.circle and not S.lobby and hum.Health > 0 then
+                local now = os.clock()
+                if now - ringT > 0.12 then
+                    ringT = now
+                    ringSelfK = roleOf(lp) == "killer"
+                    ringKs = getKillers()
+                end
+                if not ringSelfK then
+                    local nd, p0 = math.huge, hrp.Position
+                    for _, k in ipairs(ringKs) do
+                        if k.char ~= ch and k.hrp.Parent then
+                            local d = (k.hrp.Position - p0).Magnitude
+                            if d < nd then nd = d end
+                        end
+                    end
+                    local show = P.circShow or 8
+                    ring.near = nd <= r + (ring.near and show + 4 or show)
+                    ring.inZone = nd <= r
+                    want = ring.near
+                end
+            else
+                ring.near, ring.inZone = false, false
             end
-            circ.Color = S.parry.color
-            local r = S.parry.circR or S.parry.dist
-            circ.Size = Vector3.new(0.15, r * 2, r * 2)
-            circ.CFrame = CFrame.new(hrp.Position - Vector3.new(0, hrp.Size.Y / 2 + hum.HipHeight - 0.05, 0)) * CFrame.Angles(0, 0, math.rad(90))
-            if circ.Parent ~= cam then
-                if not pcall(function() circ.Parent = cam end) then circ = nil S.parryCircle = nil end
+            local target = want and 1 or 0
+            if ring.a ~= target then
+                ring.a = ring.a + (target - ring.a) * math.min(1, dt * (want and 10 or 7))
+                if math.abs(target - ring.a) < 0.01 then ring.a = target end
+            end
+            if ring.a <= 0 then
+                if ring.folder.Parent then ring.folder.Parent = nil end
+                return
+            end
+            if ring.folder.Parent ~= cam then ring.folder.Parent = cam end
+            local n = math.clamp(math.floor(r * 2.6 + 0.5), 20, RING_MAX)
+            if n ~= ring.n then ringCount(n) end
+            local act, cfs = ring.act, ring.cfs
+            ring.hot = ring.hot + ((ring.inZone and want) and 1 - ring.hot or -ring.hot) * math.min(1, dt * 8)
+            local e = ring.a * ring.a * (3 - 2 * ring.a)
+            local tr = 1 - (1 - (0.3 - 0.22 * ring.hot)) * e
+            if math.abs(tr - ring.tr) > 0.004 then
+                ring.tr = tr
+                for i = 1, n do act[i].Transparency = tr end
+            end
+            if P.color ~= ring.col then
+                ring.col = P.color
+                for i = 1, n do act[i].Color = P.color end
+            end
+            local step = 2 * math.pi / n
+            local len = 2 * r * math.sin(step * 0.55 / 2)
+            if math.abs(len - ring.len) > 0.005 then
+                ring.len = len
+                local sz = Vector3.new(len, DASH_H, DASH_W)
+                for i = 1, n do act[i].Size = sz end
+            end
+            ring.spin = (ring.spin + dt * 0.3) % (2 * math.pi)
+            local c = hrp.Position - Vector3.new(0, hrp.Size.Y / 2 + hum.HipHeight - 0.08, 0)
+            for i = 1, n do
+                local ang = ring.spin + (i - 1) * step
+                local s, co = math.sin(ang), math.cos(ang)
+                -- X axis = tangent, Y = up, so each dash lies flat along the ring
+                cfs[i] = CFrame.fromMatrix(Vector3.new(c.X + co * r, c.Y, c.Z + s * r), Vector3.new(-s, 0, co), Vector3.yAxis)
+            end
+            if not pcall(workspace.BulkMoveTo, workspace, act, cfs, Enum.BulkMoveMode.FireCFrameChanged) then
+                for i = 1, n do act[i].CFrame = cfs[i] end
             end
         end)
     end))
@@ -2748,13 +2916,17 @@ do
     local gsave = {}
     local sweepId = 0
     local WHITE3 = Color3.new(1, 1, 1)
+    local SMOOTH = Enum.Material.SmoothPlastic
     local VEG_GRASS = {"grass", "rumput", "weed", "fern", "flower", "bunga"}
     local VEG_TREE = {"tree", "leaf", "leaves", "foliage", "bush", "pohon", "daun", "palm", "branch", "canopy", "shrub", "hedge"}
     local MATS = {}
-    for _, n in ipairs({"Grass", "Sand", "Rock", "Slate", "Mud", "Ground", "Concrete", "Pavement", "Asphalt", "Cobblestone", "Brick",
-        "Basalt", "Salt", "Ice", "Snow", "Glacier", "LeafyGrass", "Limestone", "Sandstone", "WoodPlanks", "CrackedLava"}) do
-        local ok, m = pcall(function() return Enum.Material[n] end)
-        if ok and m then MATS[#MATS + 1] = m end
+    if Terrain then
+        for _, m in ipairs(Enum.Material:GetEnumItems()) do
+            if m ~= Enum.Material.Air and m ~= Enum.Material.Water then
+                local ok = pcall(function() return Terrain:GetMaterialColor(m) end)
+                if ok then MATS[#MATS + 1] = m end
+            end
+        end
     end
     local function anyOn()
         return flags.sky or flags.tex or flags.white or flags.grass or flags.trees or flags.lights or flags.perf
@@ -2803,10 +2975,11 @@ do
             if i == Terrain then return end
             if not (flags.white or flags.perf or flags.tex or flags.grass or flags.trees) then return end
             if skip(i) then return end
-            if flags.white then
-                save(i, "Color") save(i, "Material") save(i, "Reflectance")
+            if flags.white and (i.Color ~= WHITE3 or i.Material ~= SMOOTH or i.Reflectance ~= 0 or i.MaterialVariant ~= "") then
+                save(i, "Color") save(i, "Material") save(i, "Reflectance") save(i, "MaterialVariant")
+                i.MaterialVariant = ""
                 i.Color = WHITE3
-                i.Material = Enum.Material.SmoothPlastic
+                i.Material = SMOOTH
                 i.Reflectance = 0
             end
             local hide = (flags.grass and vegMatch(i, VEG_GRASS)) or (flags.trees and vegMatch(i, VEG_TREE))
@@ -2816,19 +2989,22 @@ do
                 save(i, "RenderFidelity")
                 i.RenderFidelity = Enum.RenderFidelity.Performance
             end
-            if flags.tex and i:IsA("MeshPart") and i.TextureID ~= "" then
+            if (flags.tex or flags.white) and i:IsA("MeshPart") and i.TextureID ~= "" then
                 save(i, "TextureID")
                 i.TextureID = ""
             end
         elseif i:IsA("Decal") then
-            if flags.tex and not skip(i) then save(i, "Transparency") i.Transparency = 1 end
+            if (flags.tex or flags.white) and not skip(i) then save(i, "Transparency") i.Transparency = 1 end
         elseif cn == "SurfaceAppearance" then
-            if flags.tex and not skip(i) then
+            if (flags.tex or flags.white) and not skip(i) then
                 held.surf[#held.surf + 1] = {inst = i, parent = i.Parent}
                 i.Parent = nil
             end
         elseif cn == "SpecialMesh" then
-            if flags.tex and i.TextureId ~= "" and not skip(i) then save(i, "TextureId") i.TextureId = "" end
+            if (flags.tex or flags.white) and not skip(i) then
+                if i.TextureId ~= "" then save(i, "TextureId") i.TextureId = "" end
+                if flags.white and i.VertexColor ~= Vector3.new(1, 1, 1) then save(i, "VertexColor") i.VertexColor = Vector3.new(1, 1, 1) end
+            end
         elseif cn == "PointLight" or cn == "SpotLight" or cn == "SurfaceLight" then
             if flags.lights and i.Enabled and not skip(i) then save(i, "Enabled") i.Enabled = false end
         end
@@ -2858,6 +3034,11 @@ do
             if h.parent and h.parent.Parent then pcall(function() h.inst.Parent = h.parent end) end
         end
     end
+    local function restoreTex()
+        restoreProps({"TextureID", "TextureId", "VertexColor"})
+        restoreProps({"Transparency"}, function(i) return i:IsA("Decal") end)
+        heldRestore("surf")
+    end
     local WATER = {"WaterWaveSize", "WaterWaveSpeed", "WaterReflectance"}
     local function applyGlobal()
         if Terrain then
@@ -2881,6 +3062,14 @@ do
                 gsave.tcol = nil
                 for m, c in pairs(t) do pcall(function() Terrain:SetMaterialColor(m, c) end) end
             end
+            if flags.white then
+                if gsave.wcol == nil then pcall(function() gsave.wcol = Terrain.WaterColor end) end
+                pcall(function() Terrain.WaterColor = WHITE3 end)
+            elseif gsave.wcol ~= nil then
+                local w = gsave.wcol
+                gsave.wcol = nil
+                pcall(function() Terrain.WaterColor = w end)
+            end
             if flags.perf then
                 if not gsave.water then
                     gsave.water = {}
@@ -2892,6 +3081,21 @@ do
                 gsave.water = nil
                 for pr, v in pairs(w) do pcall(function() Terrain[pr] = v end) end
             end
+        end
+        if flags.white then
+            if not gsave.lt then
+                gsave.lt = {top = Lighting.ColorShift_Top, bot = Lighting.ColorShift_Bottom}
+            end
+            pcall(function()
+                Lighting.ColorShift_Top = Color3.new(0, 0, 0)
+                Lighting.ColorShift_Bottom = Color3.new(0, 0, 0)
+            end)
+        elseif gsave.lt then
+            local l = gsave.lt
+            gsave.lt = nil
+            pcall(function()
+                Lighting.ColorShift_Top, Lighting.ColorShift_Bottom = l.top, l.bot
+            end)
         end
         if flags.sky then
             if not (gsave.blank and gsave.blank.Parent) then
@@ -2931,14 +3135,13 @@ do
             return
         end
         if name == "white" then
-            restoreProps({"Color", "Material", "Reflectance"}, function(i) return i:IsA("BasePart") end)
+            restoreProps({"Color", "Material", "Reflectance", "MaterialVariant"}, function(i) return i:IsA("BasePart") end)
+            if not flags.tex then restoreTex() end
         elseif name == "perf" then
             restoreProps({"RenderFidelity"})
             if not (flags.grass or flags.trees) then restoreProps({"CastShadow"}) end
         elseif name == "tex" then
-            restoreProps({"TextureID", "TextureId"})
-            restoreProps({"Transparency"}, function(i) return i:IsA("Decal") end)
-            heldRestore("surf")
+            if not flags.white then restoreTex() end
         elseif name == "grass" or name == "trees" then
             restoreProps({"Transparency"}, function(i) return i:IsA("BasePart") end)
             if not flags.perf then restoreProps({"CastShadow"}) end
@@ -2976,12 +3179,15 @@ do
     end
     track(Players.PlayerAdded:Connect(function(pl) track(pl.CharacterAdded:Connect(onChar)) end))
     task.spawn(function()
+        local n = 0
         while running do
             task.wait(2)
+            n = n + 1
             if flags.sky then
                 for _, c in ipairs(Lighting:GetChildren()) do pcall(applyOne, c) end
                 pcall(applyGlobal)
             end
+            if n % 4 == 0 and (flags.white or flags.lights) then sweepAll() end
         end
     end)
 end
@@ -3001,7 +3207,8 @@ end)
 local cLight = tMisc:Group("Fullbright", 1)
 cLight:Toggle("FB_On", "Fullbright", false, function(v) S.fb.on = v if v then fbSave() else fbRestore() end end)
 cLight:Slider("FB_Bright", "Brightness", 1, 5, 2, 1, function(v) S.fb.bright = v end)
-local cAL = tMisc:Group("Anti lag", 2)
+local cAL = tMisc:Group("Anti lag: efek", 2)
+local cAM = tMisc:Group("Anti lag: map", 2)
 cAL:Toggle("AL_Particles", "Matiin partikel / trail / api", false,
     function(v) S.al.particles = v if v then particlesScan() else particlesRestore() end end)
 cAL:Toggle("AL_PostFX", "Matiin bloom / blur / DOF", false,
@@ -3009,13 +3216,13 @@ cAL:Toggle("AL_PostFX", "Matiin bloom / blur / DOF", false,
 cAL:Toggle("AL_Shadows", "Matiin shadow", false,
     function(v) S.al.shadows = v if v then shadowsSave() else shadowsRestore() end end)
 cAL:Toggle("AL_Quality", "Render quality terendah", false, function(v) S.al.quality = v setQuality(v) end)
-cAL:Toggle("AL_Sky", "Hapus skybox / atmosfer / awan (semua map)", false, function(v) AL2.set("sky", v) end)
-cAL:Toggle("AL_Tex", "Hapus tekstur (decal, texture, mesh texture)", false, function(v) AL2.set("tex", v) end)
-cAL:Toggle("AL_White", "Semua jadi putih (kecuali player)", false, function(v) AL2.set("white", v) end)
-cAL:Toggle("AL_Grass", "Hapus rumput", false, function(v) AL2.set("grass", v) end)
-cAL:Toggle("AL_Trees", "Hapus pohon & daun", false, function(v) AL2.set("trees", v) end)
-cAL:Toggle("AL_Lights", "Matiin lampu (Point / Spot / Surface)", false, function(v) AL2.set("lights", v) end)
-cAL:Toggle("AL_Perf", "Ringanin part (shadow off, mesh LOD rendah, air datar)", false, function(v) AL2.set("perf", v) end)
+cAM:Toggle("AL_Sky", "Hapus skybox / atmosfer / awan (semua map)", false, function(v) AL2.set("sky", v) end)
+cAM:Toggle("AL_Tex", "Hapus tekstur (decal, texture, mesh texture)", false, function(v) AL2.set("tex", v) end)
+cAM:Toggle("AL_White", "Semua jadi putih (kecuali player)", false, function(v) AL2.set("white", v) end)
+cAM:Toggle("AL_Grass", "Hapus rumput", false, function(v) AL2.set("grass", v) end)
+cAM:Toggle("AL_Trees", "Hapus pohon & daun", false, function(v) AL2.set("trees", v) end)
+cAM:Toggle("AL_Lights", "Matiin lampu (Point / Spot / Surface)", false, function(v) AL2.set("lights", v) end)
+cAM:Toggle("AL_Perf", "Ringanin part (shadow off, mesh LOD rendah, air datar)", false, function(v) AL2.set("perf", v) end)
 cAL:Slider("AL_FPS", "FPS cap (0 = jangan ubah)", 0, 240, 0, 10, function(v)
     if v > 0 and setfpscap then
         AL2.fpsChanged = true
@@ -3023,16 +3230,16 @@ cAL:Slider("AL_FPS", "FPS cap (0 = jangan ubah)", 0, 240, 0, 10, function(v)
     end
 end)
 local AL_IDS = {"AL_Particles", "AL_PostFX", "AL_Shadows", "AL_Quality", "AL_Sky", "AL_Tex", "AL_White", "AL_Grass", "AL_Trees", "AL_Lights", "AL_Perf"}
-cAL:Button("SUPER ANTI LAG: nyalain semua", function()
+cAM:Button("SUPER ANTI LAG: nyalain semua", function()
     for _, id in ipairs(AL_IDS) do local r = Reg[id] if r then r.set(true) end end
     notify("Anti lag", "Semua nyala")
 end)
-cAL:Button("Matiin semua anti lag", function()
+cAM:Button("Matiin semua anti lag", function()
     for _, id in ipairs(AL_IDS) do local r = Reg[id] if r then r.set(false) end end
     notify("Anti lag", "Semua mati")
 end)
 do
-    local cPred = tMisc:Group("Prediksi killer berikutnya", 2)
+    local cPred = tKill:Group("Prediksi killer berikutnya", 2)
     local mlbl = cPred:Label("Map: nunggu pengumuman server...")
     local lbl = cPred:Label("Nunggu data...")
     task.spawn(function()
@@ -3096,6 +3303,26 @@ track(workspace.DescendantAdded:Connect(function(i)
     if FX[i.ClassName] and S.al.particles then task.defer(pcall, fxKill, i) end
 end))
 track(Players.PlayerRemoving:Connect(destroyPlayerVis))
+do
+    -- vignette overlay: hidden by default, no menu entry (matches any GuiObject/ScreenGui named *vignet*)
+    local vigSaved = {}
+    local function killVig(i)
+        local isScreen = i:IsA("ScreenGui")
+        if vigSaved[i] or not (isScreen or i:IsA("GuiObject")) then return end
+        if not i.Name:lower():find("vignet", 1, true) then return end
+        local prop = isScreen and "Enabled" or "Visible"
+        vigSaved[i] = {prop = prop, v = i[prop]}
+        i[prop] = false
+        track(i:GetPropertyChangedSignal(prop):Connect(function()
+            if running and i[prop] then i[prop] = false end
+        end))
+    end
+    for _, i in ipairs(pg:GetDescendants()) do pcall(killVig, i) end
+    track(pg.DescendantAdded:Connect(function(i) task.defer(pcall, killVig, i) end))
+    S.vigRestore = function()
+        for i, st in pairs(vigSaved) do pcall(function() i[st.prop] = st.v end) end
+    end
+end
 local fpsAcc, fpsN = 0, 0
 task.spawn(function() while running do pcall(update) task.wait(0.25) end end)
 task.spawn(function() while running do pcall(scBind) task.wait(1) end end)
@@ -3153,6 +3380,7 @@ function cleanup()
     pcall(setQuality, false)
     pcall(AL2.restoreAll)
     pcall(function() workspace.CurrentCamera.FieldOfView = 70 end)
+    pcall(S.vigRestore)
     pcall(function() gui:Destroy() end)
     getgenv().JinHub = nil
 end
@@ -3162,4 +3390,4 @@ loading = false
 pcall(refreshDash)
 setOpen(true)
 notify("Jìn Script", "Loaded")
-warn("[jin] v3.3 loaded")
+warn("[jin] v3.4 loaded")
