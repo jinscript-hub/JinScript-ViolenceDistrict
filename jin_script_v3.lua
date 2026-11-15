@@ -1697,7 +1697,7 @@ local cSC = tSC:Group("Auto skill check", 1)
 cSC:Toggle("SC_Enabled", "Enabled (F6)", true, function(v) S.sc.enabled = v end)
 cSC:Dropdown("SC_Mode", "Mode", {"Instant", "Perfect", "Great", "Random"}, "Perfect", function(v) S.sc.mode = v end)
 do local function parryInit()
-    S.parry = {on = false, aggr = false, dist = 9, last = 0, busy = false, method = 2, hitOnly = false, circle = false, color = Color3.fromRGB(170, 0, 255), detect = false, learn = true, pre = false, hitDot = 0.55, block = 0, cdLo = 0, nl = 0, face = false, human = true, earlyK = 0.043}
+    S.parry = {on = false, aggr = false, dist = 14, last = 0, busy = false, method = 2, hitOnly = false, circle = false, color = Color3.fromRGB(170, 0, 255), detect = false, learn = true, pre = false, hitDot = 0.55, block = 0, cdLo = 0, nl = 0, face = false, human = true, earlyK = 0.043}
     local PARRY_DEBUG = false
     local PARRY_LOG = true
     local ATTACK_ANIMS = {}
@@ -1724,16 +1724,9 @@ do local function parryInit()
     S.parry.pre = false
     S.parry.aimGate, S.parry.aimMin, S.parry.closeMin = false, -0.25, 8
     S.parry.rayGate, S.parry.rayTol, S.parry.zoneManual, S.parry.rayMinD = false, 4, false, 5
-    cPar:Slider("PAR_Zone", "Zona minimal (jarak killer)", 4, 22, 9, 1, function(v) S.parry.dist = v S.parry.zoneManual = true end, "m")
-    cPar:Slider("PAR_ZoneMax", "Zona maksimal (22 = off)", 6, 22, 22, 1, function(v) S.parry.zoneMax = v end, "m")
-    cPar:Toggle("PAR_Bait", "Anti rege bait ancang-ancang (cek arah)", true, function(v) S.parry.baitCheck = v end)
-    cPar:Slider("PAR_BaitDot", "Min arah kamera ancang-ancang", 0, 0.9, 0.3, 0.1, function(v) S.parry.baitDot = v end)
-    cPar:Slider("PAR_SwingDot", "Min arah kamera ayun (-1 = off)", -1, 0.9, -1, 0.1, function(v) S.parry.swingDot = v end)
-    cPar:Toggle("PAR_Late", "Skip tembakan yang pasti telat", false, function(v) S.parry.lateSkip = v end)
-    cPar:Toggle("PAR_Learn", "Auto-learn anim serang dari hit", true, function(v) S.parry.learn = v end)
-    cPar:Toggle("PAR_Face", "Hadap killer pas parry (tes: parry depan doang?)", false, function(v) S.parry.face = v end)
-    cPar:Toggle("PAR_HumanDelay", "Tunda parry pas ayunan nyampe (ga keliatan bot, lebih sering telat)", false, function(v) S.parry.humanDelay = v end)
-    S.parry.zoneMax, S.parry.swingDot = 22, -1
+    cPar:Slider("PAR_Zone", "Zona parry (jarak killer)", 4, 25, 14, 1, function(v) S.parry.dist = v end, "m")
+    cPar:Toggle("PAR_Bait", "Anti rege bait (skip kalau kamera killer ngebelakangi)", true, function(v) S.parry.baitCheck = v end)
+    S.parry.zoneMax, S.parry.swingDot = 22, 0
     S.parry.baitCheck, S.parry.baitDot = true, 0.3
     S.parry.close, S.parry.closeR, S.parry.lateSkip = false, 4.0, false
     S.parry.circle = true
@@ -2302,7 +2295,7 @@ do local function parryInit()
         local up = hrp.Position + Vector3.new(uv.X, 0, uv.Z) * tRem
         local d = Vector3.new(up.X - kp.X, 0, up.Z - kp.Z).Magnitude
         local dot = aimDot(aimOf(k), kp, up)
-        return d <= math.max(P.dist, idReach[id or ""] or 0) and (dot >= P.hitDot or d <= 2.5), d, dot
+        return d <= P.dist and (dot >= P.hitDot or d <= 2.5), d, dot
     end
     local hooked = setmetatable({}, {__mode = "k"})
     local hookedAttr = setmetatable({}, {__mode = "k"})
@@ -2379,9 +2372,7 @@ do local function parryInit()
                 local needE = math.min(pingE, 0.25) + startupEst()
                 local hitInE = ((P.earlyKs and P.earlyKs[id]) or EARLY_ANIMS[id]) * d
                 local missE = P.rayGate and rayMiss(k, hrp.Position) or 0
-                local zoneE = P.zoneManual and math.max(18, P.dist + 1) or 18
-                if P.zoneMax < 22 then zoneE = math.min(zoneE, P.zoneMax) end
-                P.circR, P.zoneSrc = zoneE, "ancang-ancang"
+                local zoneE = P.dist
                 if d > zoneE then whyE = ("ancang-ancang tapi killer %.0fm (> zona %.0fm)"):format(d, zoneE)
                 elseif P.rayGate and missE > P.rayTol * 1.5 and d > P.rayMinD then whyE = ("ancang-ancang tapi garis bidik meleset %.1fm (toleransi %.1f x1.5)"):format(missE, P.rayTol)
                 elseif not (chasingUs or d <= 10) then whyE = ("ancang-ancang tapi killer ga ngejar kita (%.0fm)"):format(d)
@@ -2427,10 +2418,8 @@ do local function parryInit()
             local toUs = off.Unit
             local known = ATTACK_ANIMS[id] or learned[id]
             local closing = (k.hrp.AssemblyLinearVelocity - hrp.AssemblyLinearVelocity):Dot(toUs)
-            local base = P.zoneManual and math.max(P.dist, idReach[id] or 0) or (idReach[id] or P.dist)
-            local reach = base + 1
-            if P.zoneMax < 22 then reach = math.min(reach, P.zoneMax) end
-            if known then P.circR, P.zoneSrc = reach, "ayun" end
+            local base = P.dist
+            local reach = P.dist
             local why
             if NOT_SWING[id] then why = "anim " .. id .. " = recovery / bukan serangan"
             elseif not (known or (P.detect and looksLikeSwing(tr))) then why = "anim " .. id .. " ga dikenal sbg serangan"
@@ -2496,7 +2485,7 @@ do local function parryInit()
                         return
                     end
                 end
-                if P2.swingDot > -1 and dot2 < P2.swingDot then
+                if P2.baitCheck and dot2 < P2.swingDot and d2 > 2 then
                     P2.why, P2.whyT = (" arah kamera killer dot %.2f < min %.2f"):format(dot2, P2.swingDot), os.clock()
                     P2.whyK, P2.whyKT = P2.why, P2.whyT
                     plog("SKIP anim", id, ("| arah kamera dot %.2f < min %.2f (anti rege bait jalur ayun) | %.1fm"):format(dot2, P2.swingDot, d2))
