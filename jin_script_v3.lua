@@ -340,10 +340,11 @@ local function halfHeight(inst)
     return ((ok and h or 4) / 2) + 1.2
 end
 local function createObj(cat, inst)
-    local box = Instance.new("SelectionBox")
-    box.LineThickness = 0.04
-    box.SurfaceTransparency = 0.85
+    local box = Instance.new("Highlight")
     box.Adornee = inst
+    box.FillTransparency = 0.6
+    box.OutlineTransparency = 0
+    box.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
     box.Parent = espFolder
     local part = partOf(inst)
     local o = {cat = cat, box = box}
@@ -532,6 +533,10 @@ function update()
     elseif selfBB.bb then
         selfBB.bb.Enabled = false
     end
+    local plCount = 0
+    for _ in pairs(pvis) do plCount = plCount + 1 end
+    local hlBudget = math.max(0, 30 - plCount)
+    local cand = {}
     for cat, set in pairs(found) do
         local enabled = S.cat[cat].on
         for inst in pairs(set) do
@@ -547,14 +552,14 @@ function update()
                 if (not dist) or dist <= maxD then
                     local c = S.cat[cat].color
                     if prog then c = c:Lerp(S.genDoneCol, prog) end
-                    o.box.Adornee = inst
-                    o.box.Color3, o.box.SurfaceColor3 = c, c
+                    o.box.FillColor, o.box.OutlineColor = c, c
+                    cand[#cand + 1] = {o = o, d = dist or 0}
                     if o.nameBB then
                         setLabel(o.nameBB, o.nameLbl, S.names and (CAT[cat].label .. (prog and (" " .. math.floor(prog * 100 + 0.5) .. "%") or "")) or "", c, ts)
                         setLabel(o.distBB, o.distLbl, (S.dist and dist) and ("%dm"):format(math.floor(dist)) or "", c, ts)
                     end
                 else
-                    o.box.Adornee = nil
+                    o.box.Enabled = false
                     if o.nameBB then o.nameBB.Enabled = false o.distBB.Enabled = false end
                 end
             else
@@ -562,6 +567,8 @@ function update()
             end
         end
     end
+    table.sort(cand, function(a, b) return a.d < b.d end)
+    for idx, e in ipairs(cand) do e.o.box.Enabled = idx <= hlBudget end
 end
 local CONE_N = 12
 coneFolder = Instance.new("Folder")
