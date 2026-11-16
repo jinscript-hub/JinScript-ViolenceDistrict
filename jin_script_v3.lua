@@ -3293,6 +3293,78 @@ do
         lbl.Text = table.concat(out, "\n")
     end
 end
+do
+    S.sa = {on = false, fov = 90, maxDist = 150, flat = true, part = "HumanoidRootPart"}
+    local cSA = tSurv:Group("Silent aim (Twist of Fate)", 1)
+    local saLbl = cSA:Label("Status: OFF")
+    cSA:Toggle("SA_On", "Silent aim", false, function(v)
+        S.sa.on = v
+        saLbl.Text = v and "Status: ON, nunggu tembakan" or "Status: OFF"
+    end)
+    cSA:Slider("SA_Fov", "Sudut dari kamera (derajat)", 10, 180, 90, 5, function(v) S.sa.fov = v end)
+    cSA:Slider("SA_Dist", "Jarak max killer", 20, 300, 150, 10, function(v) S.sa.maxDist = v end, "m")
+    cSA:Toggle("SA_Flat", "Arah datar (Y = 0, sama kayak tembakan asli)", true, function(v) S.sa.flat = v end)
+    cSA:Dropdown("SA_Part", "Bidik ke", {"Badan", "Kepala"}, "Badan", function(v)
+        S.sa.part = v == "Kepala" and "Head" or "HumanoidRootPart"
+    end)
+    local function pickTarget()
+        local cam = workspace.CurrentCamera
+        local ch = lp.Character
+        local myHrp = ch and ch:FindFirstChild("HumanoidRootPart")
+        if not (cam and myHrp) then return end
+        local look = cam.CFrame.LookVector
+        local best, bestAng, bestName
+        for _, k in ipairs(getKillers()) do
+            local part = k.char:FindFirstChild(S.sa.part) or k.hrp
+            local off = part.Position - myHrp.Position
+            local d = off.Magnitude
+            if d > 0.1 and d <= S.sa.maxDist then
+                local ang = math.deg(math.acos(math.clamp(look:Dot(off.Unit), -1, 1)))
+                if ang <= S.sa.fov and (not bestAng or ang < bestAng) then
+                    best, bestAng, bestName = part, ang, k.char.Name
+                end
+            end
+        end
+        return best, bestName
+    end
+    if hookmetamethod and getnamecallmethod then
+        local old
+        old = hookmetamethod(game, "__namecall", newcclosure and newcclosure(function(self, ...)
+            local m = getnamecallmethod()
+            if running and S.sa.on and m == "FireServer" and typeof(self) == "Instance" and self.Name == "Fire"
+                and self.Parent and self.Parent.Parent and self.Parent.Parent.Name == "Items" then
+                local args = table.pack(...)
+                local ok, newDir, who = pcall(function()
+                    local part, name = pickTarget()
+                    if not part then return nil end
+                    local mdl = args[1]
+                    local origin
+                    if typeof(mdl) == "Instance" then
+                        local b = mdl:FindFirstChild("barrel")
+                        if b and b:IsA("BasePart") then origin = b.Position end
+                    end
+                    if not origin then
+                        local h = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+                        origin = h and h.Position
+                    end
+                    if not origin then return nil end
+                    local dir = part.Position - origin
+                    if S.sa.flat then dir = Vector3.new(dir.X, 0, dir.Z) end
+                    if dir.Magnitude < 0.01 then return nil end
+                    return dir.Unit, name
+                end)
+                if ok and newDir then
+                    args[2] = newDir
+                    task.defer(function() saLbl.Text = "Terakhir diarahin ke: " .. tostring(who) end)
+                    return old(self, table.unpack(args, 1, args.n))
+                end
+            end
+            return old(self, ...)
+        end) or function(self, ...) return old(self, ...) end)
+    else
+        saLbl.Text = "Executor ga support hookmetamethod"
+    end
+end
 local cleanup
 local cUI = tSet:Group("Tampilan", 1)
 cUI:Dropdown("UI_Size", "Ukuran", {"Kecil", "Sedang", "Besar", "Jumbo"}, "Sedang", function(v) curSize = v applyLayout() end)
@@ -3408,4 +3480,4 @@ loading = false
 pcall(refreshDash)
 setOpen(true)
 notify("Jìn Script", "Loaded")
-warn("[jin] v3.4 loaded")
+warn("[jin] v3.5 loaded")
