@@ -3392,6 +3392,325 @@ track(UIS.InputBegan:Connect(function(i, gp)
         notify("Skill check", S.sc.enabled and "ON" or "OFF")
     end
 end))
+-- ===== Silent aim pistol (Survivor) =====
+-- Cara kerja: hook FireServer remote milik tool yang lagi dipegang, lalu ganti argumen
+-- arah/titik/part tembakan ke Head atau badan atas killer. Format argumen remote DIPELAJARI
+-- dari tembakan asli (bukan ditebak), dan ga ada yang diubah sebelum format itu ketemu.
+;(function()
+    local HAVE_HOOK = (hookmetamethod and getnamecallmethod and newcclosure and checkcaller) and true or false
+    local RepStorage = game:GetService("ReplicatedStorage")
+    local PROBE_FILE = BASE .. "jin_pistol_probe.txt"
+    local PISTOL_WORDS = {"pistol", "gun", "revolver", "handgun"}
+    local AIM_KINDS = {dir = true, point = true, cf_origin = true, cf_point = true, part = true, inst = true}
+
+    local P = {on = false, part = "Auto", fov = 25, range = 120, los = true, probe = false,
+        map = nil, votes = {n = 0, idx = {}}, noAim = false, toolName = nil, lastSeen = nil, hits = 0}
+    S.pistol = P
+
+    local alive = true
+    conns[#conns + 1] = {Disconnect = function() alive = false end}
+
+    -- ---------- log probe ----------
+    local logbuf, logBusy = {}, false
+    local function plog(...)
+        if not P.probe then return end
+        local a = table.pack(...)
+        for i = 1, a.n do a[i] = tostring(a[i]) end
+        logbuf[#logbuf + 1] = ("[%.2f] %s"):format(os.clock(), table.concat(a, " ", 1, a.n))
+        if #logbuf > 400 then table.remove(logbuf, 1) end
+        if writefile and not logBusy then
+            logBusy = true
+            task.delay(2, function()
+                logBusy = false
+                pcall(writefile, PROBE_FILE, table.concat(logbuf, "\n"))
+            end)
+        end
+    end
+    local function fv(v)
+        local t = typeof(v)
+        if t == "Vector3" then return ("V3(%.2f,%.2f,%.2f)"):format(v.X, v.Y, v.Z) end
+        if t == "CFrame" then
+            local p, l = v.Position, v.LookVector
+            return ("CF(pos %.1f,%.1f,%.1f look %.2f,%.2f,%.2f)"):format(p.X, p.Y, p.Z, l.X, l.Y, l.Z)
+        end
+        if t == "Instance" then return "Inst:" .. v:GetFullName() end
+        return t .. ":" .. tostring(v)
+    end
+
+    -- ---------- tool & remote ----------
+    local items
+    local watch = setmetatable({}, {__mode = "k"})
+    local function equipped()
+        local ch = lp.Character
+        return ch and ch:FindFirstChildOfClass("Tool")
+    end
+    local function isPistol(tool)
+        if not tool then return false end
+        if P.toolName and tool.Name == P.toolName then return true end
+        local n = tool.Name:lower()
+        for _, w in ipairs(PISTOL_WORDS) do if n:find(w, 1, true) then return true end end
+        return false
+    end
+    local function addRemote(r)
+        if not (r:IsA("RemoteEvent") or r:IsA("RemoteFunction")) or watch[r] then return end
+        watch[r] = true
+        if r:IsA("RemoteEvent") then
+            conns[#conns + 1] = r.OnClientEvent:Connect(function(...)
+                if not P.probe then return end
+                local a = table.pack(...)
+                local s = {}
+                for i = 1, a.n do s[i] = fv(a[i]) end
+                plog("SERVER->CLIENT", r:GetFullName(), "|", table.concat(s, " ; "))
+            end)
+        end
+    end
+    local function buildWatch()
+        if items then return end
+        task.spawn(function()
+            local ok, f = pcall(function()
+                return RepStorage:WaitForChild("Remotes", 20):WaitForChild("Items", 20)
+            end)
+            if not (ok and f) then return end
+            items = f
+            for _, d in ipairs(f:GetDescendants()) do addRemote(d) end
+            conns[#conns + 1] = f.DescendantAdded:Connect(addRemote)
+        end)
+    end
+
+    -- ---------- klasifikasi argumen ----------
+    local function kindOf(v, cf)
+        local t = typeof(v)
+        if t == "Vector3" then
+            if math.abs(v.Magnitude - 1) < 0.01 and v:Dot(cf.LookVector) > 0.98 then return "dir" end
+            local rel = v - cf.Position
+            local d = rel.Magnitude
+            if d > 3 and rel.Unit:Dot(cf.LookVector) > 0.98 then return "point" end
+            if d < 12 then return "origin" end
+            return nil
+        elseif t == "CFrame" then
+            local rel = v.Position - cf.Position
+            local d = rel.Magnitude
+            if d < 12 and v.LookVector:Dot(cf.LookVector) > 0.98 then return "cf_origin" end
+            if d > 3 and rel.Unit:Dot(cf.LookVector) > 0.98 then return "cf_point" end
+            return nil
+        elseif t == "Instance" then
+            if v:IsA("BasePart") then return "part" end
+            if v:IsA("Model") then return "inst" end
+        end
+        return nil
+    end
+
+    local psLbl
+    local function kindsStr(map)
+        local o = {}
+        for i, k in pairs(map.kinds) do o[#o + 1] = ("#%d=%s"):format(i, k) end
+        table.sort(o)
+        return table.concat(o, " ")
+    end
+    local function refresh()
+        if not psLbl then return end
+        local s
+        if not HAVE_HOOK then
+            s = "Status: executor ga punya hookmetamethod/getnamecallmethod/newcclosure/checkcaller, fitur ga bisa jalan"
+        elseif not (P.on or P.probe) then
+            s = "Status: OFF"
+        elseif P.noAim then
+            s = "Status: remote tembakan ga bawa arg arah/titik/part (server mungkin pakai kamera sendiri). Cek log probe."
+        elseif not P.map then
+            s = ("Status: belum belajar format tembakan. Pegang pistol, tembak 2-3x (sampel %d)."):format(P.votes.n)
+        else
+            s = ("Status: siap | remote %s | arg %s | tembakan diubah: %d"):format(P.map.remote.Name, kindsStr(P.map), P.hits)
+        end
+        if P.lastSeen then s = s .. " | tool: " .. P.lastSeen end
+        psLbl.Text = s
+    end
+
+    local function learn(remote, a, cf)
+        local V = P.votes
+        if V.remote ~= remote or V.n >= 8 then V = {remote = remote, n = 0, idx = {}} P.votes = V end
+        V.n = V.n + 1
+        for i = 1, a.n do
+            local k = kindOf(a[i], cf)
+            if k then
+                local t = V.idx[i] or {}
+                V.idx[i] = t
+                t[k] = (t[k] or 0) + 1
+            end
+        end
+        if V.n >= 2 then
+            local kinds, has = {}, false
+            for i, t in pairs(V.idx) do
+                local bk, bc
+                for k, c in pairs(t) do if not bc or c > bc then bk, bc = k, c end end
+                if bc and bc >= 2 then
+                    kinds[i] = bk
+                    if AIM_KINDS[bk] then has = true end
+                end
+            end
+            if has then
+                P.map = {remote = remote, kinds = kinds}
+                P.noAim = false
+                plog("MAP", remote:GetFullName(), kindsStr(P.map))
+            elseif V.n >= 4 then
+                P.noAim = true
+            end
+        end
+        refresh()
+    end
+
+    -- ---------- pilih target ----------
+    local rp = RaycastParams.new()
+    rp.FilterType = Enum.RaycastFilterType.Exclude
+    local function visible(part, ch, from)
+        rp.FilterDescendantsInstances = {lp.Character}
+        local r = workspace:Raycast(from, part.Position - from, rp)
+        return r == nil or r.Instance:IsDescendantOf(ch)
+    end
+    local function candidates(ch)
+        local head = ch:FindFirstChild("Head")
+        local torso = ch:FindFirstChild("UpperTorso") or ch:FindFirstChild("Torso")
+        if P.part == "Kepala" then return {head} end
+        if P.part == "Badan atas" then return {torso} end
+        return {head, torso}
+    end
+    local function pickTarget(cf)
+        local best, bestAng
+        for _, k in ipairs(getKillers()) do
+            local ch = k.char
+            local hum = ch:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health > 0 then
+                for _, part in ipairs(candidates(ch)) do
+                    if part then
+                        local rel = part.Position - cf.Position
+                        local d = rel.Magnitude
+                        if d > 1 and d <= P.range then
+                            local ang = math.deg(math.acos(math.clamp(rel.Unit:Dot(cf.LookVector), -1, 1)))
+                            if ang <= P.fov and (not bestAng or ang < bestAng)
+                                and (not P.los or visible(part, ch, cf.Position)) then
+                                best, bestAng = {part = part, char = ch}, ang
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        return best
+    end
+
+    -- ---------- tulis ulang argumen ----------
+    local function rewrite(a, tgt, cf)
+        local out = table.pack(table.unpack(a, 1, a.n))
+        local pos = tgt.part.Position
+        local origin = cf.Position
+        for i, k in pairs(P.map.kinds) do
+            if k == "origin" and typeof(out[i]) == "Vector3" then origin = out[i]
+            elseif k == "cf_origin" and typeof(out[i]) == "CFrame" then origin = out[i].Position end
+        end
+        for i, k in pairs(P.map.kinds) do
+            local v = out[i]
+            if k == "dir" and typeof(v) == "Vector3" then out[i] = (pos - origin).Unit
+            elseif k == "point" and typeof(v) == "Vector3" then out[i] = pos
+            elseif k == "cf_origin" and typeof(v) == "CFrame" then out[i] = CFrame.lookAt(v.Position, pos)
+            elseif k == "cf_point" and typeof(v) == "CFrame" then out[i] = CFrame.new(pos)
+            elseif k == "part" and (v == nil or typeof(v) == "Instance") then out[i] = tgt.part
+            elseif k == "inst" and (v == nil or typeof(v) == "Instance") then out[i] = tgt.char end
+        end
+        return out
+    end
+
+    -- ---------- hook ----------
+    local hooked = false
+    local recentRay = {}
+    local function onFire(self, a)
+        local tool = equipped()
+        if not tool then return end
+        local folder = self:FindFirstAncestor(tool.Name)
+        if not (folder and items and folder:IsDescendantOf(items)) then return end
+        P.lastSeen = tool.Name
+        local cf = workspace.CurrentCamera.CFrame
+        if P.probe then
+            local s, kk = {}, {}
+            for i = 1, a.n do s[i] = fv(a[i]) kk[i] = kindOf(a[i], cf) or "-" end
+            plog("FIRE", self:GetFullName(), "| tool", tool.Name, "| pistol?", tostring(isPistol(tool)))
+            plog("  args", table.concat(s, " ; "))
+            plog("  kinds", table.concat(kk, ","))
+            plog("  cam", fv(cf))
+            local now = os.clock()
+            for _, r in ipairs(recentRay) do
+                if now - r.t < 0.5 then plog(("  RAYCAST sebelum fire (-%.3fs)"):format(now - r.t), r.s) end
+            end
+        end
+        if not isPistol(tool) then return end
+        if not (P.map and P.map.remote == self) then
+            if P.on or P.probe then learn(self, a, cf) end
+            return
+        end
+        if not P.on then return end
+        local tgt = pickTarget(cf)
+        if not tgt then return end
+        local ok, out = pcall(rewrite, a, tgt, cf)
+        if ok and out then
+            P.hits = P.hits + 1
+            return out
+        end
+    end
+    local function ensureHook()
+        buildWatch()
+        if hooked or not HAVE_HOOK then refresh() return end
+        hooked = true
+        local old
+        old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+            local m = getnamecallmethod()
+            if not alive then return old(self, ...) end
+            if m == "FireServer" and watch[self] and not checkcaller() then
+                local a = table.pack(...)
+                local ok, out = pcall(onFire, self, a)
+                if ok and out then return old(self, table.unpack(out, 1, out.n)) end
+            elseif m == "Raycast" and P.probe and not checkcaller() then
+                local a = table.pack(...)
+                local s = ("%s dir %s"):format(fv(a[1]), fv(a[2]))
+                recentRay[#recentRay + 1] = {t = os.clock(), s = s}
+                if #recentRay > 12 then table.remove(recentRay, 1) end
+            end
+            return old(self, ...)
+        end))
+        refresh()
+    end
+
+    -- ---------- UI ----------
+    local cPS = tSurv:Group("Silent aim (Pistol)", 1)
+    cPS:Toggle("PS_On", "Silent aim pistol", false, function(v)
+        P.on = v
+        if v then ensureHook() end
+        refresh()
+    end)
+    cPS:Dropdown("PS_Part", "Target peluru", {"Auto", "Kepala", "Badan atas"}, "Auto", function(v) P.part = v end)
+    cPS:Slider("PS_FOV", "FOV aim (derajat dari tengah layar)", 5, 90, 25, 1, function(v) P.fov = v end)
+    cPS:Slider("PS_Range", "Jarak max", 20, 300, 120, 5, function(v) P.range = v end, "m")
+    cPS:Toggle("PS_LOS", "Cek garis pandang (ga nembak tembus tembok)", true, function(v) P.los = v end)
+    cPS:Toggle("PS_Probe", "Probe: catat tembakan ke jin_pistol_probe.txt", false, function(v)
+        P.probe = v
+        if v then ensureHook() end
+        refresh()
+    end)
+    cPS:Button("Anggap tool yang dipegang = pistol", function()
+        local t = equipped()
+        if t then
+            P.toolName = t.Name
+            P.map, P.votes, P.noAim = nil, {n = 0, idx = {}}, false
+            notify("Silent aim", "Pistol = " .. t.Name)
+        else
+            notify("Silent aim", "Ga ada tool dipegang")
+        end
+        refresh()
+    end)
+    cPS:Button("Reset format tembakan", function()
+        P.map, P.votes, P.noAim, P.hits = nil, {n = 0, idx = {}}, false, 0
+        refresh()
+    end)
+    psLbl = cPS:Label("Status: OFF")
+    refresh()
+end)()
 function cleanup()
     if not running then return end
     running = false
