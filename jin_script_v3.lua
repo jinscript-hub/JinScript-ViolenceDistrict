@@ -726,7 +726,7 @@ local function arm()
             end
             if C.Visible and S.sc.enabled and G.Rotation == handled then
                 L.Rotation = target
-                press()
+                pcall(press)
             end
         end
         task.wait(0.12)
@@ -1382,7 +1382,7 @@ function Tab:Sub(name)
     local btn = new("TextButton", {Size = UDim2.fromOffset(#name * 7 + 24, 24), BackgroundColor3 = T.sel, BackgroundTransparency = 1,
         Text = name, TextSize = 12, Font = F_BOLD, TextColor3 = T.dim, AutoButtonColor = false, LayoutOrder = #self.subs + 1}, self.strip)
     round(btn, 12)
-    local sub = setmetatable({cols = {c1, c2}, nextCol = 1, frame = frame, btn = btn}, Tab)
+    local sub = setmetatable({cols = {c1, c2}, nextCol = 1, frame = frame, btn = btn, scroll = self.scroll}, Tab)
     self.subs[#self.subs + 1] = sub
     local owner = self
     track(btn.MouseButton1Click:Connect(function() owner:SelectSub(sub) end))
@@ -1644,8 +1644,8 @@ local dGrid = statGrid(det, 3, 6)
 local STAT_ORDER = {"Level", "EXP", "Screws", "Gears", "KillerChance", "Ornaments", "PassExp", "PassClaimed"}
 local function fmt(v)
     if type(v) ~= "number" then return tostring(v) end
-    local s = tostring(math.floor(v)):reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", "")
-    return s
+    local s = ("%.0f"):format(math.floor(math.abs(v))):reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", "")
+    return v < 0 and ("-" .. s) or s
 end
 local function collectStats(plr)
     local list, seen = {}, {}
@@ -2296,7 +2296,8 @@ do local function parryInit()
                 local dir = k.hrp.Position - hrp.Position
                 front = dir.Magnitude > 0 and hrp.CFrame.LookVector:Dot(dir.Unit) >= 0.5
             end
-            local m = attempt(ch, hum)
+            local okA, m = pcall(attempt, ch, hum)
+            if not okA then plog("attempt error", tostring(m)) m = nil end
             P.busy = false
             local since = P.okT and t0 - P.okT
             if since and since > 60 then since = nil end
@@ -2402,6 +2403,7 @@ do local function parryInit()
         return d <= P.dist and (dot >= P.hitDot or d <= 2.5), d, dot
     end
     local hooked = setmetatable({}, {__mode = "k"})
+    local hookedChar = setmetatable({}, {__mode = "k"})
     local hookedAttr = setmetatable({}, {__mode = "k"})
     local kanimT = {}
     local KATTR_SKIP = {CamLook = true, VeilRenderedAt = true, AC_MovementGraceUntil = true, AC_StrictAllowedSpeedUntil = true, AC_AllowedSpeed = true, CorruptWaveAt = true, CorruptWaveFrom = true, CorruptWaveDir = true, CorruptWindupAt = true}
@@ -2428,8 +2430,12 @@ do local function parryInit()
     end
     local function hookKiller(k)
         hookKillerAttrs(k)
+        local cached = hookedChar[k.char]
+        if cached and cached.Parent then return end
         local an = k.char:FindFirstChildWhichIsA("Animator", true)
-        if not an or hooked[an] then return end
+        if not an then return end
+        hookedChar[k.char] = an
+        if hooked[an] then return end
         hooked[an] = true
         track(an.AnimationPlayed:Connect(function(tr)
             local a = tr.Animation
@@ -2486,7 +2492,7 @@ do local function parryInit()
                 if whyE then P.why, P.whyT = whyE, nowE P.whyK, P.whyKT = whyE, nowE return end
                 P.lastEval = nil
                 P.early = {id = id, t = nowE, d = d, k = k}
-                if not (P.humanDelay or P.baitCheck) then
+                if not (P.human or P.baitCheck) then
                     tryFire("ancang-ancang", k, id)
                     return
                 end
@@ -3221,6 +3227,7 @@ cView:Dropdown("AR_Tpl", "Template rasio", {"Pilih template", "Normal (1.00)", "
     local r = Reg["AR_Val"]
     if n and r then r.set(n) end
 end)
+Reg["AR_Tpl"] = nil
 local cLight = tMisc:Group("Fullbright", 1)
 cLight:Toggle("FB_On", "Fullbright", false, function(v) S.fb.on = v if v then fbSave() else fbRestore() end end)
 cLight:Slider("FB_Bright", "Brightness", 1, 5, 2, 1, function(v) S.fb.bright = v end)
@@ -3244,6 +3251,9 @@ cAL:Slider("AL_FPS", "FPS cap (0 = jangan ubah)", 0, 240, 0, 10, function(v)
     if v > 0 and setfpscap then
         AL2.fpsChanged = true
         pcall(setfpscap, v)
+    elseif v == 0 and AL2.fpsChanged and setfpscap then
+        AL2.fpsChanged = false
+        pcall(setfpscap, 60)
     end
 end)
 local AL_IDS = {"AL_Particles", "AL_PostFX", "AL_Shadows", "AL_Quality", "AL_Sky", "AL_Tex", "AL_White", "AL_Grass", "AL_Trees", "AL_Lights", "AL_Perf"}
@@ -3291,78 +3301,6 @@ do
             out[i] = ("%d. %s  %s%s"):format(i, e.pl.DisplayName, tostring(math.floor(e.v * 10 + 0.5) / 10), e.off and "  (AllowKiller off)" or "")
         end
         lbl.Text = table.concat(out, "\n")
-    end
-end
-do
-    S.sa = {on = false, fov = 90, maxDist = 150, flat = true, part = "HumanoidRootPart"}
-    local cSA = tSurv:Group("Silent aim (Twist of Fate)", 1)
-    local saLbl = cSA:Label("Status: OFF")
-    cSA:Toggle("SA_On", "Silent aim", false, function(v)
-        S.sa.on = v
-        saLbl.Text = v and "Status: ON, nunggu tembakan" or "Status: OFF"
-    end)
-    cSA:Slider("SA_Fov", "Sudut dari kamera (derajat)", 10, 180, 90, 5, function(v) S.sa.fov = v end)
-    cSA:Slider("SA_Dist", "Jarak max killer", 20, 300, 150, 10, function(v) S.sa.maxDist = v end, "m")
-    cSA:Toggle("SA_Flat", "Arah datar (Y = 0, sama kayak tembakan asli)", true, function(v) S.sa.flat = v end)
-    cSA:Dropdown("SA_Part", "Bidik ke", {"Badan", "Kepala"}, "Badan", function(v)
-        S.sa.part = v == "Kepala" and "Head" or "HumanoidRootPart"
-    end)
-    local function pickTarget()
-        local cam = workspace.CurrentCamera
-        local ch = lp.Character
-        local myHrp = ch and ch:FindFirstChild("HumanoidRootPart")
-        if not (cam and myHrp) then return end
-        local look = cam.CFrame.LookVector
-        local best, bestAng, bestName
-        for _, k in ipairs(getKillers()) do
-            local part = k.char:FindFirstChild(S.sa.part) or k.hrp
-            local off = part.Position - myHrp.Position
-            local d = off.Magnitude
-            if d > 0.1 and d <= S.sa.maxDist then
-                local ang = math.deg(math.acos(math.clamp(look:Dot(off.Unit), -1, 1)))
-                if ang <= S.sa.fov and (not bestAng or ang < bestAng) then
-                    best, bestAng, bestName = part, ang, k.char.Name
-                end
-            end
-        end
-        return best, bestName
-    end
-    if hookmetamethod and getnamecallmethod then
-        local old
-        old = hookmetamethod(game, "__namecall", newcclosure and newcclosure(function(self, ...)
-            local m = getnamecallmethod()
-            if running and S.sa.on and m == "FireServer" and typeof(self) == "Instance" and self.Name == "Fire"
-                and self.Parent and self.Parent.Parent and self.Parent.Parent.Name == "Items" then
-                local args = table.pack(...)
-                local ok, newDir, who = pcall(function()
-                    local part, name = pickTarget()
-                    if not part then return nil end
-                    local mdl = args[1]
-                    local origin
-                    if typeof(mdl) == "Instance" then
-                        local b = mdl:FindFirstChild("barrel")
-                        if b and b:IsA("BasePart") then origin = b.Position end
-                    end
-                    if not origin then
-                        local h = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
-                        origin = h and h.Position
-                    end
-                    if not origin then return nil end
-                    local dir = part.Position - origin
-                    if S.sa.flat then dir = Vector3.new(dir.X, 0, dir.Z) end
-                    if dir.Magnitude < 0.01 then return nil end
-                    return dir.Unit, name
-                end)
-                if ok and newDir then
-                    args[2] = newDir
-                    task.defer(function() saLbl.Text = "Terakhir diarahin ke: " .. tostring(who) end)
-                    return old(self, table.unpack(args, 1, args.n))
-                end
-            end
-            return old(self, ...)
-        end) or function(self, ...) return old(self, ...) end)
-    else
-        saLbl.Text = "Executor ga support hookmetamethod"
     end
 end
 local cleanup
@@ -3480,4 +3418,4 @@ loading = false
 pcall(refreshDash)
 setOpen(true)
 notify("Jìn Script", "Loaded")
-warn("[jin] v3.5 loaded")
+warn("[jin] v3.4 loaded")
