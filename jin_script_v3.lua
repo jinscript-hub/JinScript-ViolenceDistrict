@@ -818,7 +818,7 @@ local function particlesRestore()
     for i in pairs(fxOff) do if i.Parent then pcall(function() i.Enabled = true end) end end
     fxOff = {}
 end
-local postSweep, postRestore, setQuality, Reg, CFG_FILE, loading, dirty, loadConfig, gui, HEAD, PADL, PADR, curSize, curRatio, isOpen, setOpen, applyLayout, tabHolder, content, selectTab, tHome, tKill, tMisc, tSet, curFps, refreshDash
+local postSweep, postRestore, setQuality, Reg, CFG_FILE, loading, dirty, loadConfig, gui, HEAD, PADL, PADR, curSize, curRatio, isOpen, setOpen, applyLayout, tabHolder, content, selectTab, tHome, tSurv, tKill, tMisc, tSet, curFps, refreshDash
 do
 local POST = {BloomEffect = 1, BlurEffect = 1, ColorCorrectionEffect = 1, DepthOfFieldEffect = 1, SunRaysEffect = 1}
 local postOff = {}
@@ -1570,7 +1570,7 @@ function Card:Label(txt)
     return l
 end
 tHome = addTab("Dashboard", "home", true)
-local tSurv = addTab("Survivor", "user")
+tSurv = addTab("Survivor", "user")
 tKill = addTab("Killer", "blade")
 local tESP = addTab("ESP", "eye")
 tMisc = addTab("Misc", "sliders")
