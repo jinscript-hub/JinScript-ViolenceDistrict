@@ -1174,7 +1174,7 @@ local header = new("Frame", {Size = UDim2.new(1, 0, 0, HEAD), BackgroundTranspar
 new("Frame", {Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = T.stroke, BorderSizePixel = 0}, header)
 local ttl = mkLabel(header, "JÌN SCRIPT", 12, T.text, F_BOLD)
 ttl.Position = UDim2.fromOffset(14, 0); ttl.Size = UDim2.fromOffset(78, HEAD - 1)
-local ver = mkLabel(header, "v3.5b", 10, T.dim)
+local ver = mkLabel(header, "v3.6", 10, T.dim)
 ver.Position = UDim2.fromOffset(92, 1); ver.Size = UDim2.fromOffset(30, HEAD - 1)
 local closeBtn = new("TextButton", {Size = UDim2.fromOffset(24, 24), AnchorPoint = Vector2.new(1, 0.5),
     Position = UDim2.new(1, -8, 0.5, -1), BackgroundTransparency = 1, Text = "", AutoButtonColor = false}, header)
@@ -2929,7 +2929,7 @@ do local function parryInit()
 end parryInit() end
 do
     -- Silent aim Twist of Fate: ganti aimDirection milik game (modul), tanpa hook remote
-    S.sa = {on = false, radius = 150, maxDist = 150, maxAngle = 20, flat = false, head = false, predict = false, circle = true}
+    S.sa = {on = false, radius = 150, maxDist = 150, maxAngle = 180, flat = false, head = false, predict = false, circle = true}
     local cSA = tSurv:Group("Silent aim (Twist of Fate)", 1)
     local saLbl = cSA:Label("Status: OFF")
     local pendingTxt
@@ -2972,10 +2972,7 @@ do
     cSA:Slider("SA_Radius", "Ukuran lingkaran FOV (px)", 40, 400, 150, 10, function(v) S.sa.radius = v updRing() end)
     cSA:Toggle("SA_Circle", "Tampilkan lingkaran FOV", true, function(v) S.sa.circle = v updRing() end)
     cSA:Slider("SA_Dist", "Jarak max killer", 20, 300, 150, 10, function(v) S.sa.maxDist = v end, "m")
-    cSA:Slider("SA_Angle", "Batas geser arah (derajat)", 5, 180, 20, 5, function(v) S.sa.maxAngle = v end)
     cSA:Dropdown("SA_Part", "Bidik ke", {"Badan", "Kepala"}, "Badan", function(v) S.sa.head = v == "Kepala" end)
-    cSA:Toggle("SA_Flat", "Arah datar (Y = 0)", false, function(v) S.sa.flat = v end)
-    cSA:Toggle("SA_Predict", "Prediksi gerak killer", false, function(v) S.sa.predict = v end)
 
     local function dot3(a, b) return a.X * b.X + a.Y * b.Y + a.Z * b.Z end
     local function aimPart(char, hrp)
@@ -3054,36 +3051,63 @@ do
         return d.Unit, part.Parent and part.Parent.Name or "?", nil
     end
 
-    local modEff, modOrig
-    task.spawn(function()
-        local ok, e = pcall(function()
-            local m = game:GetService("ReplicatedStorage"):WaitForChild("Modules", 10):WaitForChild("Items", 10):WaitForChild("TwistOfFate", 10):WaitForChild("TwistoffateEffects", 10)
-            local mod = require(m)
-            if type(mod) ~= "table" or type(mod.aimDirection) ~= "function" then error("aimDirection ga ada") end
-            modEff, modOrig = mod, mod.aimDirection
-            mod.aimDirection = function(...)
-                if not (running and S.sa.on) then return modOrig(...) end
-                local r = table.pack(modOrig(...))
-                local okC, d, who, why = pcall(computeDir)
-                local orig = r[1]
-                if okC and d and typeof(orig) == "Vector3" and orig.Magnitude > 0.01 then
-                    local ang = math.deg(math.acos(math.clamp(dot3(orig, d) / orig.Magnitude, -1, 1)))
-                    if ang <= S.sa.maxAngle then
-                        saSay(("Diarahin ke %s (geser %d derajat)"):format(tostring(who), math.floor(ang)))
-                        return d
-                    end
-                    saSay("Lolos asli: geser " .. math.floor(ang) .. " derajat > batas")
-                else
-                    saSay("Lolos asli: " .. tostring(okC and (why or "arah asli ga ada") or d))
+    -- pasang ke modul pistol; dicoba terus tiap 2 detik (modul baru ada setelah masuk match / ronde ganti)
+    local patched = {}
+    local function makeWrapper(orig)
+        return function(...)
+            if not (running and S.sa.on) then return orig(...) end
+            local r = table.pack(orig(...))
+            local okC, d, who, why = pcall(computeDir)
+            local o = r[1]
+            if okC and d and typeof(o) == "Vector3" and o.Magnitude > 0.01 then
+                local ang = math.deg(math.acos(math.clamp(dot3(o, d) / o.Magnitude, -1, 1)))
+                if ang <= S.sa.maxAngle then
+                    saSay(("Diarahin ke %s (geser %d derajat)"):format(tostring(who), math.floor(ang)))
+                    return d
                 end
-                return table.unpack(r, 1, r.n)
+                saSay("Lolos asli: geser " .. math.floor(ang) .. " derajat > batas")
+            else
+                saSay("Lolos asli: " .. tostring(okC and (why or "arah asli ga ada") or d))
             end
-            saSay(S.sa.on and "ON, nunggu tembakan" or "Status: OFF")
-        end)
-        if not ok then saSay("Modul pistol ga ketemu: " .. tostring(e)) end
+            return table.unpack(r, 1, r.n)
+        end
+    end
+    local function install()
+        local m = game:GetService("ReplicatedStorage"):FindFirstChild("Modules")
+        m = m and m:FindFirstChild("Items")
+        m = m and m:FindFirstChild("TwistOfFate")
+        m = m and m:FindFirstChild("TwistoffateEffects")
+        if not m then return false, "modul pistol belum ada (masuk match dulu)" end
+        local ok, mod = pcall(require, m)
+        if not ok or type(mod) ~= "table" or type(mod.aimDirection) ~= "function" then return false, "aimDirection ga ada" end
+        local rec = patched[mod]
+        if rec and mod.aimDirection == rec.wrapper then return true end
+        local orig = mod.aimDirection
+        local w = makeWrapper(orig)
+        patched[mod] = {orig = orig, wrapper = w}
+        mod.aimDirection = w
+        return true, "baru"
+    end
+    task.spawn(function()
+        local was = false
+        while running do
+            local ok, a, b = pcall(install)
+            if ok and a then
+                if b == "baru" or not was then
+                    saSay(S.sa.on and "ON, nunggu tembakan" or "Status: OFF (modul pistol kepasang)")
+                end
+                was = true
+            else
+                was = false
+                saSay("Menunggu modul pistol: " .. tostring(ok and b or a))
+            end
+            task.wait(2)
+        end
     end)
     S.saRestore = function()
-        if modEff and modOrig then pcall(function() modEff.aimDirection = modOrig end) end
+        for mod, rec in pairs(patched) do
+            pcall(function() if mod.aimDirection == rec.wrapper then mod.aimDirection = rec.orig end end)
+        end
     end
 end
 end
@@ -3578,4 +3602,4 @@ loading = false
 pcall(refreshDash)
 setOpen(true)
 notify("Jìn Script", "Loaded")
-warn("[jin] v3.5b loaded")
+warn("[jin] v3.6 loaded")
