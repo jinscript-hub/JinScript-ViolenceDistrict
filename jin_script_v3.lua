@@ -818,7 +818,7 @@ local function particlesRestore()
     for i in pairs(fxOff) do if i.Parent then pcall(function() i.Enabled = true end) end end
     fxOff = {}
 end
-local postSweep, postRestore, setQuality, Reg, CFG_FILE, loading, dirty, loadConfig, gui, HEAD, PADL, PADR, curSize, curRatio, isOpen, setOpen, applyLayout, tabHolder, content, selectTab, tHome, tSurv, tKill, tMisc, tSet, curFps, refreshDash
+local postSweep, postRestore, setQuality, Reg, CFG_FILE, loading, dirty, loadConfig, gui, HEAD, PADL, PADR, curSize, curRatio, isOpen, setOpen, applyLayout, tabHolder, content, selectTab, tHome, tKill, tMisc, tSet, curFps, refreshDash
 do
 local POST = {BloomEffect = 1, BlurEffect = 1, ColorCorrectionEffect = 1, DepthOfFieldEffect = 1, SunRaysEffect = 1}
 local postOff = {}
@@ -1174,7 +1174,7 @@ local header = new("Frame", {Size = UDim2.new(1, 0, 0, HEAD), BackgroundTranspar
 new("Frame", {Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = T.stroke, BorderSizePixel = 0}, header)
 local ttl = mkLabel(header, "JÌN SCRIPT", 12, T.text, F_BOLD)
 ttl.Position = UDim2.fromOffset(14, 0); ttl.Size = UDim2.fromOffset(78, HEAD - 1)
-local ver = mkLabel(header, "v3.4", 10, T.dim)
+local ver = mkLabel(header, "v3.5", 10, T.dim)
 ver.Position = UDim2.fromOffset(92, 1); ver.Size = UDim2.fromOffset(30, HEAD - 1)
 local closeBtn = new("TextButton", {Size = UDim2.fromOffset(24, 24), AnchorPoint = Vector2.new(1, 0.5),
     Position = UDim2.new(1, -8, 0.5, -1), BackgroundTransparency = 1, Text = "", AutoButtonColor = false}, header)
@@ -1570,7 +1570,7 @@ function Card:Label(txt)
     return l
 end
 tHome = addTab("Dashboard", "home", true)
-tSurv = addTab("Survivor", "user")
+local tSurv = addTab("Survivor", "user")
 tKill = addTab("Killer", "blade")
 local tESP = addTab("ESP", "eye")
 tMisc = addTab("Misc", "sliders")
@@ -3303,6 +3303,165 @@ do
         lbl.Text = table.concat(out, "\n")
     end
 end
+do
+    -- Silent aim Twist of Fate: ganti aimDirection milik game (modul), tanpa hook remote
+    S.sa = {on = false, radius = 150, maxDist = 150, maxAngle = 20, flat = false, head = false, predict = false, circle = true}
+    local cSA = tSurv:Group("Silent aim (Twist of Fate)", 1)
+    local saLbl = cSA:Label("Status: OFF")
+    local pendingTxt
+    local function saSay(t) pendingTxt = t end
+    -- GUI cuma disentuh dari thread ini (thread game ga punya izin)
+    track(RS.Heartbeat:Connect(function()
+        if pendingTxt then saLbl.Text = pendingTxt pendingTxt = nil end
+    end))
+
+    local saGui = Instance.new("ScreenGui")
+    saGui.Name = "JinSAFov"
+    saGui.ResetOnSpawn = false
+    saGui.IgnoreGuiInset = true
+    saGui.DisplayOrder = 999
+    attach(saGui)
+    track({Disconnect = function() pcall(function() saGui:Destroy() end) end})
+    local ring = Instance.new("Frame")
+    ring.AnchorPoint = Vector2.new(0.5, 0.5)
+    ring.Position = UDim2.new(0.5, 0, 0.5, 0)
+    ring.BackgroundTransparency = 1
+    ring.Active = false
+    pcall(function() ring.Interactable = false end)
+    ring.Visible = false
+    ring.Parent = saGui
+    Instance.new("UICorner", ring).CornerRadius = UDim.new(1, 0)
+    local saStroke = Instance.new("UIStroke", ring)
+    saStroke.Color = Color3.new(1, 1, 1)
+    saStroke.Thickness = 1.5
+    saStroke.Transparency = 0.25
+    local function updRing()
+        ring.Size = UDim2.fromOffset(S.sa.radius * 2, S.sa.radius * 2)
+        ring.Visible = S.sa.on and S.sa.circle
+    end
+
+    cSA:Toggle("SA_On", "Silent aim", false, function(v)
+        S.sa.on = v
+        saSay(v and "ON, nunggu tembakan" or "Status: OFF")
+        updRing()
+    end)
+    cSA:Slider("SA_Radius", "Ukuran lingkaran FOV (px)", 40, 400, 150, 10, function(v) S.sa.radius = v updRing() end)
+    cSA:Toggle("SA_Circle", "Tampilkan lingkaran FOV", true, function(v) S.sa.circle = v updRing() end)
+    cSA:Slider("SA_Dist", "Jarak max killer", 20, 300, 150, 10, function(v) S.sa.maxDist = v end, "m")
+    cSA:Slider("SA_Angle", "Batas geser arah (derajat)", 5, 180, 20, 5, function(v) S.sa.maxAngle = v end)
+    cSA:Dropdown("SA_Part", "Bidik ke", {"Badan", "Kepala"}, "Badan", function(v) S.sa.head = v == "Kepala" end)
+    cSA:Toggle("SA_Flat", "Arah datar (Y = 0)", false, function(v) S.sa.flat = v end)
+    cSA:Toggle("SA_Predict", "Prediksi gerak killer", false, function(v) S.sa.predict = v end)
+
+    local function dot3(a, b) return a.X * b.X + a.Y * b.Y + a.Z * b.Z end
+    local function aimPart(char, hrp)
+        if S.sa.head then return char:FindFirstChild("Head") or hrp end
+        return char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso") or hrp
+    end
+    local function muzzlePos()
+        local ch = lp.Character
+        local tof = ch and ch:FindFirstChild("Twist of Fate")
+        local arm = tof and tof:FindFirstChild("Right Arm")
+        local gun
+        if arm then
+            for _, c in ipairs(arm:GetChildren()) do
+                if c:IsA("Model") then gun = c break end
+            end
+        end
+        gun = gun or (ch and ch:FindFirstChild("gun", true))
+        if not gun then return nil end
+        for _, n in ipairs({"SmokePart", "barrel"}) do
+            local p = gun:FindFirstChild(n, true)
+            if p and p:IsA("BasePart") then return p.Position end
+        end
+        local ok, pos = pcall(function() return gun:GetPivot().Position end)
+        return ok and pos or nil
+    end
+    local function leadPoint(part, origin)
+        local hrp = part.Parent and part.Parent:FindFirstChild("HumanoidRootPart")
+        local v = hrp and hrp.AssemblyLinearVelocity or Vector3.zero
+        local pos = part.Position
+        if v.Magnitude < 1 then return pos end
+        local t = (pos - origin).Magnitude / 800
+        local p = pos
+        for _ = 1, 3 do
+            p = pos + v * t
+            t = (p - origin).Magnitude / 800
+        end
+        return p
+    end
+    -- killer harus kelihatan di dalam lingkaran; yang paling dekat tengah layar dipilih
+    local function pickTarget()
+        local cam = workspace.CurrentCamera
+        local myCh = lp.Character
+        local myHrp = myCh and myCh:FindFirstChild("HumanoidRootPart")
+        if not (cam and myHrp) then return nil, "kamera/karakter ga ada" end
+        local c = cam.ViewportSize / 2
+        local best, bestD, any = nil, nil, false
+        for _, k in ipairs(getKillers()) do
+            if k.char ~= myCh then
+                any = true
+                local part = aimPart(k.char, k.hrp)
+                if (part.Position - myHrp.Position).Magnitude <= S.sa.maxDist then
+                    local v, on = cam:WorldToViewportPoint(part.Position)
+                    if on and v.Z > 0 then
+                        local d = (Vector2.new(v.X, v.Y) - c).Magnitude
+                        if d <= S.sa.radius and (not bestD or d < bestD) then best, bestD = part, d end
+                    end
+                end
+            end
+        end
+        if not best then return nil, any and "killer di luar lingkaran/jarak" or "killer ga kedeteksi" end
+        return best
+    end
+    local function computeDir()
+        local part, why = pickTarget()
+        if not part then return nil, nil, why end
+        local origin = muzzlePos()
+        if not origin then
+            local h = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+            origin = h and h.Position
+        end
+        if not origin then return nil, nil, "asal arah ga ketemu" end
+        local tp = S.sa.predict and leadPoint(part, origin) or part.Position
+        local d = tp - origin
+        if S.sa.flat then d = Vector3.new(d.X, 0, d.Z) end
+        if d.Magnitude < 0.01 then return nil, nil, "arah nol" end
+        return d.Unit, part.Parent and part.Parent.Name or "?", nil
+    end
+
+    local modEff, modOrig
+    task.spawn(function()
+        local ok, e = pcall(function()
+            local m = game:GetService("ReplicatedStorage"):WaitForChild("Modules", 10):WaitForChild("Items", 10):WaitForChild("TwistOfFate", 10):WaitForChild("TwistoffateEffects", 10)
+            local mod = require(m)
+            if type(mod) ~= "table" or type(mod.aimDirection) ~= "function" then error("aimDirection ga ada") end
+            modEff, modOrig = mod, mod.aimDirection
+            mod.aimDirection = function(...)
+                if not (running and S.sa.on) then return modOrig(...) end
+                local r = table.pack(modOrig(...))
+                local okC, d, who, why = pcall(computeDir)
+                local orig = r[1]
+                if okC and d and typeof(orig) == "Vector3" and orig.Magnitude > 0.01 then
+                    local ang = math.deg(math.acos(math.clamp(dot3(orig, d) / orig.Magnitude, -1, 1)))
+                    if ang <= S.sa.maxAngle then
+                        saSay(("Diarahin ke %s (geser %d derajat)"):format(tostring(who), math.floor(ang)))
+                        return d
+                    end
+                    saSay("Lolos asli: geser " .. math.floor(ang) .. " derajat > batas")
+                else
+                    saSay("Lolos asli: " .. tostring(okC and (why or "arah asli ga ada") or d))
+                end
+                return table.unpack(r, 1, r.n)
+            end
+            saSay(S.sa.on and "ON, nunggu tembakan" or "Status: OFF")
+        end)
+        if not ok then saSay("Modul pistol ga ketemu: " .. tostring(e)) end
+    end)
+    S.saRestore = function()
+        if modEff and modOrig then pcall(function() modEff.aimDirection = modOrig end) end
+    end
+end
 local cleanup
 local cUI = tSet:Group("Tampilan", 1)
 cUI:Dropdown("UI_Size", "Ukuran", {"Kecil", "Sedang", "Besar", "Jumbo"}, "Sedang", function(v) curSize = v applyLayout() end)
@@ -3392,330 +3551,12 @@ track(UIS.InputBegan:Connect(function(i, gp)
         notify("Skill check", S.sc.enabled and "ON" or "OFF")
     end
 end))
--- ===== Silent aim pistol (Survivor) =====
--- Cara kerja: hook FireServer remote milik tool yang lagi dipegang, lalu ganti argumen
--- arah/titik/part tembakan ke Head atau badan atas killer. Format argumen remote DIPELAJARI
--- dari tembakan asli (bukan ditebak), dan ga ada yang diubah sebelum format itu ketemu.
-;(function()
-    local HAVE_HOOK = (hookmetamethod and getnamecallmethod and newcclosure and checkcaller) and true or false
-    local RepStorage = game:GetService("ReplicatedStorage")
-    local PROBE_FILE = BASE .. "jin_pistol_probe.txt"
-    local PISTOL_WORDS = {"pistol", "gun", "revolver", "handgun"}
-    local AIM_KINDS = {dir = true, point = true, cf_origin = true, cf_point = true, part = true, inst = true}
-
-    local P = {on = false, part = "Auto", fov = 25, range = 120, los = true, probe = false,
-        map = nil, votes = {n = 0, idx = {}}, noAim = false, toolName = nil, lastSeen = nil, hits = 0}
-    S.pistol = P
-
-    local alive = true
-    conns[#conns + 1] = {Disconnect = function() alive = false end}
-
-    -- ---------- log probe ----------
-    local logbuf, logBusy = {}, false
-    local function plog(...)
-        if not P.probe then return end
-        local a = table.pack(...)
-        for i = 1, a.n do a[i] = tostring(a[i]) end
-        logbuf[#logbuf + 1] = ("[%.2f] %s"):format(os.clock(), table.concat(a, " ", 1, a.n))
-        if #logbuf > 400 then table.remove(logbuf, 1) end
-        if writefile and not logBusy then
-            logBusy = true
-            task.delay(2, function()
-                logBusy = false
-                pcall(writefile, PROBE_FILE, table.concat(logbuf, "\n"))
-            end)
-        end
-    end
-    local function fv(v)
-        local t = typeof(v)
-        if t == "Vector3" then return ("V3(%.2f,%.2f,%.2f)"):format(v.X, v.Y, v.Z) end
-        if t == "CFrame" then
-            local p, l = v.Position, v.LookVector
-            return ("CF(pos %.1f,%.1f,%.1f look %.2f,%.2f,%.2f)"):format(p.X, p.Y, p.Z, l.X, l.Y, l.Z)
-        end
-        if t == "Instance" then return "Inst:" .. v:GetFullName() end
-        return t .. ":" .. tostring(v)
-    end
-
-    -- ---------- tool & remote ----------
-    local items
-    local watch = setmetatable({}, {__mode = "k"})
-    local function equipped()
-        local ch = lp.Character
-        return ch and ch:FindFirstChildOfClass("Tool")
-    end
-    local function isPistol(tool)
-        if not tool then return false end
-        if P.toolName and tool.Name == P.toolName then return true end
-        local n = tool.Name:lower()
-        for _, w in ipairs(PISTOL_WORDS) do if n:find(w, 1, true) then return true end end
-        return false
-    end
-    local function addRemote(r)
-        if not (r:IsA("RemoteEvent") or r:IsA("RemoteFunction")) or watch[r] then return end
-        watch[r] = true
-        if r:IsA("RemoteEvent") then
-            conns[#conns + 1] = r.OnClientEvent:Connect(function(...)
-                if not P.probe then return end
-                local a = table.pack(...)
-                local s = {}
-                for i = 1, a.n do s[i] = fv(a[i]) end
-                plog("SERVER->CLIENT", r:GetFullName(), "|", table.concat(s, " ; "))
-            end)
-        end
-    end
-    local function buildWatch()
-        if items then return end
-        task.spawn(function()
-            local ok, f = pcall(function()
-                return RepStorage:WaitForChild("Remotes", 20):WaitForChild("Items", 20)
-            end)
-            if not (ok and f) then return end
-            items = f
-            for _, d in ipairs(f:GetDescendants()) do addRemote(d) end
-            conns[#conns + 1] = f.DescendantAdded:Connect(addRemote)
-        end)
-    end
-
-    -- ---------- klasifikasi argumen ----------
-    local function kindOf(v, cf)
-        local t = typeof(v)
-        if t == "Vector3" then
-            if math.abs(v.Magnitude - 1) < 0.01 and v:Dot(cf.LookVector) > 0.98 then return "dir" end
-            local rel = v - cf.Position
-            local d = rel.Magnitude
-            if d > 3 and rel.Unit:Dot(cf.LookVector) > 0.98 then return "point" end
-            if d < 12 then return "origin" end
-            return nil
-        elseif t == "CFrame" then
-            local rel = v.Position - cf.Position
-            local d = rel.Magnitude
-            if d < 12 and v.LookVector:Dot(cf.LookVector) > 0.98 then return "cf_origin" end
-            if d > 3 and rel.Unit:Dot(cf.LookVector) > 0.98 then return "cf_point" end
-            return nil
-        elseif t == "Instance" then
-            if v:IsA("BasePart") then return "part" end
-            if v:IsA("Model") then return "inst" end
-        end
-        return nil
-    end
-
-    local psLbl
-    local function kindsStr(map)
-        local o = {}
-        for i, k in pairs(map.kinds) do o[#o + 1] = ("#%d=%s"):format(i, k) end
-        table.sort(o)
-        return table.concat(o, " ")
-    end
-    local function refresh()
-        if not psLbl then return end
-        local s
-        if not HAVE_HOOK then
-            s = "Status: executor ga punya hookmetamethod/getnamecallmethod/newcclosure/checkcaller, fitur ga bisa jalan"
-        elseif not (P.on or P.probe) then
-            s = "Status: OFF"
-        elseif P.noAim then
-            s = "Status: remote tembakan ga bawa arg arah/titik/part (server mungkin pakai kamera sendiri). Cek log probe."
-        elseif not P.map then
-            s = ("Status: belum belajar format tembakan. Pegang pistol, tembak 2-3x (sampel %d)."):format(P.votes.n)
-        else
-            s = ("Status: siap | remote %s | arg %s | tembakan diubah: %d"):format(P.map.remote.Name, kindsStr(P.map), P.hits)
-        end
-        if P.lastSeen then s = s .. " | tool: " .. P.lastSeen end
-        psLbl.Text = s
-    end
-
-    local function learn(remote, a, cf)
-        local V = P.votes
-        if V.remote ~= remote or V.n >= 8 then V = {remote = remote, n = 0, idx = {}} P.votes = V end
-        V.n = V.n + 1
-        for i = 1, a.n do
-            local k = kindOf(a[i], cf)
-            if k then
-                local t = V.idx[i] or {}
-                V.idx[i] = t
-                t[k] = (t[k] or 0) + 1
-            end
-        end
-        if V.n >= 2 then
-            local kinds, has = {}, false
-            for i, t in pairs(V.idx) do
-                local bk, bc
-                for k, c in pairs(t) do if not bc or c > bc then bk, bc = k, c end end
-                if bc and bc >= 2 then
-                    kinds[i] = bk
-                    if AIM_KINDS[bk] then has = true end
-                end
-            end
-            if has then
-                P.map = {remote = remote, kinds = kinds}
-                P.noAim = false
-                plog("MAP", remote:GetFullName(), kindsStr(P.map))
-            elseif V.n >= 4 then
-                P.noAim = true
-            end
-        end
-        refresh()
-    end
-
-    -- ---------- pilih target ----------
-    local rp = RaycastParams.new()
-    rp.FilterType = Enum.RaycastFilterType.Exclude
-    local function visible(part, ch, from)
-        rp.FilterDescendantsInstances = {lp.Character}
-        local r = workspace:Raycast(from, part.Position - from, rp)
-        return r == nil or r.Instance:IsDescendantOf(ch)
-    end
-    local function candidates(ch)
-        local head = ch:FindFirstChild("Head")
-        local torso = ch:FindFirstChild("UpperTorso") or ch:FindFirstChild("Torso")
-        if P.part == "Kepala" then return {head} end
-        if P.part == "Badan atas" then return {torso} end
-        return {head, torso}
-    end
-    local function pickTarget(cf)
-        local best, bestAng
-        for _, k in ipairs(getKillers()) do
-            local ch = k.char
-            local hum = ch:FindFirstChildOfClass("Humanoid")
-            if hum and hum.Health > 0 then
-                for _, part in ipairs(candidates(ch)) do
-                    if part then
-                        local rel = part.Position - cf.Position
-                        local d = rel.Magnitude
-                        if d > 1 and d <= P.range then
-                            local ang = math.deg(math.acos(math.clamp(rel.Unit:Dot(cf.LookVector), -1, 1)))
-                            if ang <= P.fov and (not bestAng or ang < bestAng)
-                                and (not P.los or visible(part, ch, cf.Position)) then
-                                best, bestAng = {part = part, char = ch}, ang
-                            end
-                        end
-                    end
-                end
-            end
-        end
-        return best
-    end
-
-    -- ---------- tulis ulang argumen ----------
-    local function rewrite(a, tgt, cf)
-        local out = table.pack(table.unpack(a, 1, a.n))
-        local pos = tgt.part.Position
-        local origin = cf.Position
-        for i, k in pairs(P.map.kinds) do
-            if k == "origin" and typeof(out[i]) == "Vector3" then origin = out[i]
-            elseif k == "cf_origin" and typeof(out[i]) == "CFrame" then origin = out[i].Position end
-        end
-        for i, k in pairs(P.map.kinds) do
-            local v = out[i]
-            if k == "dir" and typeof(v) == "Vector3" then out[i] = (pos - origin).Unit
-            elseif k == "point" and typeof(v) == "Vector3" then out[i] = pos
-            elseif k == "cf_origin" and typeof(v) == "CFrame" then out[i] = CFrame.lookAt(v.Position, pos)
-            elseif k == "cf_point" and typeof(v) == "CFrame" then out[i] = CFrame.new(pos)
-            elseif k == "part" and (v == nil or typeof(v) == "Instance") then out[i] = tgt.part
-            elseif k == "inst" and (v == nil or typeof(v) == "Instance") then out[i] = tgt.char end
-        end
-        return out
-    end
-
-    -- ---------- hook ----------
-    local hooked = false
-    local recentRay = {}
-    local function onFire(self, a)
-        local tool = equipped()
-        if not tool then return end
-        local folder = self:FindFirstAncestor(tool.Name)
-        if not (folder and items and folder:IsDescendantOf(items)) then return end
-        P.lastSeen = tool.Name
-        local cf = workspace.CurrentCamera.CFrame
-        if P.probe then
-            local s, kk = {}, {}
-            for i = 1, a.n do s[i] = fv(a[i]) kk[i] = kindOf(a[i], cf) or "-" end
-            plog("FIRE", self:GetFullName(), "| tool", tool.Name, "| pistol?", tostring(isPistol(tool)))
-            plog("  args", table.concat(s, " ; "))
-            plog("  kinds", table.concat(kk, ","))
-            plog("  cam", fv(cf))
-            local now = os.clock()
-            for _, r in ipairs(recentRay) do
-                if now - r.t < 0.5 then plog(("  RAYCAST sebelum fire (-%.3fs)"):format(now - r.t), r.s) end
-            end
-        end
-        if not isPistol(tool) then return end
-        if not (P.map and P.map.remote == self) then
-            if P.on or P.probe then learn(self, a, cf) end
-            return
-        end
-        if not P.on then return end
-        local tgt = pickTarget(cf)
-        if not tgt then return end
-        local ok, out = pcall(rewrite, a, tgt, cf)
-        if ok and out then
-            P.hits = P.hits + 1
-            return out
-        end
-    end
-    local function ensureHook()
-        buildWatch()
-        if hooked or not HAVE_HOOK then refresh() return end
-        hooked = true
-        local old
-        old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-            local m = getnamecallmethod()
-            if not alive then return old(self, ...) end
-            if m == "FireServer" and watch[self] and not checkcaller() then
-                local a = table.pack(...)
-                local ok, out = pcall(onFire, self, a)
-                if ok and out then return old(self, table.unpack(out, 1, out.n)) end
-            elseif m == "Raycast" and P.probe and not checkcaller() then
-                local a = table.pack(...)
-                local s = ("%s dir %s"):format(fv(a[1]), fv(a[2]))
-                recentRay[#recentRay + 1] = {t = os.clock(), s = s}
-                if #recentRay > 12 then table.remove(recentRay, 1) end
-            end
-            return old(self, ...)
-        end))
-        refresh()
-    end
-
-    -- ---------- UI ----------
-    local cPS = tSurv:Group("Silent aim (Pistol)", 1)
-    cPS:Toggle("PS_On", "Silent aim pistol", false, function(v)
-        P.on = v
-        if v then ensureHook() end
-        refresh()
-    end)
-    cPS:Dropdown("PS_Part", "Target peluru", {"Auto", "Kepala", "Badan atas"}, "Auto", function(v) P.part = v end)
-    cPS:Slider("PS_FOV", "FOV aim (derajat dari tengah layar)", 5, 90, 25, 1, function(v) P.fov = v end)
-    cPS:Slider("PS_Range", "Jarak max", 20, 300, 120, 5, function(v) P.range = v end, "m")
-    cPS:Toggle("PS_LOS", "Cek garis pandang (ga nembak tembus tembok)", true, function(v) P.los = v end)
-    cPS:Toggle("PS_Probe", "Probe: catat tembakan ke jin_pistol_probe.txt", false, function(v)
-        P.probe = v
-        if v then ensureHook() end
-        refresh()
-    end)
-    cPS:Button("Anggap tool yang dipegang = pistol", function()
-        local t = equipped()
-        if t then
-            P.toolName = t.Name
-            P.map, P.votes, P.noAim = nil, {n = 0, idx = {}}, false
-            notify("Silent aim", "Pistol = " .. t.Name)
-        else
-            notify("Silent aim", "Ga ada tool dipegang")
-        end
-        refresh()
-    end)
-    cPS:Button("Reset format tembakan", function()
-        P.map, P.votes, P.noAim, P.hits = nil, {n = 0, idx = {}}, false, 0
-        refresh()
-    end)
-    psLbl = cPS:Label("Status: OFF")
-    refresh()
-end)()
 function cleanup()
     if not running then return end
     running = false
     for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
     scUnbind()
+    pcall(function() if S.saRestore then S.saRestore() end end)
     for plr in pairs(pvis) do destroyPlayerVis(plr) end
     for inst in pairs(ovis) do destroyObj(inst) end
     pcall(function() espFolder:Destroy() end)
@@ -3737,4 +3578,4 @@ loading = false
 pcall(refreshDash)
 setOpen(true)
 notify("Jìn Script", "Loaded")
-warn("[jin] v3.4 loaded")
+warn("[jin] v3.5 loaded")
