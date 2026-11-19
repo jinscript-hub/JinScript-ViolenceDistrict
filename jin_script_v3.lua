@@ -2929,7 +2929,7 @@ do local function parryInit()
 end parryInit() end
 do
     -- Silent aim Twist of Fate: ganti aimDirection milik game (modul), tanpa hook remote
-    S.sa = {on = false, radius = 150, maxDist = 150, maxAngle = 180, flat = false, head = false, predict = false, circle = true}
+    S.sa = {on = false, radius = 150, maxDist = 150, maxAngle = 180, flat = false, head = false, arm = false, predict = false, circle = true, calls = 0}
     local cSA = tSurv:Group("Silent aim (Twist of Fate)", 1)
     local saLbl = cSA:Label("Status: OFF")
     local pendingTxt
@@ -2972,10 +2972,17 @@ do
     cSA:Slider("SA_Radius", "Ukuran lingkaran FOV (px)", 40, 400, 150, 10, function(v) S.sa.radius = v updRing() end)
     cSA:Toggle("SA_Circle", "Tampilkan lingkaran FOV", true, function(v) S.sa.circle = v updRing() end)
     cSA:Slider("SA_Dist", "Jarak max killer", 20, 300, 150, 10, function(v) S.sa.maxDist = v end, "m")
-    cSA:Dropdown("SA_Part", "Bidik ke", {"Badan", "Kepala"}, "Badan", function(v) S.sa.head = v == "Kepala" end)
+    cSA:Dropdown("SA_Part", "Bidik ke", {"Badan", "Kepala", "Lengan kanan"}, "Badan", function(v) S.sa.head = v == "Kepala" S.sa.arm = v == "Lengan kanan" end)
 
     local function dot3(a, b) return a.X * b.X + a.Y * b.Y + a.Z * b.Z end
     local function aimPart(char, hrp)
+        if S.sa.arm then
+            -- R6 = "Right Arm", R15 = "RightUpperArm"; kalau ga ada, jatuh ke badan
+            for _, n in ipairs({"Right Arm", "RightUpperArm", "RightLowerArm", "RightHand"}) do
+                local a = char:FindFirstChild(n)
+                if a and a:IsA("BasePart") then return a end
+            end
+        end
         if S.sa.head then return char:FindFirstChild("Head") or hrp end
         return char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso") or hrp
     end
@@ -3055,6 +3062,7 @@ do
     local patched = {}
     local function makeWrapper(orig)
         return function(...)
+            S.sa.calls = S.sa.calls + 1
             if not (running and S.sa.on) then return orig(...) end
             local r = table.pack(orig(...))
             local okC, d, who, why = pcall(computeDir)
@@ -3062,12 +3070,12 @@ do
             if okC and d and typeof(o) == "Vector3" and o.Magnitude > 0.01 then
                 local ang = math.deg(math.acos(math.clamp(dot3(o, d) / o.Magnitude, -1, 1)))
                 if ang <= S.sa.maxAngle then
-                    saSay(("Diarahin ke %s (geser %d derajat)"):format(tostring(who), math.floor(ang)))
+                    saSay(("Diarahin ke %s (geser %d derajat) [dipanggil %dx]"):format(tostring(who), math.floor(ang), S.sa.calls))
                     return d
                 end
-                saSay("Lolos asli: geser " .. math.floor(ang) .. " derajat > batas")
+                saSay("Lolos asli: geser " .. math.floor(ang) .. " derajat > batas [dipanggil " .. S.sa.calls .. "x]")
             else
-                saSay("Lolos asli: " .. tostring(okC and (why or "arah asli ga ada") or d))
+                saSay("Lolos asli: " .. tostring(okC and (why or ("arah asli bukan Vector3: " .. typeof(o))) or d) .. " [dipanggil " .. S.sa.calls .. "x]")
             end
             return table.unpack(r, 1, r.n)
         end
