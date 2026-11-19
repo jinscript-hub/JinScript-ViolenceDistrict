@@ -2929,7 +2929,7 @@ do local function parryInit()
 end parryInit() end
 do
     -- Silent aim Twist of Fate: ganti aimDirection milik game (modul), tanpa hook remote
-    S.sa = {on = false, radius = 150, maxDist = 150, maxAngle = 180, flat = false, head = false, arm = false, predict = false, circle = true, calls = 0}
+    S.sa = {on = false, radius = 150, maxDist = 150, maxAngle = 180, flat = false, head = false, arm = false, predict = false, circle = true, calls = 0, angleMode = true, fovAngle = 120}
     local cSA = tSurv:Group("Silent aim (Twist of Fate)", 1)
     local saLbl = cSA:Label("Status: OFF")
     local pendingTxt
@@ -2961,7 +2961,7 @@ do
     saStroke.Transparency = 0.25
     local function updRing()
         ring.Size = UDim2.fromOffset(S.sa.radius * 2, S.sa.radius * 2)
-        ring.Visible = S.sa.on and S.sa.circle
+        ring.Visible = S.sa.on and S.sa.circle and not S.sa.angleMode
     end
 
     cSA:Toggle("SA_On", "Silent aim", false, function(v)
@@ -2972,6 +2972,8 @@ do
     cSA:Slider("SA_Radius", "Ukuran lingkaran FOV (px)", 40, 400, 150, 10, function(v) S.sa.radius = v updRing() end)
     cSA:Toggle("SA_Circle", "Tampilkan lingkaran FOV", true, function(v) S.sa.circle = v updRing() end)
     cSA:Slider("SA_Dist", "Jarak max killer", 20, 300, 150, 10, function(v) S.sa.maxDist = v end, "m")
+    cSA:Dropdown("SA_Area", "Area bidik", {"Sudut kamera", "Lingkaran layar"}, "Sudut kamera", function(v) S.sa.angleMode = v == "Sudut kamera" updRing() end)
+    cSA:Slider("SA_Angle", "Sudut bidik (derajat, mode sudut)", 20, 360, 120, 10, function(v) S.sa.fovAngle = v end)
     cSA:Dropdown("SA_Part", "Bidik ke", {"Badan", "Kepala", "Lengan kanan"}, "Badan", function(v) S.sa.head = v == "Kepala" S.sa.arm = v == "Lengan kanan" end)
 
     local function dot3(a, b) return a.X * b.X + a.Y * b.Y + a.Z * b.Z end
@@ -3018,7 +3020,20 @@ do
         end
         return p
     end
-    -- killer harus kelihatan di dalam lingkaran; yang paling dekat tengah layar dipilih
+    -- true kalau part masuk area bidik; angka kedua = jarak ke tengah (px atau derajat), dipakai buat milih yang paling dekat
+    local function inAim(cam, part, c)
+        if S.sa.angleMode then
+            local dir = part.Position - cam.CFrame.Position
+            if dir.Magnitude < 0.1 then return true, 0 end
+            local a = math.deg(math.acos(math.clamp(dot3(cam.CFrame.LookVector, dir.Unit), -1, 1)))
+            return a <= S.sa.fovAngle / 2, a
+        end
+        local v, on = cam:WorldToViewportPoint(part.Position)
+        if not (on and v.Z > 0) then return false end
+        local d = (Vector2.new(v.X, v.Y) - c).Magnitude
+        return d <= S.sa.radius, d
+    end
+    -- killer harus ada di area bidik (sudut kamera atau lingkaran layar); yang paling dekat tengah dipilih
     local function pickTarget()
         local cam = workspace.CurrentCamera
         local myCh = lp.Character
@@ -3031,15 +3046,12 @@ do
                 any = true
                 local part = aimPart(k.char, k.hrp)
                 if (part.Position - myHrp.Position).Magnitude <= S.sa.maxDist then
-                    local v, on = cam:WorldToViewportPoint(part.Position)
-                    if on and v.Z > 0 then
-                        local d = (Vector2.new(v.X, v.Y) - c).Magnitude
-                        if d <= S.sa.radius and (not bestD or d < bestD) then best, bestD = part, d end
-                    end
+                    local ok, d = inAim(cam, part, c)
+                    if ok and (not bestD or d < bestD) then best, bestD = part, d end
                 end
             end
         end
-        if not best then return nil, any and "killer di luar lingkaran/jarak" or "killer ga kedeteksi" end
+        if not best then return nil, any and "killer di luar area bidik/jarak" or "killer ga kedeteksi" end
         return best
     end
     local function computeDir()
