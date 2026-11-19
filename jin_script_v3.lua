@@ -2927,6 +2927,165 @@ do local function parryInit()
         end)
     end))
 end parryInit() end
+do
+    -- Silent aim Twist of Fate: ganti aimDirection milik game (modul), tanpa hook remote
+    S.sa = {on = false, radius = 150, maxDist = 150, maxAngle = 20, flat = false, head = false, predict = false, circle = true}
+    local cSA = tSurv:Group("Silent aim (Twist of Fate)", 1)
+    local saLbl = cSA:Label("Status: OFF")
+    local pendingTxt
+    local function saSay(t) pendingTxt = t end
+    -- GUI cuma disentuh dari thread ini (thread game ga punya izin)
+    track(RS.Heartbeat:Connect(function()
+        if pendingTxt then saLbl.Text = pendingTxt pendingTxt = nil end
+    end))
+
+    local saGui = Instance.new("ScreenGui")
+    saGui.Name = "JinSAFov"
+    saGui.ResetOnSpawn = false
+    saGui.IgnoreGuiInset = true
+    saGui.DisplayOrder = 999
+    attach(saGui)
+    track({Disconnect = function() pcall(function() saGui:Destroy() end) end})
+    local ring = Instance.new("Frame")
+    ring.AnchorPoint = Vector2.new(0.5, 0.5)
+    ring.Position = UDim2.new(0.5, 0, 0.5, 0)
+    ring.BackgroundTransparency = 1
+    ring.Active = false
+    pcall(function() ring.Interactable = false end)
+    ring.Visible = false
+    ring.Parent = saGui
+    Instance.new("UICorner", ring).CornerRadius = UDim.new(1, 0)
+    local saStroke = Instance.new("UIStroke", ring)
+    saStroke.Color = Color3.new(1, 1, 1)
+    saStroke.Thickness = 1.5
+    saStroke.Transparency = 0.25
+    local function updRing()
+        ring.Size = UDim2.fromOffset(S.sa.radius * 2, S.sa.radius * 2)
+        ring.Visible = S.sa.on and S.sa.circle
+    end
+
+    cSA:Toggle("SA_On", "Silent aim", false, function(v)
+        S.sa.on = v
+        saSay(v and "ON, nunggu tembakan" or "Status: OFF")
+        updRing()
+    end)
+    cSA:Slider("SA_Radius", "Ukuran lingkaran FOV (px)", 40, 400, 150, 10, function(v) S.sa.radius = v updRing() end)
+    cSA:Toggle("SA_Circle", "Tampilkan lingkaran FOV", true, function(v) S.sa.circle = v updRing() end)
+    cSA:Slider("SA_Dist", "Jarak max killer", 20, 300, 150, 10, function(v) S.sa.maxDist = v end, "m")
+    cSA:Slider("SA_Angle", "Batas geser arah (derajat)", 5, 180, 20, 5, function(v) S.sa.maxAngle = v end)
+    cSA:Dropdown("SA_Part", "Bidik ke", {"Badan", "Kepala"}, "Badan", function(v) S.sa.head = v == "Kepala" end)
+    cSA:Toggle("SA_Flat", "Arah datar (Y = 0)", false, function(v) S.sa.flat = v end)
+    cSA:Toggle("SA_Predict", "Prediksi gerak killer", false, function(v) S.sa.predict = v end)
+
+    local function dot3(a, b) return a.X * b.X + a.Y * b.Y + a.Z * b.Z end
+    local function aimPart(char, hrp)
+        if S.sa.head then return char:FindFirstChild("Head") or hrp end
+        return char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso") or hrp
+    end
+    local function muzzlePos()
+        local ch = lp.Character
+        local tof = ch and ch:FindFirstChild("Twist of Fate")
+        local arm = tof and tof:FindFirstChild("Right Arm")
+        local gun
+        if arm then
+            for _, c in ipairs(arm:GetChildren()) do
+                if c:IsA("Model") then gun = c break end
+            end
+        end
+        gun = gun or (ch and ch:FindFirstChild("gun", true))
+        if not gun then return nil end
+        for _, n in ipairs({"SmokePart", "barrel"}) do
+            local p = gun:FindFirstChild(n, true)
+            if p and p:IsA("BasePart") then return p.Position end
+        end
+        local ok, pos = pcall(function() return gun:GetPivot().Position end)
+        return ok and pos or nil
+    end
+    local function leadPoint(part, origin)
+        local hrp = part.Parent and part.Parent:FindFirstChild("HumanoidRootPart")
+        local v = hrp and hrp.AssemblyLinearVelocity or Vector3.zero
+        local pos = part.Position
+        if v.Magnitude < 1 then return pos end
+        local t = (pos - origin).Magnitude / 800
+        local p = pos
+        for _ = 1, 3 do
+            p = pos + v * t
+            t = (p - origin).Magnitude / 800
+        end
+        return p
+    end
+    -- killer harus kelihatan di dalam lingkaran; yang paling dekat tengah layar dipilih
+    local function pickTarget()
+        local cam = workspace.CurrentCamera
+        local myCh = lp.Character
+        local myHrp = myCh and myCh:FindFirstChild("HumanoidRootPart")
+        if not (cam and myHrp) then return nil, "kamera/karakter ga ada" end
+        local c = cam.ViewportSize / 2
+        local best, bestD, any = nil, nil, false
+        for _, k in ipairs(getKillers()) do
+            if k.char ~= myCh then
+                any = true
+                local part = aimPart(k.char, k.hrp)
+                if (part.Position - myHrp.Position).Magnitude <= S.sa.maxDist then
+                    local v, on = cam:WorldToViewportPoint(part.Position)
+                    if on and v.Z > 0 then
+                        local d = (Vector2.new(v.X, v.Y) - c).Magnitude
+                        if d <= S.sa.radius and (not bestD or d < bestD) then best, bestD = part, d end
+                    end
+                end
+            end
+        end
+        if not best then return nil, any and "killer di luar lingkaran/jarak" or "killer ga kedeteksi" end
+        return best
+    end
+    local function computeDir()
+        local part, why = pickTarget()
+        if not part then return nil, nil, why end
+        local origin = muzzlePos()
+        if not origin then
+            local h = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+            origin = h and h.Position
+        end
+        if not origin then return nil, nil, "asal arah ga ketemu" end
+        local tp = S.sa.predict and leadPoint(part, origin) or part.Position
+        local d = tp - origin
+        if S.sa.flat then d = Vector3.new(d.X, 0, d.Z) end
+        if d.Magnitude < 0.01 then return nil, nil, "arah nol" end
+        return d.Unit, part.Parent and part.Parent.Name or "?", nil
+    end
+
+    local modEff, modOrig
+    task.spawn(function()
+        local ok, e = pcall(function()
+            local m = game:GetService("ReplicatedStorage"):WaitForChild("Modules", 10):WaitForChild("Items", 10):WaitForChild("TwistOfFate", 10):WaitForChild("TwistoffateEffects", 10)
+            local mod = require(m)
+            if type(mod) ~= "table" or type(mod.aimDirection) ~= "function" then error("aimDirection ga ada") end
+            modEff, modOrig = mod, mod.aimDirection
+            mod.aimDirection = function(...)
+                if not (running and S.sa.on) then return modOrig(...) end
+                local r = table.pack(modOrig(...))
+                local okC, d, who, why = pcall(computeDir)
+                local orig = r[1]
+                if okC and d and typeof(orig) == "Vector3" and orig.Magnitude > 0.01 then
+                    local ang = math.deg(math.acos(math.clamp(dot3(orig, d) / orig.Magnitude, -1, 1)))
+                    if ang <= S.sa.maxAngle then
+                        saSay(("Diarahin ke %s (geser %d derajat)"):format(tostring(who), math.floor(ang)))
+                        return d
+                    end
+                    saSay("Lolos asli: geser " .. math.floor(ang) .. " derajat > batas")
+                else
+                    saSay("Lolos asli: " .. tostring(okC and (why or "arah asli ga ada") or d))
+                end
+                return table.unpack(r, 1, r.n)
+            end
+            saSay(S.sa.on and "ON, nunggu tembakan" or "Status: OFF")
+        end)
+        if not ok then saSay("Modul pistol ga ketemu: " .. tostring(e)) end
+    end)
+    S.saRestore = function()
+        if modEff and modOrig then pcall(function() modEff.aimDirection = modOrig end) end
+    end
+end
 end
 do
 local AL2 = {}
@@ -3301,165 +3460,6 @@ do
             out[i] = ("%d. %s  %s%s"):format(i, e.pl.DisplayName, tostring(math.floor(e.v * 10 + 0.5) / 10), e.off and "  (AllowKiller off)" or "")
         end
         lbl.Text = table.concat(out, "\n")
-    end
-end
-do
-    -- Silent aim Twist of Fate: ganti aimDirection milik game (modul), tanpa hook remote
-    S.sa = {on = false, radius = 150, maxDist = 150, maxAngle = 20, flat = false, head = false, predict = false, circle = true}
-    local cSA = tSurv:Group("Silent aim (Twist of Fate)", 1)
-    local saLbl = cSA:Label("Status: OFF")
-    local pendingTxt
-    local function saSay(t) pendingTxt = t end
-    -- GUI cuma disentuh dari thread ini (thread game ga punya izin)
-    track(RS.Heartbeat:Connect(function()
-        if pendingTxt then saLbl.Text = pendingTxt pendingTxt = nil end
-    end))
-
-    local saGui = Instance.new("ScreenGui")
-    saGui.Name = "JinSAFov"
-    saGui.ResetOnSpawn = false
-    saGui.IgnoreGuiInset = true
-    saGui.DisplayOrder = 999
-    attach(saGui)
-    track({Disconnect = function() pcall(function() saGui:Destroy() end) end})
-    local ring = Instance.new("Frame")
-    ring.AnchorPoint = Vector2.new(0.5, 0.5)
-    ring.Position = UDim2.new(0.5, 0, 0.5, 0)
-    ring.BackgroundTransparency = 1
-    ring.Active = false
-    pcall(function() ring.Interactable = false end)
-    ring.Visible = false
-    ring.Parent = saGui
-    Instance.new("UICorner", ring).CornerRadius = UDim.new(1, 0)
-    local saStroke = Instance.new("UIStroke", ring)
-    saStroke.Color = Color3.new(1, 1, 1)
-    saStroke.Thickness = 1.5
-    saStroke.Transparency = 0.25
-    local function updRing()
-        ring.Size = UDim2.fromOffset(S.sa.radius * 2, S.sa.radius * 2)
-        ring.Visible = S.sa.on and S.sa.circle
-    end
-
-    cSA:Toggle("SA_On", "Silent aim", false, function(v)
-        S.sa.on = v
-        saSay(v and "ON, nunggu tembakan" or "Status: OFF")
-        updRing()
-    end)
-    cSA:Slider("SA_Radius", "Ukuran lingkaran FOV (px)", 40, 400, 150, 10, function(v) S.sa.radius = v updRing() end)
-    cSA:Toggle("SA_Circle", "Tampilkan lingkaran FOV", true, function(v) S.sa.circle = v updRing() end)
-    cSA:Slider("SA_Dist", "Jarak max killer", 20, 300, 150, 10, function(v) S.sa.maxDist = v end, "m")
-    cSA:Slider("SA_Angle", "Batas geser arah (derajat)", 5, 180, 20, 5, function(v) S.sa.maxAngle = v end)
-    cSA:Dropdown("SA_Part", "Bidik ke", {"Badan", "Kepala"}, "Badan", function(v) S.sa.head = v == "Kepala" end)
-    cSA:Toggle("SA_Flat", "Arah datar (Y = 0)", false, function(v) S.sa.flat = v end)
-    cSA:Toggle("SA_Predict", "Prediksi gerak killer", false, function(v) S.sa.predict = v end)
-
-    local function dot3(a, b) return a.X * b.X + a.Y * b.Y + a.Z * b.Z end
-    local function aimPart(char, hrp)
-        if S.sa.head then return char:FindFirstChild("Head") or hrp end
-        return char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso") or hrp
-    end
-    local function muzzlePos()
-        local ch = lp.Character
-        local tof = ch and ch:FindFirstChild("Twist of Fate")
-        local arm = tof and tof:FindFirstChild("Right Arm")
-        local gun
-        if arm then
-            for _, c in ipairs(arm:GetChildren()) do
-                if c:IsA("Model") then gun = c break end
-            end
-        end
-        gun = gun or (ch and ch:FindFirstChild("gun", true))
-        if not gun then return nil end
-        for _, n in ipairs({"SmokePart", "barrel"}) do
-            local p = gun:FindFirstChild(n, true)
-            if p and p:IsA("BasePart") then return p.Position end
-        end
-        local ok, pos = pcall(function() return gun:GetPivot().Position end)
-        return ok and pos or nil
-    end
-    local function leadPoint(part, origin)
-        local hrp = part.Parent and part.Parent:FindFirstChild("HumanoidRootPart")
-        local v = hrp and hrp.AssemblyLinearVelocity or Vector3.zero
-        local pos = part.Position
-        if v.Magnitude < 1 then return pos end
-        local t = (pos - origin).Magnitude / 800
-        local p = pos
-        for _ = 1, 3 do
-            p = pos + v * t
-            t = (p - origin).Magnitude / 800
-        end
-        return p
-    end
-    -- killer harus kelihatan di dalam lingkaran; yang paling dekat tengah layar dipilih
-    local function pickTarget()
-        local cam = workspace.CurrentCamera
-        local myCh = lp.Character
-        local myHrp = myCh and myCh:FindFirstChild("HumanoidRootPart")
-        if not (cam and myHrp) then return nil, "kamera/karakter ga ada" end
-        local c = cam.ViewportSize / 2
-        local best, bestD, any = nil, nil, false
-        for _, k in ipairs(getKillers()) do
-            if k.char ~= myCh then
-                any = true
-                local part = aimPart(k.char, k.hrp)
-                if (part.Position - myHrp.Position).Magnitude <= S.sa.maxDist then
-                    local v, on = cam:WorldToViewportPoint(part.Position)
-                    if on and v.Z > 0 then
-                        local d = (Vector2.new(v.X, v.Y) - c).Magnitude
-                        if d <= S.sa.radius and (not bestD or d < bestD) then best, bestD = part, d end
-                    end
-                end
-            end
-        end
-        if not best then return nil, any and "killer di luar lingkaran/jarak" or "killer ga kedeteksi" end
-        return best
-    end
-    local function computeDir()
-        local part, why = pickTarget()
-        if not part then return nil, nil, why end
-        local origin = muzzlePos()
-        if not origin then
-            local h = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
-            origin = h and h.Position
-        end
-        if not origin then return nil, nil, "asal arah ga ketemu" end
-        local tp = S.sa.predict and leadPoint(part, origin) or part.Position
-        local d = tp - origin
-        if S.sa.flat then d = Vector3.new(d.X, 0, d.Z) end
-        if d.Magnitude < 0.01 then return nil, nil, "arah nol" end
-        return d.Unit, part.Parent and part.Parent.Name or "?", nil
-    end
-
-    local modEff, modOrig
-    task.spawn(function()
-        local ok, e = pcall(function()
-            local m = game:GetService("ReplicatedStorage"):WaitForChild("Modules", 10):WaitForChild("Items", 10):WaitForChild("TwistOfFate", 10):WaitForChild("TwistoffateEffects", 10)
-            local mod = require(m)
-            if type(mod) ~= "table" or type(mod.aimDirection) ~= "function" then error("aimDirection ga ada") end
-            modEff, modOrig = mod, mod.aimDirection
-            mod.aimDirection = function(...)
-                if not (running and S.sa.on) then return modOrig(...) end
-                local r = table.pack(modOrig(...))
-                local okC, d, who, why = pcall(computeDir)
-                local orig = r[1]
-                if okC and d and typeof(orig) == "Vector3" and orig.Magnitude > 0.01 then
-                    local ang = math.deg(math.acos(math.clamp(dot3(orig, d) / orig.Magnitude, -1, 1)))
-                    if ang <= S.sa.maxAngle then
-                        saSay(("Diarahin ke %s (geser %d derajat)"):format(tostring(who), math.floor(ang)))
-                        return d
-                    end
-                    saSay("Lolos asli: geser " .. math.floor(ang) .. " derajat > batas")
-                else
-                    saSay("Lolos asli: " .. tostring(okC and (why or "arah asli ga ada") or d))
-                end
-                return table.unpack(r, 1, r.n)
-            end
-            saSay(S.sa.on and "ON, nunggu tembakan" or "Status: OFF")
-        end)
-        if not ok then saSay("Modul pistol ga ketemu: " .. tostring(e)) end
-    end)
-    S.saRestore = function()
-        if modEff and modOrig then pcall(function() modEff.aimDirection = modOrig end) end
     end
 end
 local cleanup
