@@ -3696,6 +3696,226 @@ do
         lbl.Text = table.concat(out, "\n")
     end
 end
+do
+    -- ===== Fast Vault (diadaptasi dari HANX) =====
+    -- Hook SurvivorAnimationsController: skip cek arah & animasi vault, lalu kirim remote fastvault.
+    -- Nama modul & remote dari build lain, BELUM diverifikasi di build sekarang.
+    local FV = {on = false, hooked = false, mod = nil, remote = nil, wrapF = nil, wrapV = nil, origF = nil, origV = nil}
+    S.fv = FV
+    local cFV = tSurv:Group("Movement", 2)
+    local fvLbl = cFV:Label("Status: nunggu modul vault...")
+    cFV:Toggle("FV_On", "Fast Vault", false, function(v) FV.on = v end)
+    cFV:Label("Butuh log remote fastvault kalau status belum siap.")
+
+    task.spawn(function()
+        local rs = game:GetService("ReplicatedStorage")
+        local ok, mod = pcall(function()
+            return require(rs:WaitForChild("Modules", 10):WaitForChild("Survivors", 10):WaitForChild("SurvivorAnimationsController", 10))
+        end)
+        if not running then return end
+        if not ok or type(mod) ~= "table" or type(mod._isFacingStraightEnough) ~= "function" or type(mod._onVaultAnimation) ~= "function" then
+            fvLbl.Text = "Status: modul vault ga ketemu"
+            return
+        end
+        local rem
+        pcall(function()
+            rem = rs:WaitForChild("Remotes", 10):WaitForChild("Window", 5):WaitForChild("fastvault", 5)
+        end)
+        FV.mod, FV.remote = mod, rem
+        FV.origF, FV.origV = mod._isFacingStraightEnough, mod._onVaultAnimation
+
+        FV.wrapF = function(...)
+            local self = (...)
+            if not FV.on then return FV.origF(...) end
+            pcall(function()
+                if self.character then self.character:SetAttribute("speed", 30) end
+            end)
+            return true, 0
+        end
+
+        FV.wrapV = function(self, part, flag, arg)
+            if not FV.on then return FV.origV(self, part, flag, arg) end
+            if self.isVaulting then return end
+            if self.isSlidingPallet ~= nil then self.isSlidingPallet = false end
+            if self.character then
+                pcall(function() self.character:SetAttribute("vaultspeed", 2.0) end)
+            end
+            local res = table.pack(pcall(FV.origV, self, part, true, arg))
+            if not res[1] then
+                if self.character then
+                    pcall(function() self.character:SetAttribute("vaultspeed", 1) end)
+                end
+                return
+            end
+            task.delay(0.15, function()
+                if not self.isVaulting then return end
+                if self.activeVaultTrack then
+                    pcall(function() self.activeVaultTrack:Stop() end)
+                end
+                if self.humanoidRootPart and typeof(part) == "Instance" and part:IsA("BasePart") then
+                    pcall(function() self.humanoidRootPart.CFrame = part.CFrame * CFrame.new(0, 2, -1) end)
+                end
+                if self.VaultCompleteEvent then
+                    pcall(function() self.VaultCompleteEvent:FireServer(part, true, arg, self.character) end)
+                end
+                self.isVaulting = false
+                if self.humanoid then
+                    pcall(function() self.humanoid.AutoRotate = true end)
+                end
+                if type(self._finishVaultOrSlideSpeed) == "function" then
+                    pcall(function() self:_finishVaultOrSlideSpeed(true) end)
+                end
+                if type(self._checkConditions) == "function" then
+                    pcall(function() self:_checkConditions() end)
+                end
+            end)
+            task.delay(1.0, function()
+                if self.character then
+                    pcall(function() self.character:SetAttribute("vaultspeed", 1) end)
+                end
+            end)
+            return table.unpack(res, 2, res.n)
+        end
+
+        mod._isFacingStraightEnough = FV.wrapF
+        mod._onVaultAnimation = FV.wrapV
+        FV.hooked = true
+        fvLbl.Text = rem and "Status: siap" or "Status: siap, tapi remote fastvault ga ketemu"
+
+        while running do
+            task.wait(0.5)
+            if FV.on and FV.remote then
+                pcall(function() FV.remote:FireServer(lp) end)
+            end
+        end
+    end)
+
+    S.fvRestore = function()
+        FV.on = false
+        if FV.mod then
+            if FV.mod._isFacingStraightEnough == FV.wrapF then FV.mod._isFacingStraightEnough = FV.origF end
+            if FV.mod._onVaultAnimation == FV.wrapV then FV.mod._onVaultAnimation = FV.origV end
+        end
+    end
+end
+
+do
+    -- ===== Killer Extras (diadaptasi dari HANX) =====
+    -- Nama remote StartStalking & animasi counter parry dari build lain, BELUM diverifikasi di build sekarang.
+    local KE = {
+        stalk = false, stalkRange = 150, stalkLast = 0,
+        cp = false, cpDist = 15, cpThread = nil, cpTrack = nil,
+        cpAnim = "rbxassetid://117042998468241",
+        nsd = false,
+    }
+    S.ke = KE
+    local cKE = tKill:Group("Killer extras", 1)
+
+    local function stalkRemote()
+        local r = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
+        local k = r and r:FindFirstChild("Killers")
+        local st = k and k:FindFirstChild("Stalker")
+        return st and st:FindFirstChild("StartStalking")
+    end
+
+    local function nearestSurvivor(origin, range, minHp)
+        local best, bestD = nil, math.huge
+        for _, pl in ipairs(Players:GetPlayers()) do
+            if pl ~= lp and pl.Character and not isSpectator(pl) and roleOf(pl) ~= "killer" then
+                local hum = pl.Character:FindFirstChildOfClass("Humanoid")
+                local hrp = pl.Character:FindFirstChild("HumanoidRootPart")
+                if hum and hrp and hum.Health > minHp then
+                    local d = (hrp.Position - origin).Magnitude
+                    if d <= range and d < bestD then best, bestD = pl, d end
+                end
+            end
+        end
+        return best
+    end
+
+    -- Auto Stalk: kirim StartStalking ke survivor terdekat (HP > 30) selagi role kita Killer.
+    track(RS.Heartbeat:Connect(function()
+        if not KE.stalk or roleOf(lp) ~= "killer" then return end
+        local now = os.clock()
+        if now - KE.stalkLast < 0.35 then return end
+        local hrp = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+        if not hrp then return end
+        local target = nearestSurvivor(hrp.Position, KE.stalkRange, 30)
+        if not target then return end
+        local rem = stalkRemote()
+        if not rem then return end
+        KE.stalkLast = now
+        pcall(function() rem:FireServer(target) end)
+    end))
+
+    -- Counter Auto Parry: mainkan animasi pendek kalau ada survivor dalam jarak.
+    local function cpStop()
+        KE.cp = false
+        if KE.cpTrack then
+            pcall(function() KE.cpTrack:Stop() end)
+            KE.cpTrack = nil
+        end
+    end
+
+    local function cpStart()
+        if KE.cpThread then return end
+        KE.cpThread = task.spawn(function()
+            while running and KE.cp do
+                local ch = lp.Character
+                local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+                local animator = hum and hum:FindFirstChildOfClass("Animator")
+                local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+                if roleOf(lp) == "killer" and animator and hrp then
+                    if not KE.cpTrack then
+                        local ok, tr = pcall(function()
+                            local a = Instance.new("Animation")
+                            a.AnimationId = KE.cpAnim
+                            return animator:LoadAnimation(a)
+                        end)
+                        if ok then KE.cpTrack = tr end
+                    end
+                    if KE.cpTrack and nearestSurvivor(hrp.Position, KE.cpDist, 0) then
+                        pcall(function()
+                            KE.cpTrack:Play()
+                            KE.cpTrack:AdjustWeight(0)
+                        end)
+                        task.wait(0.05)
+                        pcall(function() KE.cpTrack:Stop() end)
+                    end
+                end
+                task.wait(0.3)
+            end
+            KE.cpThread = nil
+        end)
+    end
+
+    -- No Slowdown: naikkan WalkSpeed ke minimal 16 selagi role Killer.
+    task.spawn(function()
+        while running do
+            task.wait(0.2)
+            if KE.nsd and roleOf(lp) == "killer" and lp.Character then
+                local hum = lp.Character:FindFirstChildOfClass("Humanoid")
+                if hum and hum.WalkSpeed < 16 then hum.WalkSpeed = 16 end
+            end
+        end
+    end)
+
+    cKE:Toggle("KE_Stalk", "Auto Stalk", false, function(v) KE.stalk = v end)
+    cKE:Slider("KE_StalkRange", "Jarak stalk", 50, 400, 150, 10, function(v) KE.stalkRange = v end, "m")
+    cKE:Toggle("KE_CP", "Counter Auto Parry", false, function(v)
+        KE.cp = v
+        if v then cpStart() else cpStop() end
+    end)
+    cKE:Slider("KE_CPDist", "Jarak counter parry", 5, 30, 15, 1, function(v) KE.cpDist = v end, "m")
+    cKE:Toggle("KE_NSD", "No Slowdown Killer", false, function(v) KE.nsd = v end)
+    cKE:Label("Fitur ini cuma aktif pas role lo Killer.")
+
+    S.keRestore = function()
+        KE.stalk, KE.nsd = false, false
+        cpStop()
+    end
+end
+
 local cleanup
 local cUI = tSet:Group("Tampilan", 1)
 cUI:Dropdown("UI_Size", "Ukuran", {"Kecil", "Sedang", "Besar", "Jumbo"}, "Sedang", function(v) curSize = v applyLayout() end)
@@ -3797,6 +4017,8 @@ function cleanup()
     scUnbind()
     pcall(function() if S.saRestore then S.saRestore() end end)
     pcall(function() if S.svRestore then S.svRestore() end end)
+    pcall(function() if S.fvRestore then S.fvRestore() end end)
+    pcall(function() if S.keRestore then S.keRestore() end end)
     for plr in pairs(pvis) do destroyPlayerVis(plr) end
     for inst in pairs(ovis) do destroyObj(inst) end
     pcall(function() espFolder:Destroy() end)
