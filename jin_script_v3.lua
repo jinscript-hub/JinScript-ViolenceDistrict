@@ -1174,7 +1174,7 @@ local header = new("Frame", {Size = UDim2.new(1, 0, 0, HEAD), BackgroundTranspar
 new("Frame", {Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = T.stroke, BorderSizePixel = 0}, header)
 local ttl = mkLabel(header, "JÌN SCRIPT", 12, T.text, F_BOLD)
 ttl.Position = UDim2.fromOffset(14, 0); ttl.Size = UDim2.fromOffset(78, HEAD - 1)
-local ver = mkLabel(header, "v3.7", 10, T.dim)
+local ver = mkLabel(header, "v3.8", 10, T.dim)
 ver.Position = UDim2.fromOffset(92, 1); ver.Size = UDim2.fromOffset(30, HEAD - 1)
 local closeBtn = new("TextButton", {Size = UDim2.fromOffset(24, 24), AnchorPoint = Vector2.new(1, 0.5),
     Position = UDim2.new(1, -8, 0.5, -1), BackgroundTransparency = 1, Text = "", AutoButtonColor = false}, header)
@@ -3029,6 +3029,30 @@ do
         local d = (Vector2.new(v.X, v.Y) - c).Magnitude
         return d <= S.sa.radius, d
     end
+    -- killer asli: Team "Killer" / atribut IsKiller, Role (sama kayak yang dipakai game).
+    -- getKillers() itu nebak longgar dari nama atribut apa aja, makanya survivor kadang ikut kebaca killer.
+    -- Deteksi longgar cuma jadi cadangan kalau yang ketat ga nemu siapa-siapa.
+    local function isKillerStrict(p)
+        if p.Team then
+            local t = p.Team.Name:lower()
+            if t:find("survivor", 1, true) then return false end
+            if t:find("killer", 1, true) or t:find("slasher", 1, true) then return true end
+        end
+        local ch = p.Character
+        if ch and (ch:GetAttribute("IsKiller") == true or ch:GetAttribute("Role") == "Killer") then return true end
+        return p:GetAttribute("IsKiller") == true or p:GetAttribute("Role") == "Killer"
+    end
+    local function strictKillers()
+        local list = {}
+        for _, p in ipairs(Players:GetPlayers()) do
+            local kc = p.Character
+            local kh = kc and kc:FindFirstChild("HumanoidRootPart")
+            if kh and isKillerStrict(p) then list[#list + 1] = {char = kc, hrp = kh} end
+        end
+        if #list > 0 then return list end
+        return getKillers()
+    end
+    S.strictKillers = strictKillers
     -- killer harus ada di area bidik (sudut kamera atau lingkaran layar); yang paling dekat tengah dipilih
     local function pickTarget()
         local cam = workspace.CurrentCamera
@@ -3037,7 +3061,7 @@ do
         if not (cam and myHrp) then return nil, "kamera/karakter ga ada" end
         local c = cam.ViewportSize / 2
         local best, bestD, any = nil, nil, false
-        for _, k in ipairs(getKillers()) do
+        for _, k in ipairs(strictKillers()) do
             if k.char ~= myCh then
                 any = true
                 local part = aimPart(k.char, k.hrp)
@@ -3465,8 +3489,9 @@ cAM:Button("Matiin semua anti lag", function()
     notify("Anti lag", "Semua mati")
 end)
 do
-    -- Silent Veil: lemparan tombak Veil otomatis ngarah ke survivor (hook remote SpearThrow)
-    S.sv = {on = false, fov = 240, range = 500, predict = true}
+    -- Silent Veil: lemparan tombak Veil otomatis ngarah ke survivor (hook remote SpearThrow).
+    -- Arah dikunci pas tombak dilempar (prediksi gerak + kompensasi gravitasi), bukan belok di tengah jalan.
+    S.sv = {on = false, angle = 180, range = 400, predict = true, los = true}
     local SPEAR_SPEED, DROP, SPAWN_OFF = 180, 0.5, 3
     local cSV = tKill:Group("Silent Veil (tombak)", 1)
     local svLbl = cSV:Label("Status: OFF")
@@ -3480,9 +3505,10 @@ do
         S.sv.on = v
         svSay(v and "ON, nunggu lemparan tombak" or "Status: OFF")
     end)
-    cSV:Slider("SV_FOV", "Ukuran FOV (px dari tengah layar)", 40, 500, 240, 10, function(v) S.sv.fov = v end)
-    cSV:Slider("SV_Range", "Jarak max survivor", 50, 500, 500, 10, function(v) S.sv.range = v end, "m")
+    cSV:Slider("SV_Angle", "Sudut bidik (derajat dari arah kamera)", 20, 360, 180, 10, function(v) S.sv.angle = v end)
+    cSV:Slider("SV_Range", "Jarak max target", 50, 500, 400, 10, function(v) S.sv.range = v end, "m")
     cSV:Toggle("SV_Predict", "Prediksi gerak survivor", true, function(v) S.sv.predict = v end)
+    cSV:Toggle("SV_LOS", "Dahulukan yang ga ketutup tembok", true, function(v) S.sv.los = v end)
 
     local function alive(ch)
         local h = ch and ch:FindFirstChildOfClass("Humanoid")
@@ -3494,30 +3520,49 @@ do
         if ch:GetAttribute("spearmode") == true or ch:GetAttribute("VeilSpearEquipped") == true then return true end
         return ch:FindFirstChild("Spear") ~= nil
     end
-    local function pickTarget()
+    local rayP = RaycastParams.new()
+    rayP.FilterType = Enum.RaycastFilterType.Exclude
+    -- true kalau ada tembok/objek (bukan karakter) di antara origin dan target
+    local function blocked(origin, hrp)
+        local ex = {}
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p.Character then ex[#ex + 1] = p.Character end
+        end
+        rayP.FilterDescendantsInstances = ex
+        local ok, r = pcall(function() return workspace:Raycast(origin, hrp.Position - origin, rayP) end)
+        return ok and r ~= nil
+    end
+    -- target = survivor yang paling pas sama arah kamera (bukan yang paling dekat), jadi lemparan ga tiba-tiba muter ke orang lain
+    local function pickTarget(origin)
         local cam = workspace.CurrentCamera
         local myCh = lp.Character
         local myHrp = myCh and myCh:FindFirstChild("HumanoidRootPart")
         if not (cam and myHrp) then return nil end
-        local c = cam.ViewportSize / 2
-        local best, bestD
+        local isK = {}
+        for _, k in ipairs(S.strictKillers and S.strictKillers() or getKillers()) do isK[k.char] = true end
+        local look = cam.CFrame.LookVector
+        local best, bestScore, bestAng, bestDist
         for _, p in ipairs(Players:GetPlayers()) do
             local ch = p.Character
-            if p ~= lp and ch and roleOf(p) ~= "killer" and alive(ch)
+            if p ~= lp and ch and not isK[ch] and alive(ch)
                 and not ch:GetAttribute("Immobile") and not ch:GetAttribute("IsHooked") and not ch:GetAttribute("Knocked") then
                 local hrp = ch:FindFirstChild("HumanoidRootPart")
                 if hrp then
                     local d = (hrp.Position - myHrp.Position).Magnitude
-                    local sp, on = cam:WorldToViewportPoint(hrp.Position)
-                    if d <= S.sv.range and on and sp.Z > 0
-                        and (Vector2.new(sp.X, sp.Y) - c).Magnitude <= S.sv.fov
-                        and (not bestD or d < bestD) then
-                        best, bestD = hrp, d
+                    local dir = hrp.Position - cam.CFrame.Position
+                    if d <= S.sv.range and dir.Magnitude > 0.1 then
+                        local ang = math.deg(math.acos(math.clamp(look:Dot(dir.Unit), -1, 1)))
+                        if ang <= S.sv.angle / 2 then
+                            local score = ang + ((S.sv.los and blocked(origin, hrp)) and 1000 or 0)
+                            if not bestScore or score < bestScore then
+                                best, bestScore, bestAng, bestDist = hrp, score, ang, d
+                            end
+                        end
                     end
                 end
             end
         end
-        return best
+        return best, bestAng, bestDist
     end
     -- arah lempar dengan prediksi gerak + kompensasi gravitasi
     local function solve(origin, hrp)
@@ -3553,8 +3598,8 @@ do
                     if type(a1) == "table" and typeof(a1.Origin) == "Vector3" then origin = a1.Origin
                     elseif typeof(a1) == "Vector3" and typeof(args[2]) == "Vector3" then origin = a1
                     else origin = cam.CFrame.Position + cam.CFrame.LookVector * SPAWN_OFF end
-                    local target = pickTarget()
-                    if not target then svSay("Lolos asli: ga ada survivor di FOV/jarak") return end
+                    local target, ang, dist = pickTarget(origin)
+                    if not target then svSay("Lolos asli: ga ada survivor di sudut/jarak") return end
                     local dir = solve(origin, target)
                     if not dir then svSay("Lolos asli: arah ga kehitung") return end
                     if type(a1) == "table" and typeof(a1.Origin) == "Vector3" then
@@ -3565,7 +3610,7 @@ do
                     elseif typeof(a1) == "Vector3" then
                         args[1] = dir
                     end
-                    svSay("Diarahin ke " .. tostring(target.Parent and target.Parent.Name))
+                    svSay(("Diarahin ke %s (%d m, geser %d derajat)"):format(tostring(target.Parent and target.Parent.Name), math.floor(dist), math.floor(ang)))
                 end)
                 setnamecallmethod(method)
                 return svOld(self, table.unpack(args, 1, args.n))
@@ -3734,4 +3779,4 @@ loading = false
 pcall(refreshDash)
 setOpen(true)
 notify("Jìn Script", "Loaded")
-warn("[jin] v3.7 loaded")
+warn("[jin] v3.8 loaded")
