@@ -3171,6 +3171,108 @@ do
         end
     end
 end
+xpcall(function()
+    -- ===== Fast Vault (diadaptasi dari HANX) =====
+    -- Hook SurvivorAnimationsController: skip cek arah & animasi vault, lalu kirim remote fastvault.
+    -- Nama modul & remote dari build lain, BELUM diverifikasi di build sekarang.
+    local FV = {on = false, hooked = false, mod = nil, remote = nil, wrapF = nil, wrapV = nil, origF = nil, origV = nil}
+    S.fv = FV
+    local cFV = tSurv:Group("Movement", 2)
+    local fvLbl = cFV:Label("Status: nunggu modul vault...")
+    cFV:Toggle("FV_On", "Fast Vault", false, function(v) FV.on = v end)
+    cFV:Label("Butuh log remote fastvault kalau status belum siap.")
+
+    task.spawn(function()
+        local rs = game:GetService("ReplicatedStorage")
+        local ok, mod = pcall(function()
+            return require(rs:WaitForChild("Modules", 10):WaitForChild("Survivors", 10):WaitForChild("SurvivorAnimationsController", 10))
+        end)
+        if not running then return end
+        if not ok or type(mod) ~= "table" or type(mod._isFacingStraightEnough) ~= "function" or type(mod._onVaultAnimation) ~= "function" then
+            fvLbl.Text = "Status: modul vault ga ketemu"
+            return
+        end
+        local rem
+        pcall(function()
+            rem = rs:WaitForChild("Remotes", 10):WaitForChild("Window", 5):WaitForChild("fastvault", 5)
+        end)
+        FV.mod, FV.remote = mod, rem
+        FV.origF, FV.origV = mod._isFacingStraightEnough, mod._onVaultAnimation
+
+        FV.wrapF = function(...)
+            local self = (...)
+            if not FV.on then return FV.origF(...) end
+            pcall(function()
+                if self.character then self.character:SetAttribute("speed", 30) end
+            end)
+            return true, 0
+        end
+
+        FV.wrapV = function(self, part, flag, arg)
+            if not FV.on then return FV.origV(self, part, flag, arg) end
+            if self.isVaulting then return end
+            if self.isSlidingPallet ~= nil then self.isSlidingPallet = false end
+            if self.character then
+                pcall(function() self.character:SetAttribute("vaultspeed", 2.0) end)
+            end
+            local res = table.pack(pcall(FV.origV, self, part, true, arg))
+            if not res[1] then
+                if self.character then
+                    pcall(function() self.character:SetAttribute("vaultspeed", 1) end)
+                end
+                return
+            end
+            task.delay(0.15, function()
+                if not self.isVaulting then return end
+                if self.activeVaultTrack then
+                    pcall(function() self.activeVaultTrack:Stop() end)
+                end
+                if self.humanoidRootPart and typeof(part) == "Instance" and part:IsA("BasePart") then
+                    pcall(function() self.humanoidRootPart.CFrame = part.CFrame * CFrame.new(0, 2, -1) end)
+                end
+                if self.VaultCompleteEvent then
+                    pcall(function() self.VaultCompleteEvent:FireServer(part, true, arg, self.character) end)
+                end
+                self.isVaulting = false
+                if self.humanoid then
+                    pcall(function() self.humanoid.AutoRotate = true end)
+                end
+                if type(self._finishVaultOrSlideSpeed) == "function" then
+                    pcall(function() self:_finishVaultOrSlideSpeed(true) end)
+                end
+                if type(self._checkConditions) == "function" then
+                    pcall(function() self:_checkConditions() end)
+                end
+            end)
+            task.delay(1.0, function()
+                if self.character then
+                    pcall(function() self.character:SetAttribute("vaultspeed", 1) end)
+                end
+            end)
+            return table.unpack(res, 2, res.n)
+        end
+
+        mod._isFacingStraightEnough = FV.wrapF
+        mod._onVaultAnimation = FV.wrapV
+        FV.hooked = true
+        fvLbl.Text = rem and "Status: siap" or "Status: siap, tapi remote fastvault ga ketemu"
+
+        while running do
+            task.wait(0.5)
+            if FV.on and FV.remote then
+                pcall(function() FV.remote:FireServer(lp) end)
+            end
+        end
+    end)
+
+    S.fvRestore = function()
+        FV.on = false
+        if FV.mod then
+            if FV.mod._isFacingStraightEnough == FV.wrapF then FV.mod._isFacingStraightEnough = FV.origF end
+            if FV.mod._onVaultAnimation == FV.wrapV then FV.mod._onVaultAnimation = FV.origV end
+        end
+    end
+end, function(e) warn("[jin] Fast Vault gagal dipasang: " .. tostring(e)) end)
 end
 do
 local AL2 = {}
@@ -3696,108 +3798,6 @@ do
         lbl.Text = table.concat(out, "\n")
     end
 end
-xpcall(function()
-    -- ===== Fast Vault (diadaptasi dari HANX) =====
-    -- Hook SurvivorAnimationsController: skip cek arah & animasi vault, lalu kirim remote fastvault.
-    -- Nama modul & remote dari build lain, BELUM diverifikasi di build sekarang.
-    local FV = {on = false, hooked = false, mod = nil, remote = nil, wrapF = nil, wrapV = nil, origF = nil, origV = nil}
-    S.fv = FV
-    local cFV = tSurv:Group("Movement", 2)
-    local fvLbl = cFV:Label("Status: nunggu modul vault...")
-    cFV:Toggle("FV_On", "Fast Vault", false, function(v) FV.on = v end)
-    cFV:Label("Butuh log remote fastvault kalau status belum siap.")
-
-    task.spawn(function()
-        local rs = game:GetService("ReplicatedStorage")
-        local ok, mod = pcall(function()
-            return require(rs:WaitForChild("Modules", 10):WaitForChild("Survivors", 10):WaitForChild("SurvivorAnimationsController", 10))
-        end)
-        if not running then return end
-        if not ok or type(mod) ~= "table" or type(mod._isFacingStraightEnough) ~= "function" or type(mod._onVaultAnimation) ~= "function" then
-            fvLbl.Text = "Status: modul vault ga ketemu"
-            return
-        end
-        local rem
-        pcall(function()
-            rem = rs:WaitForChild("Remotes", 10):WaitForChild("Window", 5):WaitForChild("fastvault", 5)
-        end)
-        FV.mod, FV.remote = mod, rem
-        FV.origF, FV.origV = mod._isFacingStraightEnough, mod._onVaultAnimation
-
-        FV.wrapF = function(...)
-            local self = (...)
-            if not FV.on then return FV.origF(...) end
-            pcall(function()
-                if self.character then self.character:SetAttribute("speed", 30) end
-            end)
-            return true, 0
-        end
-
-        FV.wrapV = function(self, part, flag, arg)
-            if not FV.on then return FV.origV(self, part, flag, arg) end
-            if self.isVaulting then return end
-            if self.isSlidingPallet ~= nil then self.isSlidingPallet = false end
-            if self.character then
-                pcall(function() self.character:SetAttribute("vaultspeed", 2.0) end)
-            end
-            local res = table.pack(pcall(FV.origV, self, part, true, arg))
-            if not res[1] then
-                if self.character then
-                    pcall(function() self.character:SetAttribute("vaultspeed", 1) end)
-                end
-                return
-            end
-            task.delay(0.15, function()
-                if not self.isVaulting then return end
-                if self.activeVaultTrack then
-                    pcall(function() self.activeVaultTrack:Stop() end)
-                end
-                if self.humanoidRootPart and typeof(part) == "Instance" and part:IsA("BasePart") then
-                    pcall(function() self.humanoidRootPart.CFrame = part.CFrame * CFrame.new(0, 2, -1) end)
-                end
-                if self.VaultCompleteEvent then
-                    pcall(function() self.VaultCompleteEvent:FireServer(part, true, arg, self.character) end)
-                end
-                self.isVaulting = false
-                if self.humanoid then
-                    pcall(function() self.humanoid.AutoRotate = true end)
-                end
-                if type(self._finishVaultOrSlideSpeed) == "function" then
-                    pcall(function() self:_finishVaultOrSlideSpeed(true) end)
-                end
-                if type(self._checkConditions) == "function" then
-                    pcall(function() self:_checkConditions() end)
-                end
-            end)
-            task.delay(1.0, function()
-                if self.character then
-                    pcall(function() self.character:SetAttribute("vaultspeed", 1) end)
-                end
-            end)
-            return table.unpack(res, 2, res.n)
-        end
-
-        mod._isFacingStraightEnough = FV.wrapF
-        mod._onVaultAnimation = FV.wrapV
-        FV.hooked = true
-        fvLbl.Text = rem and "Status: siap" or "Status: siap, tapi remote fastvault ga ketemu"
-
-        while running do
-            task.wait(0.5)
-            if FV.on and FV.remote then
-                pcall(function() FV.remote:FireServer(lp) end)
-            end
-        end
-    end)
-
-    S.fvRestore = function()
-        FV.on = false
-        if FV.mod then
-            if FV.mod._isFacingStraightEnough == FV.wrapF then FV.mod._isFacingStraightEnough = FV.origF end
-            if FV.mod._onVaultAnimation == FV.wrapV then FV.mod._onVaultAnimation = FV.origV end
-        end
-    end
-end, function(e) warn("[jin] Fast Vault gagal dipasang: " .. tostring(e)) end)
 
 xpcall(function()
     -- ===== Killer Extras (diadaptasi dari HANX) =====
