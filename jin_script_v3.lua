@@ -1818,6 +1818,26 @@ do local function parryInit()
         "74968262036854", "113255068724446",
         "106871536134254",
     }) do ATTACK_ANIMS[id] = true end
+    -- ID tambahan dari hanxhub (hasil decode _AA). Sudah disaring: ID di NOT_SWING, ID spear, dan ID lama yang pendek (2874840706, 72042024) tidak ikut.
+    for _, id in ipairs({
+        "71008020992570", "72742711718023", "72908958549833", "73923929500477",
+        "76385865186777", "76503974441748", "77081789642514", "78935059863801",
+        "79935565590141", "79965656177566", "83873880822918", "84525330720658",
+        "85030641905220", "89185525343404", "92125118598365", "92362656727126",
+        "92554564590253", "96839438835309", "99472251587670", "102055678391920",
+        "104689417033027", "109402730355822", "112166042383605", "112633191985365",
+        "112840768179724", "117207742458428", "119752564209631", "121571390309073",
+        "123047897844134", "123812278891591", "124706657239027", "124735239320776",
+        "125224839697689", "126081405469607", "126497551689502", "126527634689050",
+        "126626340093785", "126751859125353", "128241974219045", "130012819736632",
+        "130585295123651", "133002120549396", "133881825716964", "134838390519433",
+        "135403091566760", "135727476735024", "136365031119137", "137504605181913",
+        "137688077908355", "137795837089724", "137846825408335", "138045669415653",
+        "117187218825161", "105221485497534", "86868198964957", "134758728973154",
+        "132636403911470", "125350153877085", "110850539331763",
+        "75618342544502", "93902163029544", "79310600168078", "104540716539347",
+        "73681849513551", "100014992013740",
+    }) do ATTACK_ANIMS[id] = true end
     local EARLY_ANIMS = {["125430111937587"] = 0.048, ["127417297154354"] = 0.036}
     local NOT_SWING = {["117070354890871"] = true, ["81198376178242"] = true, ["70719237641923"] = true, ["78196404793645"] = true, ["108286715411226"] = true, ["75857500533792"] = true,
         ["77303734522729"] = true, ["101443662521580"] = true, ["127622545856523"] = true, ["129669521834246"] = true, ["79809716042968"] = true, ["87436543050891"] = true, ["84404617799721"] = true}
@@ -3404,7 +3424,7 @@ do
         for _, n in ipairs({"sky", "tex", "white", "grass", "trees", "lights", "perf"}) do
             if flags[n] then AL2.set(n, false) end
         end
-        if AL2.fpsChanged and setfpscap then pcall(setfpscap, 60) end
+        if AL2.fpsChanged and setfpscap then pcall(setfpscap, AL2.fpsOrig or 60) AL2.fpsChanged = false end
     end
     track(workspace.DescendantAdded:Connect(function(i) if anyOn() then pcall(applyOne, i) end end))
     track(Lighting.DescendantAdded:Connect(function(i) if flags.sky then pcall(applyOne, i) end end))
@@ -3441,7 +3461,11 @@ end
 local cView = tMisc:Group("View", 1)
 cView:Toggle("FOV_On", "Custom FOV", false, function(v)
     S.fov.on = v
-    if not v then pcall(function() workspace.CurrentCamera.FieldOfView = 70 end) end
+    if not v and S.fov.orig then
+        local o = S.fov.orig
+        S.fov.orig = nil
+        pcall(function() workspace.CurrentCamera.FieldOfView = o end)
+    end
 end)
 cView:Slider("FOV_Val", "FOV", 30, 120, 70, 1, function(v) S.fov.val = v end)
 cView:Toggle("AR_On", "Rasio layar custom", false, function(v) S.ar.on = v end)
@@ -3474,11 +3498,18 @@ cAM:Toggle("AL_Lights", "Matiin lampu", false, function(v) AL2.set("lights", v) 
 cAM:Toggle("AL_Perf", "Ringanin part & air", false, function(v) AL2.set("perf", v) end)
 cAL:Slider("AL_FPS", "FPS cap (0 = jangan ubah)", 0, 240, 0, 10, function(v)
     if v > 0 and setfpscap then
+        if not AL2.fpsChanged then
+            AL2.fpsOrig = nil
+            if getfpscap then
+                local okc, cur = pcall(getfpscap)
+                if okc and type(cur) == "number" and cur > 0 then AL2.fpsOrig = cur end
+            end
+        end
         AL2.fpsChanged = true
         pcall(setfpscap, v)
     elseif v == 0 and AL2.fpsChanged and setfpscap then
         AL2.fpsChanged = false
-        pcall(setfpscap, 60)
+        pcall(setfpscap, AL2.fpsOrig or 60)
     end
 end)
 local AL_IDS = {"AL_Particles", "AL_PostFX", "AL_Shadows", "AL_Quality", "AL_Sky", "AL_Tex", "AL_White", "AL_Grass", "AL_Trees", "AL_Lights", "AL_Perf"}
@@ -3623,9 +3654,8 @@ do
     else
         svSay("hookmetamethod ga ada di executor ini")
     end
-    S.svRestore = function()
-        if svOld and hookmetamethod then pcall(hookmetamethod, game, "__namecall", svOld) end
-    end
+    -- sengaja ga re-hook: hook udah pass-through pas running == false (re-hook bisa numpuk layer / rekursi di beberapa executor)
+    S.svRestore = function() end
 end
 do
     local cPred = tKill:Group("Prediksi killer berikutnya", 2)
@@ -3634,6 +3664,7 @@ do
     task.spawn(function()
         pcall(function()
             local r = game:GetService("ReplicatedStorage"):WaitForChild("Remotes", 15):WaitForChild("Messages", 15):WaitForChild("Mapinfo", 15)
+            if not running then return end
             track(r.OnClientEvent:Connect(function(name) S.mapName = tostring(name) end))
         end)
     end)
@@ -3728,16 +3759,21 @@ task.spawn(function()
         task.wait(1)
     end
 end)
-local arLast
+local arLast, arBase, arRatio
 track(RS.RenderStepped:Connect(function(dt)
     pcall(updateCone)
     fpsAcc, fpsN = fpsAcc + dt, fpsN + 1
     local c = workspace.CurrentCamera
-    if c and S.fov.on then c.FieldOfView = S.fov.val end
+    if c and S.fov.on then
+        if not S.fov.orig then S.fov.orig = c.FieldOfView end
+        c.FieldOfView = S.fov.val
+    end
     if c and S.ar.on then
         local cf = c.CFrame
-        if cf ~= arLast then
-            arLast = cf * CFrame.new(0, 0, 0, 1, 0, 0, 0, S.ar.ratio, 0, 0, 0, 1)
+        if cf ~= arLast then arBase = cf end
+        if arBase and (cf ~= arLast or arRatio ~= S.ar.ratio) then
+            arRatio = S.ar.ratio
+            arLast = arBase * CFrame.new(0, 0, 0, 1, 0, 0, 0, S.ar.ratio, 0, 0, 0, 1)
             c.CFrame = arLast
         end
     end
@@ -3770,7 +3806,11 @@ function cleanup()
     pcall(fbRestore) pcall(shadowsRestore) pcall(particlesRestore) pcall(postRestore)
     pcall(setQuality, false)
     pcall(AL2.restoreAll)
-    pcall(function() workspace.CurrentCamera.FieldOfView = 70 end)
+    if S.fov.orig then
+        local o = S.fov.orig
+        S.fov.orig = nil
+        pcall(function() workspace.CurrentCamera.FieldOfView = o end)
+    end
     pcall(S.vigRestore)
     pcall(function() gui:Destroy() end)
     getgenv().JinHub = nil
@@ -3782,4 +3822,4 @@ loading = false
 pcall(refreshDash)
 setOpen(true)
 notify("Jìn Script", "Loaded")
-warn("[jin] v3.9 loaded")
+warn("[jin] v3.9 loaded (patched)")
