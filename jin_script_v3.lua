@@ -3696,7 +3696,7 @@ do
         lbl.Text = table.concat(out, "\n")
     end
 end
-do
+xpcall(function()
     -- ===== Fast Vault (diadaptasi dari HANX) =====
     -- Hook SurvivorAnimationsController: skip cek arah & animasi vault, lalu kirim remote fastvault.
     -- Nama modul & remote dari build lain, BELUM diverifikasi di build sekarang.
@@ -3797,9 +3797,9 @@ do
             if FV.mod._onVaultAnimation == FV.wrapV then FV.mod._onVaultAnimation = FV.origV end
         end
     end
-end
+end, function(e) warn("[jin] Fast Vault gagal dipasang: " .. tostring(e)) end)
 
-do
+xpcall(function()
     -- ===== Killer Extras (diadaptasi dari HANX) =====
     -- Nama remote StartStalking & animasi counter parry dari build lain, BELUM diverifikasi di build sekarang.
     local KE = {
@@ -3914,7 +3914,7 @@ do
         KE.stalk, KE.nsd = false, false
         cpStop()
     end
-end
+end, function(e) warn("[jin] Killer Extras gagal dipasang: " .. tostring(e)) end)
 
 local cleanup
 local cUI = tSet:Group("Tampilan", 1)
