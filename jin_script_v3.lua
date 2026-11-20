@@ -3175,7 +3175,7 @@ xpcall(function()
     -- ===== Fast Vault (diadaptasi dari HANX) =====
     -- Hook SurvivorAnimationsController: skip cek arah & animasi vault, lalu kirim remote fastvault.
     -- Nama modul & remote dari build lain, BELUM diverifikasi di build sekarang.
-    local FV = {on = false, hooked = false, mod = nil, remote = nil, wrapF = nil, wrapV = nil, origF = nil, origV = nil}
+    local FV = {on = false, perfect = false, hooked = false, mod = nil, remote = nil, wrapF = nil, wrapV = nil, origF = nil, origV = nil}
     S.fv = FV
     -- tSurv bisa nil di sebagian executor (limit local/upvalue), jadi cari ulang lewat tabList
     local svTab = tSurv
@@ -3186,6 +3186,8 @@ xpcall(function()
     local cFV = svTab:Group("Movement", 2)
     local fvLbl = cFV:Label("Status: nunggu modul vault...")
     cFV:Toggle("FV_On", "Fast Vault", false, function(v) FV.on = v end)
+    -- Perfect Vault: spoof lari (speed + arah) biar karakter selalu lompat kayak perfect vault, animasi asli dibiarin jalan
+    cFV:Toggle("FV_Perfect", "Perfect Vault (lompat)", false, function(v) FV.perfect = v end)
     cFV:Label("Butuh log remote fastvault kalau status belum siap.")
 
     task.spawn(function()
@@ -3207,7 +3209,7 @@ xpcall(function()
 
         FV.wrapF = function(...)
             local self = (...)
-            if not FV.on then return FV.origF(...) end
+            if not (FV.on or FV.perfect) then return FV.origF(...) end
             pcall(function()
                 if self.character then self.character:SetAttribute("speed", 30) end
             end)
@@ -3215,11 +3217,11 @@ xpcall(function()
         end
 
         FV.wrapV = function(self, part, flag, arg)
-            if not FV.on then return FV.origV(self, part, flag, arg) end
+            if not (FV.on or FV.perfect) then return FV.origV(self, part, flag, arg) end
             if self.isVaulting then return end
             if self.isSlidingPallet ~= nil then self.isSlidingPallet = false end
             if self.character then
-                pcall(function() self.character:SetAttribute("vaultspeed", 2.0) end)
+                pcall(function() self.character:SetAttribute("vaultspeed", FV.perfect and 1 or 2.0) end)
             end
             local res = table.pack(pcall(FV.origV, self, part, true, arg))
             if not res[1] then
@@ -3229,6 +3231,7 @@ xpcall(function()
                 return
             end
             task.delay(0.15, function()
+                if FV.perfect then return end -- perfect: biarin animasi lompat asli selesai, ga di-cut/teleport
                 if not self.isVaulting then return end
                 if self.activeVaultTrack then
                     pcall(function() self.activeVaultTrack:Stop() end)
@@ -3265,14 +3268,14 @@ xpcall(function()
 
         while running do
             task.wait(0.5)
-            if FV.on and FV.remote then
+            if (FV.on or FV.perfect) and FV.remote then
                 pcall(function() FV.remote:FireServer(lp) end)
             end
         end
     end)
 
     S.fvRestore = function()
-        FV.on = false
+        FV.on, FV.perfect = false, false
         if FV.mod then
             if FV.mod._isFacingStraightEnough == FV.wrapF then FV.mod._isFacingStraightEnough = FV.origF end
             if FV.mod._onVaultAnimation == FV.wrapV then FV.mod._onVaultAnimation = FV.origV end
