@@ -998,7 +998,7 @@ end
 local SHEET = assetOf(SHEET_ID, SHEET_FILE)
 local CELL = 64
 local SHEET_MAP = {home = {0, 0}, eye = {1, 0}, target = {2, 0}, sliders = {3, 0},
-    gear = {0, 1}, xmark = {1, 1}, down = {2, 1}}
+    gear = {0, 1}, xmark = {1, 1}, down = {2, 1}, user = {3, 1}, blade = {0, 2}}
 local function mkIcon(parent, name, color, px)
     local box = new("Frame", {Size = UDim2.fromOffset(16, 16), AnchorPoint = Vector2.new(0.5, 0.5),
         BackgroundTransparency = 1}, parent)
@@ -1174,7 +1174,7 @@ local header = new("Frame", {Size = UDim2.new(1, 0, 0, HEAD), BackgroundTranspar
 new("Frame", {Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = T.stroke, BorderSizePixel = 0}, header)
 local ttl = mkLabel(header, "JÌN SCRIPT", 12, T.text, F_BOLD)
 ttl.Position = UDim2.fromOffset(14, 0); ttl.Size = UDim2.fromOffset(78, HEAD - 1)
-local ver = mkLabel(header, "v3.8", 10, T.dim)
+local ver = mkLabel(header, "v3.9", 10, T.dim)
 ver.Position = UDim2.fromOffset(92, 1); ver.Size = UDim2.fromOffset(30, HEAD - 1)
 local closeBtn = new("TextButton", {Size = UDim2.fromOffset(24, 24), AnchorPoint = Vector2.new(1, 0.5),
     Position = UDim2.new(1, -8, 0.5, -1), BackgroundTransparency = 1, Text = "", AutoButtonColor = false}, header)
@@ -1777,20 +1777,20 @@ do
             function(v) S.cat[key].on = v end,
             key ~= "chased" and {id = "C_" .. key, default = S.cat[key].color, cb = function(col) S.cat[key].color = col end} or nil)
     end
-    local cChase = tKill:Group("Chase (deteksi dikejar)", 2)
-    cChase:Slider("ESP_ChaseDist", "Jarak deteksi chase (0 = off)", 0, 120, 40, 5, function(v) S.chaseDist = v end, "m")
+    local cChase = sP:Group("Chase (dikejar killer)", 1)
+    cChase:Slider("ESP_ChaseDist", "Jarak chase (0 = off)", 0, 120, 40, 5, function(v) S.chaseDist = v end, "m")
     local cRange = sW:Group("Jarak", 2)
     cRange:Slider("ESP_MaxDist", "Jarak max objek (0 = bebas)", 0, 3000, 600, 50, function(v) S.maxDist = v end, "m")
     local cLbl = sD:Group("Label", 1)
     cLbl:Toggle("ESP_Names", "Nama (di atas)", true, function(v) S.names = v end)
     cLbl:Toggle("ESP_Dist", "Jarak (di bawah)", true, function(v) S.dist = v end)
     cLbl:Slider("ESP_TextSize", "Ukuran teks", 10, 24, 13, 1, function(v) S.textSize = v end)
-    local cCone = tKill:Group("Area liat killer (tanah)", 1)
+    local cCone = sP:Group("Area liat killer (tanah)", 2)
     cCone:Toggle("Cone_On", "Aktif", true, function(v) S.cone.on = v end)
     cCone:Slider("Cone_Angle", "Sudut area killer", 40, 180, 100, 5, function(v) S.cone.angle = v end)
-    cCone:Toggle("Cone_Line", "Garis lurus dari kepala (arah kamera killer)", true, function(v) S.cone.line = v end,
+    cCone:Toggle("Cone_Line", "Garis arah kamera", true, function(v) S.cone.line = v end,
         {id = "Cone_LineCol", default = S.cone.lineColor, cb = function(c) S.cone.lineColor = c end})
-    cCone:Toggle("Cone_Body", "Garis arah badan killer (banding)", false, function(v) S.cone.body = v end,
+    cCone:Toggle("Cone_Body", "Garis arah badan", false, function(v) S.cone.body = v end,
         {id = "Cone_BodyCol", default = S.cone.bodyColor, cb = function(c) S.cone.bodyColor = c end})
     cCone:Slider("Cone_LineLen", "Panjang garis", 10, 100, 30, 5, function(v) S.cone.lineLen = v end, "m")
     cCone:Slider("Cone_Range", "Jarak area killer", 20, 150, 70, 5, function(v) S.cone.range = v end, "m")
@@ -1826,16 +1826,17 @@ do local function parryInit()
     S.parry.pre = false
     S.parry.aimGate, S.parry.aimMin, S.parry.closeMin = false, -0.25, 8
     S.parry.rayGate, S.parry.rayTol, S.parry.zoneManual, S.parry.rayMinD = false, 4, false, 5
-    cPar:Slider("PAR_Zone", "Zona parry (jarak killer)", 4, 25, 14, 1, function(v) S.parry.dist = v end, "m")
-    cPar:Toggle("PAR_Bait", "Anti rege bait (skip kalau kamera killer ngebelakangi)", true, function(v) S.parry.baitCheck = v end)
+    cPar:Slider("PAR_Zone", "Jarak zona parry", 4, 25, 14, 1, function(v) S.parry.dist = v end, "m")
+    cPar:Toggle("PAR_Bait", "Anti rege bait", true, function(v) S.parry.baitCheck = v end)
+    cPar:Label("Skip parry kalau kamera killer ngebelakangi.")
     S.parry.zoneMax, S.parry.swingDot = 22, 0
     S.parry.baitCheck, S.parry.baitDot = true, 0.3
     S.parry.close, S.parry.closeR, S.parry.lateSkip = false, 4.0, false
     S.parry.circle = true
     S.parry.circShow = 8
-    cPar:Toggle("PAR_Circle", "Zona parry (garis putus-putus)", true, function(v) S.parry.circle = v end,
+    cPar:Toggle("PAR_Circle", "Garis zona parry", true, function(v) S.parry.circle = v end,
         {id = "PAR_CircleCol", default = S.parry.color, cb = function(c) S.parry.color = c end})
-    cPar:Slider("PAR_CircleNear", "Zona muncul (m di luar zona parry)", 0, 30, 8, 1, function(v) S.parry.circShow = v end, "m")
+    cPar:Slider("PAR_CircleNear", "Garis muncul dari jarak", 0, 30, 8, 1, function(v) S.parry.circShow = v end, "m")
     local stLbl = cPar:Label("Status: OFF")
     local learned, recent, nopar, stats, idReach, idLag = {}, {}, {}, {}, {}, {}
     local PFILE = BASE .. "jin_parry.json"
@@ -2969,11 +2970,11 @@ do
         saSay(v and "ON, nunggu tembakan" or "Status: OFF")
         updRing()
     end)
-    cSA:Slider("SA_Radius", "Ukuran lingkaran FOV (px)", 40, 400, 150, 10, function(v) S.sa.radius = v updRing() end)
+    cSA:Slider("SA_Radius", "Ukuran lingkaran (px)", 40, 400, 150, 10, function(v) S.sa.radius = v updRing() end)
     cSA:Toggle("SA_Circle", "Tampilkan lingkaran FOV", true, function(v) S.sa.circle = v updRing() end)
     cSA:Slider("SA_Dist", "Jarak max killer", 20, 300, 150, 10, function(v) S.sa.maxDist = v end, "m")
     cSA:Dropdown("SA_Area", "Area bidik", {"Sudut kamera", "Lingkaran layar"}, "Sudut kamera", function(v) S.sa.angleMode = v == "Sudut kamera" updRing() end)
-    cSA:Slider("SA_Angle", "Sudut bidik (derajat, mode sudut)", 20, 360, 120, 10, function(v) S.sa.fovAngle = v end)
+    cSA:Slider("SA_Angle", "Sudut bidik (derajat)", 20, 360, 120, 10, function(v) S.sa.fovAngle = v end)
 
     local function dot3(a, b) return a.X * b.X + a.Y * b.Y + a.Z * b.Z end
     local function aimPart(char, hrp)
@@ -3443,8 +3444,9 @@ cView:Toggle("FOV_On", "Custom FOV", false, function(v)
     if not v then pcall(function() workspace.CurrentCamera.FieldOfView = 70 end) end
 end)
 cView:Slider("FOV_Val", "FOV", 30, 120, 70, 1, function(v) S.fov.val = v end)
-cView:Toggle("AR_On", "Rasio layar custom (stretch)", false, function(v) S.ar.on = v end)
-cView:Slider("AR_Val", "Rasio (kecil = gepeng melebar, besar = tinggi)", 0.3, 1.5, 0.75, 0.05, function(v) S.ar.ratio = v end)
+cView:Toggle("AR_On", "Rasio layar custom", false, function(v) S.ar.on = v end)
+cView:Slider("AR_Val", "Rasio layar", 0.3, 1.5, 0.75, 0.05, function(v) S.ar.ratio = v end)
+cView:Label("Kecil = melebar, besar = tinggi.")
 cView:Dropdown("AR_Tpl", "Template rasio", {"Pilih template", "Normal (1.00)", "Stretch ringan (0.85)", "4:3 stretch (0.75)", "Stretch sedang (0.65)", "Stretch berat (0.55)", "Gepeng banget (0.45)", "Tinggi / renggang (1.25)"}, "Pilih template", function(v)
     local n = tonumber(string.match(tostring(v), "%(([%d%.]+)%)"))
     local r = Reg["AR_Val"]
@@ -3456,20 +3458,20 @@ cLight:Toggle("FB_On", "Fullbright", false, function(v) S.fb.on = v if v then fb
 cLight:Slider("FB_Bright", "Brightness", 1, 5, 2, 1, function(v) S.fb.bright = v end)
 local cAL = tMisc:Group("Anti lag: efek", 2)
 local cAM = tMisc:Group("Anti lag: map", 2)
-cAL:Toggle("AL_Particles", "Matiin partikel / trail / api", false,
+cAL:Toggle("AL_Particles", "Matiin partikel / api", false,
     function(v) S.al.particles = v if v then particlesScan() else particlesRestore() end end)
 cAL:Toggle("AL_PostFX", "Matiin bloom / blur / DOF", false,
     function(v) S.al.post = v if v then postSweep() else postRestore() end end)
 cAL:Toggle("AL_Shadows", "Matiin shadow", false,
     function(v) S.al.shadows = v if v then shadowsSave() else shadowsRestore() end end)
 cAL:Toggle("AL_Quality", "Render quality terendah", false, function(v) S.al.quality = v setQuality(v) end)
-cAM:Toggle("AL_Sky", "Hapus skybox / atmosfer / awan (semua map)", false, function(v) AL2.set("sky", v) end)
-cAM:Toggle("AL_Tex", "Hapus tekstur (decal, texture, mesh texture)", false, function(v) AL2.set("tex", v) end)
-cAM:Toggle("AL_White", "Semua jadi putih (kecuali player)", false, function(v) AL2.set("white", v) end)
+cAM:Toggle("AL_Sky", "Hapus skybox & awan", false, function(v) AL2.set("sky", v) end)
+cAM:Toggle("AL_Tex", "Hapus tekstur", false, function(v) AL2.set("tex", v) end)
+cAM:Toggle("AL_White", "Semua putih (kecuali player)", false, function(v) AL2.set("white", v) end)
 cAM:Toggle("AL_Grass", "Hapus rumput", false, function(v) AL2.set("grass", v) end)
 cAM:Toggle("AL_Trees", "Hapus pohon & daun", false, function(v) AL2.set("trees", v) end)
-cAM:Toggle("AL_Lights", "Matiin lampu (Point / Spot / Surface)", false, function(v) AL2.set("lights", v) end)
-cAM:Toggle("AL_Perf", "Ringanin part (shadow off, mesh LOD rendah, air datar)", false, function(v) AL2.set("perf", v) end)
+cAM:Toggle("AL_Lights", "Matiin lampu", false, function(v) AL2.set("lights", v) end)
+cAM:Toggle("AL_Perf", "Ringanin part & air", false, function(v) AL2.set("perf", v) end)
 cAL:Slider("AL_FPS", "FPS cap (0 = jangan ubah)", 0, 240, 0, 10, function(v)
     if v > 0 and setfpscap then
         AL2.fpsChanged = true
@@ -3505,10 +3507,11 @@ do
         S.sv.on = v
         svSay(v and "ON, nunggu lemparan tombak" or "Status: OFF")
     end)
-    cSV:Slider("SV_Angle", "Sudut bidik (derajat dari arah kamera)", 20, 360, 180, 10, function(v) S.sv.angle = v end)
+    cSV:Slider("SV_Angle", "Sudut bidik (derajat)", 20, 360, 180, 10, function(v) S.sv.angle = v end)
     cSV:Slider("SV_Range", "Jarak max target", 50, 500, 400, 10, function(v) S.sv.range = v end, "m")
     cSV:Toggle("SV_Predict", "Prediksi gerak survivor", true, function(v) S.sv.predict = v end)
-    cSV:Toggle("SV_LOS", "Dahulukan yang ga ketutup tembok", true, function(v) S.sv.los = v end)
+    cSV:Toggle("SV_LOS", "Utamakan yang ga ketutup", true, function(v) S.sv.los = v end)
+    cSV:Label("Dipakai pas main jadi Veil. Arah tombak dikunci pas dilempar.")
 
     local function alive(ch)
         local h = ch and ch:FindFirstChildOfClass("Humanoid")
@@ -3779,4 +3782,4 @@ loading = false
 pcall(refreshDash)
 setOpen(true)
 notify("Jìn Script", "Loaded")
-warn("[jin] v3.8 loaded")
+warn("[jin] v3.9 loaded")
