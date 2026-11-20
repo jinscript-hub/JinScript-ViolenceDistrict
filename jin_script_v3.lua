@@ -3177,7 +3177,13 @@ xpcall(function()
     -- Nama modul & remote dari build lain, BELUM diverifikasi di build sekarang.
     local FV = {on = false, hooked = false, mod = nil, remote = nil, wrapF = nil, wrapV = nil, origF = nil, origV = nil}
     S.fv = FV
-    local cFV = tSurv:Group("Movement", 2)
+    -- tSurv bisa nil di sebagian executor (limit local/upvalue), jadi cari ulang lewat tabList
+    local svTab = tSurv
+    if not svTab then
+        for _, t in ipairs(tabList) do if t.name == "Survivor" then svTab = t break end end
+    end
+    if not svTab then error("tab Survivor ga ketemu") end
+    local cFV = svTab:Group("Movement", 2)
     local fvLbl = cFV:Label("Status: nunggu modul vault...")
     cFV:Toggle("FV_On", "Fast Vault", false, function(v) FV.on = v end)
     cFV:Label("Butuh log remote fastvault kalau status belum siap.")
