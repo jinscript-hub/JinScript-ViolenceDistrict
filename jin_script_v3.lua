@@ -1174,7 +1174,7 @@ local header = new("Frame", {Size = UDim2.new(1, 0, 0, HEAD), BackgroundTranspar
 new("Frame", {Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = T.stroke, BorderSizePixel = 0}, header)
 local ttl = mkLabel(header, "JÌN SCRIPT", 12, T.text, F_BOLD)
 ttl.Position = UDim2.fromOffset(14, 0); ttl.Size = UDim2.fromOffset(78, HEAD - 1)
-local ver = mkLabel(header, "v3.6", 10, T.dim)
+local ver = mkLabel(header, "v3.7", 10, T.dim)
 ver.Position = UDim2.fromOffset(92, 1); ver.Size = UDim2.fromOffset(30, HEAD - 1)
 local closeBtn = new("TextButton", {Size = UDim2.fromOffset(24, 24), AnchorPoint = Vector2.new(1, 0.5),
     Position = UDim2.new(1, -8, 0.5, -1), BackgroundTransparency = 1, Text = "", AutoButtonColor = false}, header)
@@ -2929,7 +2929,7 @@ do local function parryInit()
 end parryInit() end
 do
     -- Silent aim Twist of Fate: ganti aimDirection milik game (modul), tanpa hook remote
-    S.sa = {on = false, radius = 150, maxDist = 150, maxAngle = 180, flat = false, head = false, arm = false, predict = false, circle = true, calls = 0, angleMode = true, fovAngle = 120}
+    S.sa = {on = false, radius = 150, maxDist = 150, maxAngle = 180, flat = false, predict = false, circle = true, calls = 0, angleMode = true, fovAngle = 120}
     local cSA = tSurv:Group("Silent aim (Twist of Fate)", 1)
     local saLbl = cSA:Label("Status: OFF")
     local pendingTxt
@@ -2974,19 +2974,15 @@ do
     cSA:Slider("SA_Dist", "Jarak max killer", 20, 300, 150, 10, function(v) S.sa.maxDist = v end, "m")
     cSA:Dropdown("SA_Area", "Area bidik", {"Sudut kamera", "Lingkaran layar"}, "Sudut kamera", function(v) S.sa.angleMode = v == "Sudut kamera" updRing() end)
     cSA:Slider("SA_Angle", "Sudut bidik (derajat, mode sudut)", 20, 360, 120, 10, function(v) S.sa.fovAngle = v end)
-    cSA:Dropdown("SA_Part", "Bidik ke", {"Badan", "Kepala", "Lengan kanan"}, "Badan", function(v) S.sa.head = v == "Kepala" S.sa.arm = v == "Lengan kanan" end)
 
     local function dot3(a, b) return a.X * b.X + a.Y * b.Y + a.Z * b.Z end
     local function aimPart(char, hrp)
-        if S.sa.arm then
-            -- R6 = "Right Arm", R15 = "RightUpperArm"; kalau ga ada, jatuh ke badan
-            for _, n in ipairs({"Right Arm", "RightUpperArm", "RightLowerArm", "RightHand"}) do
-                local a = char:FindFirstChild(n)
-                if a and a:IsA("BasePart") then return a end
-            end
+        -- selalu lengan kanan (R6 = "Right Arm", R15 = "RightUpperArm"); kalau ga ada, jatuh ke HRP
+        for _, n in ipairs({"Right Arm", "RightUpperArm", "RightLowerArm", "RightHand"}) do
+            local a = char:FindFirstChild(n)
+            if a and a:IsA("BasePart") then return a end
         end
-        if S.sa.head then return char:FindFirstChild("Head") or hrp end
-        return char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso") or hrp
+        return hrp
     end
     local function muzzlePos()
         local ch = lp.Character
@@ -3469,6 +3465,121 @@ cAM:Button("Matiin semua anti lag", function()
     notify("Anti lag", "Semua mati")
 end)
 do
+    -- Silent Veil: lemparan tombak Veil otomatis ngarah ke survivor (hook remote SpearThrow)
+    S.sv = {on = false, fov = 240, range = 500, predict = true}
+    local SPEAR_SPEED, DROP, SPAWN_OFF = 180, 0.5, 3
+    local cSV = tKill:Group("Silent Veil (tombak)", 1)
+    local svLbl = cSV:Label("Status: OFF")
+    local pendingTxt
+    local function svSay(t) pendingTxt = t end
+    -- GUI cuma disentuh dari thread ini (hook jalan di thread game)
+    track(RS.Heartbeat:Connect(function()
+        if pendingTxt then svLbl.Text = pendingTxt pendingTxt = nil end
+    end))
+    cSV:Toggle("SV_On", "Silent Veil", false, function(v)
+        S.sv.on = v
+        svSay(v and "ON, nunggu lemparan tombak" or "Status: OFF")
+    end)
+    cSV:Slider("SV_FOV", "Ukuran FOV (px dari tengah layar)", 40, 500, 240, 10, function(v) S.sv.fov = v end)
+    cSV:Slider("SV_Range", "Jarak max survivor", 50, 500, 500, 10, function(v) S.sv.range = v end, "m")
+    cSV:Toggle("SV_Predict", "Prediksi gerak survivor", true, function(v) S.sv.predict = v end)
+
+    local function alive(ch)
+        local h = ch and ch:FindFirstChildOfClass("Humanoid")
+        return h and h.Health > 0
+    end
+    local function veilEquipped(ch)
+        if not ch then return false end
+        if ch:GetAttribute("MorphedKiller") == "Veil" or ch:GetAttribute("Veil") == true then return true end
+        if ch:GetAttribute("spearmode") == true or ch:GetAttribute("VeilSpearEquipped") == true then return true end
+        return ch:FindFirstChild("Spear") ~= nil
+    end
+    local function pickTarget()
+        local cam = workspace.CurrentCamera
+        local myCh = lp.Character
+        local myHrp = myCh and myCh:FindFirstChild("HumanoidRootPart")
+        if not (cam and myHrp) then return nil end
+        local c = cam.ViewportSize / 2
+        local best, bestD
+        for _, p in ipairs(Players:GetPlayers()) do
+            local ch = p.Character
+            if p ~= lp and ch and roleOf(p) ~= "killer" and alive(ch)
+                and not ch:GetAttribute("Immobile") and not ch:GetAttribute("IsHooked") and not ch:GetAttribute("Knocked") then
+                local hrp = ch:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    local d = (hrp.Position - myHrp.Position).Magnitude
+                    local sp, on = cam:WorldToViewportPoint(hrp.Position)
+                    if d <= S.sv.range and on and sp.Z > 0
+                        and (Vector2.new(sp.X, sp.Y) - c).Magnitude <= S.sv.fov
+                        and (not bestD or d < bestD) then
+                        best, bestD = hrp, d
+                    end
+                end
+            end
+        end
+        return best
+    end
+    -- arah lempar dengan prediksi gerak + kompensasi gravitasi
+    local function solve(origin, hrp)
+        local g = Vector3.new(0, -workspace.Gravity * DROP, 0)
+        local vel = S.sv.predict and hrp.AssemblyLinearVelocity or Vector3.zero
+        local okP, ping = pcall(function() return lp:GetNetworkPing() end)
+        ping = okP and ping * 0.5 or 0.035
+        local t = (hrp.Position - origin).Magnitude / SPEAR_SPEED
+        local aim = hrp.Position
+        for _ = 1, 5 do
+            aim = hrp.Position + vel * (t + ping)
+            t = math.max(0.04, (aim - origin).Magnitude / SPEAR_SPEED)
+        end
+        local v = ((aim - origin) - 0.5 * g * t * t) / t
+        if v.Magnitude < 0.01 then return nil end
+        return v.Unit
+    end
+
+    local svOld
+    local wrap = newcclosure or function(f) return f end
+    if hookmetamethod and getnamecallmethod then
+        svOld = hookmetamethod(game, "__namecall", wrap(function(self, ...)
+            local method = getnamecallmethod()
+            if running and S.sv.on and (method == "FireServer" or method == "fireServer")
+                and typeof(self) == "Instance" and self.Name:lower() == "spearthrow"
+                and not (checkcaller and checkcaller()) then
+                local args = table.pack(...)
+                pcall(function()
+                    if not veilEquipped(lp.Character) then svSay("Lolos asli: tombak Veil ga kedeteksi") return end
+                    local cam = workspace.CurrentCamera
+                    local a1 = args[1]
+                    local origin
+                    if type(a1) == "table" and typeof(a1.Origin) == "Vector3" then origin = a1.Origin
+                    elseif typeof(a1) == "Vector3" and typeof(args[2]) == "Vector3" then origin = a1
+                    else origin = cam.CFrame.Position + cam.CFrame.LookVector * SPAWN_OFF end
+                    local target = pickTarget()
+                    if not target then svSay("Lolos asli: ga ada survivor di FOV/jarak") return end
+                    local dir = solve(origin, target)
+                    if not dir then svSay("Lolos asli: arah ga kehitung") return end
+                    if type(a1) == "table" and typeof(a1.Origin) == "Vector3" then
+                        a1.Direction = dir
+                        if a1.Velocity ~= nil then a1.Velocity = dir * SPEAR_SPEED end
+                    elseif typeof(a1) == "Vector3" and typeof(args[2]) == "Vector3" then
+                        args[2] = dir
+                    elseif typeof(a1) == "Vector3" then
+                        args[1] = dir
+                    end
+                    svSay("Diarahin ke " .. tostring(target.Parent and target.Parent.Name))
+                end)
+                setnamecallmethod(method)
+                return svOld(self, table.unpack(args, 1, args.n))
+            end
+            return svOld(self, ...)
+        end))
+    else
+        svSay("hookmetamethod ga ada di executor ini")
+    end
+    S.svRestore = function()
+        if svOld and hookmetamethod then pcall(hookmetamethod, game, "__namecall", svOld) end
+    end
+end
+do
     local cPred = tKill:Group("Prediksi killer berikutnya", 2)
     local mlbl = cPred:Label("Map: nunggu pengumuman server...")
     local lbl = cPred:Label("Nunggu data...")
@@ -3601,6 +3712,7 @@ function cleanup()
     for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
     scUnbind()
     pcall(function() if S.saRestore then S.saRestore() end end)
+    pcall(function() if S.svRestore then S.svRestore() end end)
     for plr in pairs(pvis) do destroyPlayerVis(plr) end
     for inst in pairs(ovis) do destroyObj(inst) end
     pcall(function() espFolder:Destroy() end)
@@ -3622,4 +3734,4 @@ loading = false
 pcall(refreshDash)
 setOpen(true)
 notify("Jìn Script", "Loaded")
-warn("[jin] v3.6 loaded")
+warn("[jin] v3.7 loaded")
