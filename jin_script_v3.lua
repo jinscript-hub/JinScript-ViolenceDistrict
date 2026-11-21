@@ -515,10 +515,14 @@ function update()
                     pvis[plr] = v
                 end
                 local c = S.cat[key].color
+                v.baseCol = c
+                local vl = S.vlock
+                local vk = vl and vl.on and vl.set[plr]
+                if vk then c = (vk == "lock") and vl.colLock or vl.colFov end
                 v.hl.FillColor, v.hl.OutlineColor = c, c
                 local dist = lhrp and math.floor((hrp.Position - lhrp.Position).Magnitude)
                 local tag = TAG[key]
-                local nameTxt = plr.DisplayName .. (tag and (" [" .. tag .. "]") or "")
+                local nameTxt = plr.DisplayName .. (tag and (" [" .. tag .. "]") or "") .. (vk == "lock" and " [LOCK]" or "")
                 setLabel(v.nameBB, v.nameLbl, S.names and nameTxt or "", c, ts)
                 setLabel(v.distBB, v.distLbl, (S.dist and dist) and ("%dm"):format(dist) or "", c, ts)
             else
@@ -1213,7 +1217,7 @@ local header = new("Frame", {Size = UDim2.new(1, 0, 0, HEAD), BackgroundTranspar
 new("Frame", {Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = T.stroke, BorderSizePixel = 0}, header)
 local ttl = mkLabel(header, "JÌN SCRIPT", 12, T.text, F_BOLD)
 ttl.Position = UDim2.fromOffset(14, 0); ttl.Size = UDim2.fromOffset(78, HEAD - 1)
-local ver = mkLabel(header, "v4.3", 10, T.dim)
+local ver = mkLabel(header, "v4.4", 10, T.dim)
 ver.Position = UDim2.fromOffset(92, 1); ver.Size = UDim2.fromOffset(30, HEAD - 1)
 local closeBtn = new("TextButton", {Size = UDim2.fromOffset(24, 24), AnchorPoint = Vector2.new(1, 0.5),
     Position = UDim2.new(1, -8, 0.5, -1), BackgroundTransparency = 1, Text = "", AutoButtonColor = false}, header)
@@ -4989,6 +4993,142 @@ xpcall(function()
     end
 end, function(e) warn("[jin] Extras gagal dipasang: " .. tostring(e)) end)
 
+-- ===== Veil lock: survivor yang masuk lingkaran FOV (POV kamera) ESP-nya berubah warna + [LOCK] =====
+-- Visual aja (kayak lingkaran FOV silent aim), ga ngubah arah bidik/lemparan.
+xpcall(function()
+    local RSv = game:GetService("RunService")
+    local VL = {
+        on = false, show = true, veilOnly = false, fov = 180,
+        colLock = Color3.fromRGB(255, 45, 45), colFov = Color3.fromRGB(255, 175, 40),
+        set = {},
+    }
+    S.vlock = VL
+    local gui, circ, stroke
+    local function circClear()
+        if gui then pcall(function() gui:Destroy() end) end
+        gui, circ, stroke = nil, nil, nil
+    end
+    local function circBuild()
+        circClear()
+        if not VL.show then return end
+        local g = Instance.new("ScreenGui")
+        g.Name = "JinVeil"
+        g.ResetOnSpawn = false
+        g.IgnoreGuiInset = true
+        g.DisplayOrder = 20
+        attach(g)
+        local f = Instance.new("Frame")
+        f.AnchorPoint = Vector2.new(0.5, 0.5)
+        f.Position = UDim2.fromScale(0.5, 0.5)
+        f.Size = UDim2.fromOffset(VL.fov * 2, VL.fov * 2)
+        f.BackgroundTransparency = 1
+        f.BorderSizePixel = 0
+        f.Visible = false
+        local uc = Instance.new("UICorner")
+        uc.CornerRadius = UDim.new(0.5, 0)
+        uc.Parent = f
+        local st = Instance.new("UIStroke")
+        st.Thickness = 2
+        st.Transparency = 0.15
+        st.Color = VL.colFov
+        st.Parent = f
+        f.Parent = g
+        gui, circ, stroke = g, f, st
+    end
+
+    local function paint(plr, st)
+        local v = pvis[plr]
+        if not (v and v.hl and v.hl.Parent) then return end
+        local c = st == "lock" and VL.colLock or (st == "fov" and VL.colFov) or v.baseCol
+        if c then
+            v.hl.FillColor, v.hl.OutlineColor = c, c
+            v.nameLbl.TextColor3, v.distLbl.TextColor3 = c, c
+        end
+    end
+
+    local actAt, actV = 0, false
+    local function active()
+        local now = os.clock()
+        if now - actAt < 0.5 then return actV end
+        actAt = now
+        actV = VL.on and not S.lobby and roleOf(lp) == "killer"
+            and (not VL.veilOnly or lp:GetAttribute("SelectedKiller") == "Veil")
+        return actV
+    end
+
+    local vlLbl
+    local lastTxt = ""
+    local lastT = 0
+    track(RSv.RenderStepped:Connect(function()
+        local now = os.clock()
+        if now - lastT < 0.033 then return end
+        lastT = now
+        if not active() then
+            if circ then circ.Visible = false end
+            if next(VL.set) then
+                local old = VL.set
+                VL.set = {}
+                for plr in pairs(old) do paint(plr, nil) end
+            end
+            return
+        end
+        local cam = workspace.CurrentCamera
+        if not cam then return end
+        local vp = cam.ViewportSize
+        local center = Vector2.new(vp.X / 2, vp.Y / 2)
+        local newSet, best, bestD = {}, nil, math.huge
+        for plr, v in pairs(pvis) do
+            local hrp = v.char and v.char:FindFirstChild("HumanoidRootPart")
+            if hrp and roleOf(plr) ~= "killer" then
+                local p3, on = cam:WorldToViewportPoint(hrp.Position)
+                if on and p3.Z > 0 then
+                    local d = (Vector2.new(p3.X, p3.Y) - center).Magnitude
+                    if d <= VL.fov then
+                        newSet[plr] = "fov"
+                        if d < bestD then best, bestD = plr, d end
+                    end
+                end
+            end
+        end
+        if best then newSet[best] = "lock" end
+        local old = VL.set
+        VL.set = newSet
+        for plr, st in pairs(newSet) do if old[plr] ~= st then paint(plr, st) end end
+        for plr in pairs(old) do if not newSet[plr] then paint(plr, nil) end end
+        if circ then
+            circ.Visible = true
+            local c = best and VL.colLock or VL.colFov
+            if stroke.Color ~= c then stroke.Color = c end
+        end
+        if vlLbl then
+            local t = best and ("Lock: " .. best.DisplayName) or "Lock: -"
+            if t ~= lastTxt then lastTxt = t vlLbl.Text = t end
+        end
+    end))
+
+    local cVL = tKill:Group("Veil lock", 2)
+    cVL:Toggle("VL_On", "Veil lock (ESP ke-lock + lingkaran FOV)", false, function(v) VL.on = v actAt = 0 end,
+        {id = "VL_ColLock", default = VL.colLock, cb = function(c) VL.colLock = c end})
+    cVL:Toggle("VL_Show", "Tampilkan lingkaran FOV", true, function(v) VL.show = v circBuild() end,
+        {id = "VL_ColFov", default = VL.colFov, cb = function(c) VL.colFov = c if stroke then stroke.Color = c end end})
+    cVL:Toggle("VL_Veil", "Cuma pas lu Killer Veil", false, function(v) VL.veilOnly = v actAt = 0 end)
+    cVL:Slider("VL_Fov", "Radius FOV", 60, 450, 180, 10, function(v)
+        VL.fov = v
+        if circ then circ.Size = UDim2.fromOffset(v * 2, v * 2) end
+    end, "px")
+    vlLbl = cVL:Label("Lock: -")
+    cVL:Label("Aktif pas lu Killer. Survivor dalam lingkaran = kuning, yang paling tengah = merah [LOCK].")
+    circBuild()
+
+    local prevRestore = S.xRestore
+    S.xRestore = function()
+        if prevRestore then pcall(prevRestore) end
+        VL.on = false
+        VL.set = {}
+        circClear()
+    end
+end, function(e) warn("[jin] Veil lock gagal dipasang: " .. tostring(e)) end)
+
 local cleanup
 local cUI = tSet:Group("Tampilan", 1)
 cUI:Dropdown("UI_Size", "Ukuran", {"Kecil", "Sedang", "Besar", "Jumbo"}, "Sedang", function(v) curSize = v applyLayout() end)
@@ -5118,5 +5258,5 @@ loadConfig()
 loading = false
 pcall(refreshDash)
 setOpen(true)
-notify("Jìn Script", "Loaded v4.3")
-warn("[jin] v4.3 loaded (autoplay via dump)")
+notify("Jìn Script", "Loaded v4.4")
+warn("[jin] v4.4 loaded (veil lock)")
