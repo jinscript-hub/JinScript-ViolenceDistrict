@@ -82,7 +82,7 @@ local CATS = {
 local CAT = {}
 for _, c in ipairs(CATS) do CAT[c.key] = c end
 local S = {
-    cat = {}, names = true, dist = true, objOn = false, objDist = false, textSize = 13, maxDist = 600, chaseDist = 40, hookNear = 10,
+    cat = {}, names = true, dist = true, objOn = false, objDist = false, textSize = 13, outline = true, espMs = 250, textDist = 0, maxDist = 600, chaseDist = 40, hookNear = 10,
     hideSpec = true, palHideDown = true, genHideDone = true, genProgCol = true, genDoneCol = Color3.fromRGB(0, 255, 80), lobby = false,
     chaseCol = {Color3.fromRGB(0, 255, 80), Color3.fromRGB(255, 235, 0), Color3.fromRGB(255, 40, 40)},
     cone = {on = true, range = 70, angle = 100, color = Color3.fromRGB(255, 60, 60), transp = 0.75, line = true, lineLen = 30, lineColor = Color3.fromRGB(255, 255, 255), body = false, bodyColor = Color3.fromRGB(60, 255, 90)},
@@ -112,13 +112,21 @@ local function attrRole(inst)
     end
     return nil
 end
-function roleOf(plr)
+local roleC = setmetatable({}, {__mode = "k"})
+local function roleRaw(plr)
     if plr.Team then
         local t = plr.Team.Name:lower()
         if t:find("killer") or t:find("slasher") then return "killer" end
         if t:find("survivor") then return "survivor" end
     end
     return attrRole(plr) or attrRole(plr.Character) or "survivor"
+end
+function roleOf(plr)
+    local now, c, ch = os.clock(), roleC[plr], plr.Character
+    if c and c.ch == ch and now - c.t < 0.3 then return c.r end
+    local r = roleRaw(plr)
+    if c then c.r, c.t, c.ch = r, now, ch else roleC[plr] = {r = r, t = now, ch = ch} end
+    return r
 end
 local SPEC_WORDS = {"spectat", "lobby", "waiting", "queue", "intermission", "dead", "eliminat"}
 local function specWord(str)
@@ -128,7 +136,8 @@ local function specWord(str)
     end
     return false
 end
-function isSpectator(plr)
+local specC = setmetatable({}, {__mode = "k"})
+local function specRaw(plr)
     if plr.Team and specWord(plr.Team.Name) then return true end
     local ch = plr.Character
     for _, inst in ipairs({plr, ch}) do
@@ -139,6 +148,13 @@ function isSpectator(plr)
         end
     end
     return false
+end
+function isSpectator(plr)
+    local now, c, ch = os.clock(), specC[plr], plr.Character
+    if c and c.ch == ch and now - c.t < 0.4 then return c.r end
+    local r = specRaw(plr)
+    if c then c.r, c.t, c.ch = r, now, ch else specC[plr] = {r = r, t = now, ch = ch} end
+    return r
 end
 local MATCH = {
     generator = function(i) return i:IsA("Model") and i.Name:lower() == "generator" end,
@@ -294,11 +310,13 @@ espFolder = Instance.new("Folder")
 espFolder.Name = "JinESP"
 attach(espFolder)
 pvis, ovis, selfBB = {}, {}, {}
+local svC = setmetatable({}, {__mode = "k"})
 local function makeBB(part, offsetY, h)
     local bb = Instance.new("BillboardGui")
     bb.Size = UDim2.fromOffset(200, h or 24)
     bb.StudsOffset = Vector3.new(0, offsetY, 0)
     bb.AlwaysOnTop = true
+    bb.LightInfluence = 0
     bb.Adornee = part
     local lbl = Instance.new("TextLabel")
     lbl.Size = UDim2.new(1, 0, 1, 0)
@@ -306,7 +324,7 @@ local function makeBB(part, offsetY, h)
     lbl.Font = Enum.Font.GothamMedium
     lbl.TextColor3 = Color3.new(1, 1, 1)
     lbl.RichText = true
-    lbl.TextStrokeTransparency = 0.35
+    lbl.TextStrokeTransparency = S.outline and 0.35 or 1
     lbl.Parent = bb
     bb.Parent = espFolder
     return bb, lbl
@@ -320,17 +338,19 @@ local function setLabel(bb, lbl, text, color, size)
 end
 function destroyPlayerVis(plr)
     local v = pvis[plr]
-    if v then pcall(function() v.hl:Destroy() v.nameBB:Destroy() v.distBB:Destroy() end) pvis[plr] = nil end
+    if v then
+        pvis[plr] = nil
+        if v.hl then pcall(v.hl.Destroy, v.hl) end
+        if v.nameBB then pcall(v.nameBB.Destroy, v.nameBB) end
+    end
 end
 function destroyObj(inst)
     local o = ovis[inst]
     if o then
-        pcall(function()
-            o.box:Destroy()
-            if o.nameBB then o.nameBB:Destroy() end
-            if o.distBB then o.distBB:Destroy() end
-        end)
         ovis[inst] = nil
+        if o.box then pcall(o.box.Destroy, o.box) end
+        if o.nameBB then pcall(o.nameBB.Destroy, o.nameBB) end
+        if o.distBB then pcall(o.distBB.Destroy, o.distBB) end
     end
 end
 local function partOf(inst)
@@ -353,9 +373,10 @@ local function createObj(cat, inst)
     box.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
     box.Parent = espFolder
     local part = partOf(inst)
-    local o = {cat = cat, box = box}
+    local o = {cat = cat, box = box, part = part}
     if part then
         local hh = halfHeight(inst)
+        o.hh = hh
         if cat == "generator" then
             -- persen di TENGAH generator: offset dunia = pusat bounding box - posisi part
             o.nameBB, o.nameLbl = makeBB(part, 0, 30)
@@ -364,7 +385,6 @@ local function createObj(cat, inst)
         else
             o.nameBB, o.nameLbl = makeBB(part, hh)
         end
-        o.distBB, o.distLbl = makeBB(part, -hh)
     end
     ovis[inst] = o
     return o
@@ -432,7 +452,7 @@ local function genProgress(inst)
 end
 local PAL_DOWN_KEYS = {"drop", "fall", "down", "broken", "destroy"}
 local palCache = setmetatable({}, {__mode = "k"})
-local function palletDown(inst)
+local function palletDownRaw(inst)
     local c = palCache[inst]
     if not c or (not c.ref and os.clock() - c.at > 3) then
         c = {at = os.clock()}
@@ -463,8 +483,16 @@ local function palletDown(inst)
     if v == nil then palCache[inst] = nil return false end
     return v == true
 end
-S.partOf, S.genProgress, S.palletDown = partOf, genProgress, palletDown
-local objAt, lobbyN = 0, 0
+local palRes = setmetatable({}, {__mode = "k"})
+local function palletDown(inst)
+    local r, now = palRes[inst], os.clock()
+    if r and now - r.t < 1.5 then return r.v end
+    local v = palletDownRaw(inst)
+    if r then r.v, r.t = v, now else palRes[inst] = {v = v, t = now} end
+    return v
+end
+S.partOf, S.genProgress, S.palletDown = partOf, genProgress, palletDownRaw
+local objAt, lobbySince = 0, nil
 local ESP_WHITE = Color3.new(1, 1, 1)
 local function esc(t)
     return (t:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"))
@@ -472,10 +500,21 @@ end
 local function rich(t, col)
     return '<font color="#' .. col:ToHex() .. '">' .. esc(t) .. "</font>"
 end
+local DIST_TXT = {}
+local function distTxt(d)
+    local t = DIST_TXT[d]
+    if not t then
+        t = '<font color="#FFFFFF">[' .. d .. "M]</font>"
+        DIST_TXT[d] = t
+    end
+    return t
+end
 function update()
+    local now = os.clock()
     local lc = lp.Character
     local lhrp = lc and lc:FindFirstChild("HumanoidRootPart")
     local maxD = S.maxDist > 0 and S.maxDist or math.huge
+    local textMax = S.textDist > 0 and S.textDist or math.huge
     local ts = S.textSize
     local killers = getKillers()
     local lobby = false
@@ -486,8 +525,10 @@ function update()
         end
         local raw = (not live) or isSpectator(lp)
         -- debounce: masuk lobby harus stabil ~1 detik, biar deteksi yang flap ga ngancurin/ngebuat ulang ESP (kedut)
-        lobbyN = raw and (lobbyN + 1) or 0
-        lobby = raw and lobbyN >= 4
+        if raw then lobbySince = lobbySince or now else lobbySince = nil end
+        lobby = raw and (now - lobbySince) >= 1
+    else
+        lobbySince = nil
     end
     S.lobby = lobby
     if lobby then
@@ -505,7 +546,13 @@ function update()
             local alive = hrp and hum and hum.Health > 0 and not (S.hideSpec and isSpectator(plr))
             local key = role
             if alive and role == "survivor" then
-                key = survivorState(plr, char, hum, hrp, killers)
+                -- scan state (atribut/anim/raycast) itu bagian paling berat -> dicache 0.45 dtk per player
+                local sc = svC[plr]
+                if not sc or sc.ch ~= char or now - sc.t >= 0.45 then
+                    local k = survivorState(plr, char, hum, hrp, killers)
+                    if sc then sc.k, sc.t, sc.ch = k, now, char else sc = {k = k, t = now, ch = char} svC[plr] = sc end
+                end
+                key = sc.k
                 if not S.cat[key].on then key = "survivor" end
             end
             if alive and S.cat[key].on then
@@ -519,8 +566,7 @@ function update()
                     hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
                     hl.Parent = espFolder
                     local nbb, nlbl = makeBB(hrp, 3.4)
-                    local dbb, dlbl = makeBB(hrp, -3.8)
-                    v = {hl = hl, nameBB = nbb, nameLbl = nlbl, distBB = dbb, distLbl = dlbl, char = char}
+                    v = {hl = hl, nameBB = nbb, nameLbl = nlbl, char = char}
                     pvis[plr] = v
                 end
                 local c = S.cat[key].color
@@ -528,15 +574,19 @@ function update()
                 local vl = S.vlock
                 local vk = vl and vl.on and vl.set[plr]
                 if vk then c = (vk == "lock") and vl.colLock or vl.colFov end
-                v.hl.FillColor, v.hl.OutlineColor = c, c
+                if v.hl.FillColor ~= c then v.hl.FillColor, v.hl.OutlineColor = c, c end
                 local dist = lhrp and math.floor((hrp.Position - lhrp.Position).Magnitude)
-                -- satu baris: Nama [tag] berwarna (kayak dulu) + [72M] putih
+                -- satu baris: Nama [tag] berwarna + [72M] putih; string rich dicache, cuma dibuat ulang kalau berubah
                 local tag = TAG[key]
                 local nameTxt = plr.DisplayName .. (tag and (" [" .. tag .. "]") or "") .. (vk == "lock" and " [LOCK]" or "")
-                local txt = S.names and rich(nameTxt, c) or ""
-                if S.dist and dist then txt = txt .. (txt ~= "" and " " or "") .. rich(("[%dM]"):format(dist), ESP_WHITE) end
+                local txt = ""
+                if S.names then
+                    if v.nk ~= nameTxt or v.nc ~= c then v.nk, v.nc, v.nr = nameTxt, c, rich(nameTxt, c) end
+                    txt = v.nr
+                end
+                if S.dist and dist then txt = txt .. (txt ~= "" and " " or "") .. distTxt(dist) end
+                if dist and dist > textMax then txt = "" end
                 setLabel(v.nameBB, v.nameLbl, txt, ESP_WHITE, ts)
-                setLabel(v.distBB, v.distLbl, "", ESP_WHITE, ts)
             else
                 destroyPlayerVis(plr)
             end
@@ -565,10 +615,9 @@ function update()
     elseif selfBB.bb then
         selfBB.bb.Enabled = false
     end
-    -- objek: pass berat (GetDescendants/pivot) dibatasi ~1.2x per detik, bukan 4x -> hilang hitch tiap 0.25 detik
-    local nowC = os.clock()
-    if nowC - objAt < 0.8 then return end
-    objAt = nowC
+    -- objek: pass berat (GetDescendants/pivot) dibatasi ~1.2x per detik
+    if now - objAt < 0.8 then return end
+    objAt = now
     local plCount = 0
     for _ in pairs(pvis) do plCount = plCount + 1 end
     local hlBudget = math.max(0, 30 - plCount)
@@ -607,12 +656,14 @@ function update()
                             if isGen then
                                 local txt = prog and (math.floor(prog * 100 + 0.5) .. "%") or "GEN"
                                 setLabel(o.nameBB, o.nameLbl, txt, c, ts + 4)
-                                setLabel(o.distBB, o.distLbl, ds or "", ESP_WHITE, ts)
+                                if ds and not o.distBB and o.part then
+                                    o.distBB, o.distLbl = makeBB(o.part, -(o.hh or 3))
+                                end
+                                if o.distBB then setLabel(o.distBB, o.distLbl, ds or "", ESP_WHITE, ts) end
                             else
                                 local txt = S.names and rich(CAT[cat].label, c) or ""
                                 if ds then txt = txt .. (txt ~= "" and " " or "") .. rich(ds, ESP_WHITE) end
                                 setLabel(o.nameBB, o.nameLbl, txt, ESP_WHITE, ts)
-                                setLabel(o.distBB, o.distLbl, "", ESP_WHITE, ts)
                             end
                         end
                     end
@@ -625,6 +676,15 @@ function update()
         local en = idx <= hlBudget
         if e.o.box.Enabled ~= en then e.o.box.Enabled = en end
     end
+end
+S.espRestyle = function()
+    local st = S.outline and 0.35 or 1
+    for _, v in pairs(pvis) do if v.nameLbl then v.nameLbl.TextStrokeTransparency = st end end
+    for _, o in pairs(ovis) do
+        if o.nameLbl then o.nameLbl.TextStrokeTransparency = st end
+        if o.distLbl then o.distLbl.TextStrokeTransparency = st end
+    end
+    if selfBB.lbl then selfBB.lbl.TextStrokeTransparency = st end
 end
 local CONE_N = 12
 coneFolder = Instance.new("Folder")
@@ -1873,6 +1933,10 @@ do
     cLbl:Toggle("ESP_ObjDist", "Jarak objek [27M]", false, function(v) S.objDist = v end)
     cLbl:Label("Generator: persen selalu tampil di tengah.")
     cLbl:Slider("ESP_TextSize", "Ukuran teks", 10, 24, 13, 1, function(v) S.textSize = v end)
+    cLbl:Slider("ESP_TextDist", "Jarak teks player (0 = bebas)", 0, 1000, 0, 50, function(v) S.textDist = v end, "m")
+    cLbl:Toggle("ESP_Outline", "Outline teks (matiin kalau berat)", true, function(v) S.outline = v if S.espRestyle then S.espRestyle() end end)
+    local cPerf = sD:Group("Performa ESP", 2)
+    cPerf:Slider("ESP_Rate", "Refresh ESP (naikin kalau lag)", 100, 1000, 250, 50, function(v) S.espMs = v end, "ms")
     local cCone = sP:Group("Area liat killer (tanah)", 2)
     cCone:Toggle("Cone_On", "Aktif", true, function(v) S.cone.on = v end)
     cCone:Slider("Cone_Angle", "Sudut area killer", 40, 180, 100, 5, function(v) S.cone.angle = v end)
@@ -5409,7 +5473,14 @@ do
     end
 end
 local fpsAcc, fpsN = 0, 0
-task.spawn(function() while running do pcall(update) task.wait(0.25) end end)
+task.spawn(function()
+    local warned = false
+    while running do
+        local ok, err = pcall(update)
+        if not ok and not warned then warned = true warn("[jin] esp error: " .. tostring(err)) end
+        task.wait((S.espMs or 250) / 1000)
+    end
+end)
 task.spawn(function() while running do pcall(scBind) task.wait(1) end end)
 task.spawn(function()
     while running do
@@ -5490,5 +5561,5 @@ loadConfig()
 loading = false
 pcall(refreshDash)
 setOpen(true)
-notify("Jìn Script", "Loaded v4.6")
-warn("[jin] v4.6 loaded (esp warna + autoplay mulus)")
+notify("Jìn Script", "Loaded v4.7")
+warn("[jin] v4.7 loaded (esp anti lag)")
