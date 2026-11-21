@@ -450,6 +450,7 @@ local function palletDown(inst)
     if v == nil then palCache[inst] = nil return false end
     return v == true
 end
+S.partOf, S.genProgress, S.palletDown = partOf, genProgress, palletDown
 function update()
     local lc = lp.Character
     local lhrp = lc and lc:FindFirstChild("HumanoidRootPart")
@@ -1264,6 +1265,7 @@ local Tab, Card = {}, {}
 Tab.__index = Tab
 Card.__index = Card
 local tabList = {}
+S.tabList = tabList
 function selectTab(t)
     for _, o in ipairs(tabList) do
         local sel = (o == t)
@@ -3925,6 +3927,528 @@ xpcall(function()
     end
 end, function(e) warn("[jin] Killer Extras gagal dipasang: " .. tostring(e)) end)
 
+xpcall(function()
+    -- ===== Jin Extras: Auto Play, Moonwalk, Speed Boost, Auto Break Pallet, Auto Attack, Crosshair =====
+    -- Ditulis ulang dari nol (bukan salinan script lain). Tidak ada nama remote yang dipakai:
+    -- interaksi lewat ProximityPrompt yang dicari saat runtime. BELUM diuji di game.
+    -- Semua toggle input-producing sengaja TIDAK disimpan di config (selalu mati saat script dimuat).
+    local PathfindingService = game:GetService("PathfindingService")
+    local X = {
+        sb = {on = false, pct = 15},
+        mw = {on = false, power = 3, boost = 10, range = 60, t = 0},
+        bp = {on = false, radius = 8, cd = 1.2, last = 0},
+        aa = {on = false, range = 10, count = 1, delay = 0.1, cd = 0.8, last = 0, method = "Auto"},
+        ap = {on = false, flee = 45, goal = nil, wps = nil, wi = 2, pathAt = 0, held = nil, thread = nil, lastPos = nil, lastCheck = 0},
+        ch = {on = false, style = "Plus", size = 12, thick = 2, gap = 4, ox = 0, oy = 0, color = "Putih"},
+    }
+    S.x = X
+
+    -- helper milik modul ESP/generator ada di dalam blok yang sudah tertutup, jadi diekspor lewat S
+    -- (2 baris patch kecil di script: S.tabList dan S.partOf/genProgress/palletDown)
+    local partOf, genProgress, palletDown = S.partOf, S.genProgress, S.palletDown
+    if not (partOf and genProgress and palletDown and S.tabList) then
+        error("helper script belum diekspor (S.partOf / S.genProgress / S.palletDown / S.tabList)")
+    end
+
+    -- tab dicari lewat tabList (sama seperti modul Fast Vault) biar aman dari batas local/upvalue
+    local function findTab(name)
+        for _, t in ipairs(S.tabList) do
+            if t.name == name then return t end
+        end
+        return nil
+    end
+    local tSv, tKl, tMs = findTab("Survivor"), findTab("Killer"), findTab("Misc")
+    if not (tSv and tKl and tMs) then error("tab Survivor/Killer/Misc ga ketemu") end
+
+    local function setLbl(l, t)
+        if l and l.Text ~= t then l.Text = t end
+    end
+
+    local function myChar()
+        local ch = lp.Character
+        local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+        local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+        if hum and hrp and hum.Health > 0 then return ch, hum, hrp end
+        return nil
+    end
+
+    -- role dicache 0.5 detik supaya Heartbeat ga scan atribut tiap frame
+    local roleVal, roleAt = nil, 0
+    local function myRole()
+        local now = os.clock()
+        if now - roleAt > 0.5 then roleVal, roleAt = roleOf(lp), now end
+        return roleVal
+    end
+
+    local kCache, kAt = {}, 0
+    local function killers()
+        local now = os.clock()
+        if now - kAt > 0.2 then kCache, kAt = getKillers(), now end
+        return kCache
+    end
+
+    local function nearestKiller(pos)
+        local best, bestD = nil, math.huge
+        for _, k in ipairs(killers()) do
+            if k.hrp and k.hrp.Parent then
+                local d = (k.hrp.Position - pos).Magnitude
+                if d < bestD then best, bestD = k, d end
+            end
+        end
+        return best, bestD
+    end
+
+    local function posOf(inst)
+        if not inst then return nil end
+        if inst:IsA("Attachment") then return inst.WorldPosition end
+        if inst:IsA("BasePart") then return inst.Position end
+        local p = partOf(inst)
+        if p then return p.Position end
+        local ok, v = pcall(function() return inst:GetPivot().Position end)
+        if ok then return v end
+        return nil
+    end
+
+    local function pickPrompt(inst, words)
+        local list = {}
+        for _, d in ipairs(inst:GetDescendants()) do
+            if d:IsA("ProximityPrompt") and d.Enabled then list[#list + 1] = d end
+        end
+        for _, p in ipairs(list) do
+            local txt = (p.ActionText .. " " .. p.ObjectText):lower()
+            for _, w in ipairs(words) do
+                if txt:find(w, 1, true) then return p end
+            end
+        end
+        return list[1]
+    end
+
+    local function pressPrompt(p)
+        if fireproximityprompt then
+            if pcall(fireproximityprompt, p) then return true end
+        end
+        return pcall(function()
+            p:InputHoldBegin()
+            task.wait(math.max(p.HoldDuration, 0) + 0.05)
+            p:InputHoldEnd()
+        end)
+    end
+
+    -- ===== Speed Boost + Moonwalk (geser CFrame searah MoveDirection) =====
+    track(RS.Heartbeat:Connect(function(dt)
+        local sb, mw = X.sb, X.mw
+        if not (sb.on or mw.on) then return end
+        local ch, hum, hrp = myChar()
+        if not ch or hum.Sit then return end
+        local md = hum.MoveDirection
+        if md.Magnitude < 0.1 then return end
+        local ws = hum.WalkSpeed
+        local delta = Vector3.new(0, 0, 0)
+        if sb.on then
+            delta = delta + md * (ws * sb.pct / 100 * dt)
+        end
+        if mw.on and myRole() == "survivor" then
+            local k, d = nearestKiller(hrp.Position)
+            if k and d <= mw.range then
+                mw.t = mw.t + dt * 7
+                local side = Vector3.new(-md.Z, 0, md.X)
+                delta = delta + side * (math.sin(mw.t) * ws * (mw.power * 0.12) * dt)
+                delta = delta + md * (ws * mw.boost / 100 * dt)
+            end
+        end
+        if delta.Magnitude > 0 then
+            hrp.CFrame = hrp.CFrame + delta
+        end
+    end))
+
+    -- ===== Auto Break Pallet (Killer) =====
+    local bpLbl
+    task.spawn(function()
+        while running do
+            task.wait(0.25)
+            local bp = X.bp
+            if bp.on and myRole() == "killer" and os.clock() - bp.last >= bp.cd then
+                local ch, hum, hrp = myChar()
+                if hrp then
+                    local target, targetPrompt, bestD = nil, nil, math.huge
+                    local note = nil
+                    for inst in pairs(found.pallet) do
+                        if inst.Parent then
+                            local pos = posOf(inst)
+                            if pos then
+                                local d = (pos - hrp.Position).Magnitude
+                                if d <= bp.radius + 3 and d < bestD then
+                                    local okD, down = pcall(palletDown, inst)
+                                    if okD and down then
+                                        local p = pickPrompt(inst, {"break", "destroy", "hancur", "rusak"})
+                                        if p then
+                                            local pp = posOf(p.Parent) or pos
+                                            local dp = (pp - hrp.Position).Magnitude
+                                            if dp <= math.min(bp.radius, p.MaxActivationDistance + 1) then
+                                                target, targetPrompt, bestD = inst, p, d
+                                            end
+                                        else
+                                            note = "pallet jatuh, prompt break ga ketemu"
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                    if targetPrompt then
+                        bp.last = os.clock()
+                        pressPrompt(targetPrompt)
+                        setLbl(bpLbl, "Status: break dikirim ke " .. target.Name)
+                    elseif note then
+                        setLbl(bpLbl, "Status: " .. note)
+                    end
+                end
+            end
+        end
+    end)
+
+    -- ===== Auto Attack (Killer) =====
+    local aaLbl
+    local aaRP = RaycastParams.new()
+    aaRP.FilterType = Enum.RaycastFilterType.Exclude
+
+    local function clickOnce()
+        local m = X.aa.method
+        if (m == "Auto" or m == "mouse1click") and mouse1click then
+            if pcall(mouse1click) then return "mouse1click" end
+        end
+        if m == "Auto" or m == "VirtualInput" then
+            local ok = pcall(function()
+                local vim = game:GetService("VirtualInputManager")
+                local vp = workspace.CurrentCamera.ViewportSize
+                vim:SendMouseButtonEvent(vp.X / 2, vp.Y / 2, 0, true, game, 0)
+                vim:SendMouseButtonEvent(vp.X / 2, vp.Y / 2, 0, false, game, 0)
+            end)
+            if ok then return "VirtualInput" end
+        end
+        return nil
+    end
+
+    task.spawn(function()
+        while running do
+            task.wait(0.1)
+            local aa = X.aa
+            if aa.on and myRole() == "killer" and os.clock() - aa.last >= aa.cd then
+                local ch, hum, hrp = myChar()
+                if hrp then
+                    local look = hrp.CFrame.LookVector
+                    local tgt, tgtD = nil, math.huge
+                    for _, pl in ipairs(Players:GetPlayers()) do
+                        if pl ~= lp and pl.Character and not isSpectator(pl) and roleOf(pl) ~= "killer" then
+                            local th = pl.Character:FindFirstChild("HumanoidRootPart")
+                            local thum = pl.Character:FindFirstChildOfClass("Humanoid")
+                            if th and thum and thum.Health > 0 then
+                                local off = th.Position - hrp.Position
+                                local d = off.Magnitude
+                                if d > 0.1 and d <= aa.range and d < tgtD and off.Unit:Dot(look) > 0.2 then
+                                    aaRP.FilterDescendantsInstances = {ch, pl.Character}
+                                    if not workspace:Raycast(hrp.Position, off, aaRP) then
+                                        tgt, tgtD = pl, d
+                                    end
+                                end
+                            end
+                        end
+                    end
+                    if tgt then
+                        aa.last = os.clock()
+                        local used = nil
+                        for i = 1, aa.count do
+                            if not (running and aa.on) then break end
+                            used = clickOnce() or used
+                            if i < aa.count then task.wait(aa.delay) end
+                        end
+                        setLbl(aaLbl, used and ("Status: serang via " .. used) or "Status: ga ada metode input yang jalan")
+                    end
+                end
+            end
+        end
+    end)
+
+    -- ===== Auto Play (Survivor): generator terdekat -> repair -> exit gate, menghindar kalau Killer dekat =====
+    local ap = X.ap
+    local apLbl
+
+    local function apRelease()
+        local p = ap.held
+        ap.held = nil
+        if p then pcall(function() p:InputHoldEnd() end) end
+    end
+
+    local function apGoTo(hum, hrp, pos)
+        local now = os.clock()
+        local goalMoved = (not ap.goal) or (ap.goal - pos).Magnitude > 6
+        if goalMoved or now - ap.pathAt > 2 then
+            ap.goal, ap.pathAt, ap.wps, ap.wi = pos, now, nil, 2
+            local path = PathfindingService:CreatePath({AgentRadius = 2, AgentHeight = 5, AgentCanJump = true})
+            local ok = pcall(function() path:ComputeAsync(hrp.Position, pos) end)
+            if ok and path.Status == Enum.PathStatus.Success then
+                ap.wps = path:GetWaypoints()
+            end
+        end
+        local wp = ap.wps and ap.wps[ap.wi]
+        if wp then
+            if wp.Action == Enum.PathWaypointAction.Jump then hum.Jump = true end
+            hum:MoveTo(wp.Position)
+            local dx, dz = wp.Position.X - hrp.Position.X, wp.Position.Z - hrp.Position.Z
+            if math.sqrt(dx * dx + dz * dz) < 3.5 then ap.wi = ap.wi + 1 end
+        else
+            hum:MoveTo(pos)
+        end
+        -- deteksi nyangkut: kalau 2 detik hampir ga gerak, lompat dan hitung ulang jalur
+        if now - ap.lastCheck > 2 then
+            if ap.lastPos and (hrp.Position - ap.lastPos).Magnitude < 1.5 then
+                hum.Jump = true
+                ap.wps = nil
+                ap.pathAt = 0
+            end
+            ap.lastPos, ap.lastCheck = hrp.Position, now
+        end
+    end
+
+    local function apStep()
+        local ch, hum, hrp = myChar()
+        if not ch then setLbl(apLbl, "Status: karakter belum hidup") return end
+        if myRole() ~= "survivor" then setLbl(apLbl, "Status: nunggu role Survivor") return end
+        local ks = killers()
+        local okS, key = pcall(survivorState, lp, ch, hum, hrp, ks)
+        if okS and (key == "hooked" or key == "knocked") then
+            apRelease()
+            setLbl(apLbl, key == "hooked" and "Status: lagi digantung" or "Status: lagi jatuh")
+            return
+        end
+        local k, kd = nearestKiller(hrp.Position)
+        if k and kd <= ap.flee then
+            apRelease()
+            ap.wps = nil
+            local away = hrp.Position - k.hrp.Position
+            away = Vector3.new(away.X, 0, away.Z)
+            if away.Magnitude < 0.1 then away = Vector3.new(1, 0, 0) end
+            hum:MoveTo(hrp.Position + away.Unit * 40)
+            setLbl(apLbl, "Status: menghindar dari Killer (" .. math.floor(kd) .. "m)")
+            return
+        end
+        local goalInst, goalKind, goalD = nil, nil, math.huge
+        for inst in pairs(found.generator) do
+            if inst.Parent then
+                local okG, prog, done = pcall(genProgress, inst)
+                if okG and not done then
+                    local pos = posOf(inst)
+                    if pos then
+                        local d = (pos - hrp.Position).Magnitude
+                        if d < goalD then goalInst, goalKind, goalD = inst, "gen", d end
+                    end
+                end
+            end
+        end
+        if not goalInst then
+            for inst in pairs(found.gate) do
+                if inst.Parent then
+                    local pos = posOf(inst)
+                    if pos then
+                        local d = (pos - hrp.Position).Magnitude
+                        if d < goalD then goalInst, goalKind, goalD = inst, "gate", d end
+                    end
+                end
+            end
+        end
+        if not goalInst then
+            apRelease()
+            setLbl(apLbl, "Status: generator/gate belum ketemu")
+            return
+        end
+        local pos = posOf(goalInst)
+        if goalD > 6 then
+            apRelease()
+            apGoTo(hum, hrp, pos)
+            setLbl(apLbl, goalKind == "gen" and "Status: menuju generator" or "Status: menuju exit gate")
+            return
+        end
+        -- sudah dekat: tahan prompt interaksi selama masih valid
+        local p = ap.held
+        if not (p and p.Parent and p.Enabled) then
+            apRelease()
+            p = pickPrompt(goalInst, goalKind == "gen" and {"repair", "fix", "perbaik"} or {"open", "exit", "buka"})
+            if p then
+                ap.held = p
+                if not pcall(function() p:InputHoldBegin() end) then
+                    ap.held = nil
+                    pressPrompt(p)
+                end
+            end
+        end
+        if ap.held then
+            setLbl(apLbl, goalKind == "gen" and "Status: memperbaiki generator" or "Status: membuka exit gate")
+        elseif goalKind == "gate" then
+            hum:MoveTo(pos)
+            setLbl(apLbl, "Status: jalan lewat exit gate")
+        else
+            hum:MoveTo(hrp.Position)
+            setLbl(apLbl, "Status: prompt repair ga ketemu di " .. goalInst.Name)
+        end
+    end
+
+    local function apLoop()
+        while running and ap.on do
+            local ok, err = pcall(apStep)
+            if not ok then setLbl(apLbl, "Status: error " .. tostring(err):sub(1, 40)) end
+            task.wait(0.15)
+        end
+        ap.thread = nil
+        apRelease()
+    end
+
+    local function apSet(v)
+        ap.on = v and true or false
+        if ap.on then
+            if not ap.thread then ap.thread = task.spawn(apLoop) end
+        else
+            apRelease()
+            ap.wps, ap.goal = nil, nil
+            local ch, hum, hrp = myChar()
+            if hum then pcall(function() hum:MoveTo(hrp.Position) end) end
+            setLbl(apLbl, "Status: mati")
+        end
+    end
+
+    -- ===== Crosshair custom (dibangun dari Frame, tanpa asset ID) =====
+    local CH_COL = {
+        Putih = Color3.fromRGB(255, 255, 255), Merah = Color3.fromRGB(255, 60, 60),
+        Hijau = Color3.fromRGB(60, 255, 120), Biru = Color3.fromRGB(70, 150, 255),
+        Kuning = Color3.fromRGB(255, 235, 0), Cyan = Color3.fromRGB(0, 230, 255),
+        Pink = Color3.fromRGB(255, 105, 180),
+    }
+    local chGui = nil
+    local function chClear()
+        if chGui then
+            pcall(function() chGui:Destroy() end)
+            chGui = nil
+        end
+    end
+    local function chBuild()
+        chClear()
+        local c = X.ch
+        if not c.on or not running then return end
+        local col = CH_COL[c.color] or CH_COL.Putih
+        local g = Instance.new("ScreenGui")
+        g.Name = "JinCrosshair"
+        g.ResetOnSpawn = false
+        g.IgnoreGuiInset = true
+        g.DisplayOrder = 20
+        attach(g)
+        chGui = g
+        local root = Instance.new("Frame")
+        root.Name = "Root"
+        root.BackgroundTransparency = 1
+        root.AnchorPoint = Vector2.new(0.5, 0.5)
+        root.Position = UDim2.new(0.5, c.ox, 0.5, c.oy)
+        root.Size = UDim2.fromOffset(0, 0)
+        root.Parent = g
+        local function piece(w, h, x, y, rot, round, plain)
+            local f = Instance.new("Frame")
+            f.BackgroundColor3 = col
+            f.BorderSizePixel = 0
+            f.AnchorPoint = Vector2.new(0.5, 0.5)
+            f.Size = UDim2.fromOffset(w, h)
+            f.Position = UDim2.fromOffset(x, y)
+            f.Rotation = rot or 0
+            if not plain then
+                local st = Instance.new("UIStroke")
+                st.Color = Color3.fromRGB(0, 0, 0)
+                st.Thickness = 1
+                st.Transparency = 0.4
+                st.Parent = f
+            end
+            if round then
+                local uc = Instance.new("UICorner")
+                uc.CornerRadius = UDim.new(0.5, 0)
+                uc.Parent = f
+            end
+            f.Parent = root
+            return f
+        end
+        local L, T, G = c.size, c.thick, c.gap
+        local style = c.style
+        if style == "Plus" or style == "Plus + titik" then
+            piece(T, L, 0, -(G + L / 2))
+            piece(T, L, 0, G + L / 2)
+            piece(L, T, -(G + L / 2), 0)
+            piece(L, T, G + L / 2, 0)
+            if style == "Plus + titik" then piece(T + 1, T + 1, 0, 0, 0, true) end
+        elseif style == "Titik" then
+            piece(T * 2, T * 2, 0, 0, 0, true)
+        elseif style == "Silang (X)" then
+            piece(T, L * 2, 0, 0, 45)
+            piece(T, L * 2, 0, 0, -45)
+        elseif style == "Lingkaran" then
+            local ring = piece(L * 2, L * 2, 0, 0, 0, true, true)
+            ring.BackgroundTransparency = 1
+            local rs = Instance.new("UIStroke")
+            rs.Color = col
+            rs.Thickness = T
+            rs.Parent = ring
+        end
+    end
+
+    -- ===== UI =====
+    local cAP = tSv:Group("Auto Play (survivor)", 1)
+    apLbl = cAP:Label("Status: mati")
+    cAP:Toggle("AP_On", "Auto Play", false, function(v) apSet(v) end)
+    cAP:Slider("AP_Flee", "Jarak menghindar Killer", 15, 90, 45, 5, function(v) ap.flee = v end, "m")
+    cAP:Label("Biarkan Skill check (F6) tetap ON supaya repair jalan. Belum ada heal teman.")
+
+    local cMW = tSv:Group("Moonwalk (zigzag)", 2)
+    cMW:Toggle("MW_On", "Moonwalk", false, function(v) X.mw.on = v end)
+    cMW:Slider("MW_Power", "Intensitas zigzag", 1, 10, 3, 1, function(v) X.mw.power = v end)
+    cMW:Slider("MW_Boost", "Tambahan kecepatan", 0, 50, 10, 5, function(v) X.mw.boost = v end, "%")
+    cMW:Slider("MW_Range", "Aktif kalau Killer dalam", 20, 150, 60, 5, function(v) X.mw.range = v end, "m")
+
+    local cBP = tKl:Group("Auto break pallet", 1)
+    bpLbl = cBP:Label("Status: mati")
+    cBP:Toggle("BP_On", "Auto break pallet", false, function(v) X.bp.on = v end)
+    cBP:Slider("BP_Radius", "Radius (maks jarak prompt)", 3, 20, 8, 1, function(v) X.bp.radius = v end, "m")
+    cBP:Slider("BP_CD", "Cooldown", 0.5, 3, 1.2, 0.1, function(v) X.bp.cd = v end, "s")
+
+    local cAA = tKl:Group("Auto attack", 2)
+    aaLbl = cAA:Label("Status: mati")
+    cAA:Toggle("AA_On", "Auto attack", false, function(v) X.aa.on = v end)
+    cAA:Slider("AA_Range", "Jarak serang", 5, 30, 10, 1, function(v) X.aa.range = v end, "m")
+    cAA:Slider("AA_Count", "Jumlah serang per pemicu", 1, 3, 1, 1, function(v) X.aa.count = v end)
+    cAA:Slider("AA_Delay", "Jeda antar serang", 0.05, 1, 0.1, 0.05, function(v) X.aa.delay = v end, "s")
+    cAA:Slider("AA_CD", "Cooldown", 0.3, 3, 0.8, 0.1, function(v) X.aa.cd = v end, "s")
+    cAA:Dropdown("AA_Method", "Metode input", {"Auto", "mouse1click", "VirtualInput"}, "Auto", function(v) X.aa.method = v end)
+
+    local cSB = tMs:Group("Speed boost", 1)
+    cSB:Toggle("SB_On", "Speed Boost", false, function(v) X.sb.on = v end)
+    cSB:Slider("SB_Pct", "Tambahan kecepatan", 5, 100, 15, 5, function(v) X.sb.pct = v end, "%")
+    cSB:Label("Menggeser posisi lewat CFrame. Server bisa mendeteksi gerak terlalu cepat, pakai kecil.")
+
+    local cCH = tMs:Group("Crosshair custom", 2)
+    cCH:Toggle("CH_On", "Crosshair", false, function(v) X.ch.on = v chBuild() end)
+    cCH:Dropdown("CH_Style", "Bentuk", {"Plus", "Plus + titik", "Titik", "Silang (X)", "Lingkaran"}, "Plus", function(v) X.ch.style = v chBuild() end)
+    cCH:Dropdown("CH_Color", "Warna", {"Putih", "Merah", "Hijau", "Biru", "Kuning", "Cyan", "Pink"}, "Putih", function(v) X.ch.color = v chBuild() end)
+    cCH:Slider("CH_Size", "Ukuran", 4, 40, 12, 1, function(v) X.ch.size = v chBuild() end, "px")
+    cCH:Slider("CH_Thick", "Ketebalan", 1, 6, 2, 1, function(v) X.ch.thick = v chBuild() end, "px")
+    cCH:Slider("CH_Gap", "Celah tengah", 0, 20, 4, 1, function(v) X.ch.gap = v chBuild() end, "px")
+    cCH:Slider("CH_X", "Geser horizontal", -150, 150, 0, 1, function(v) X.ch.ox = v chBuild() end, "px")
+    cCH:Slider("CH_Y", "Geser vertikal", -150, 150, 0, 1, function(v) X.ch.oy = v chBuild() end, "px")
+
+    -- toggle yang menghasilkan input / gerak tidak ikut disimpan di config
+    for _, id in ipairs({"AP_On", "MW_On", "BP_On", "AA_On", "SB_On"}) do
+        Reg[id] = nil
+    end
+
+    S.xRestore = function()
+        X.sb.on, X.mw.on, X.bp.on, X.aa.on = false, false, false, false
+        apSet(false)
+        chClear()
+    end
+end, function(e) warn("[jin] Extras gagal dipasang: " .. tostring(e)) end)
+
 local cleanup
 local cUI = tSet:Group("Tampilan", 1)
 cUI:Dropdown("UI_Size", "Ukuran", {"Kecil", "Sedang", "Besar", "Jumbo"}, "Sedang", function(v) curSize = v applyLayout() end)
@@ -4028,6 +4552,7 @@ function cleanup()
     pcall(function() if S.svRestore then S.svRestore() end end)
     pcall(function() if S.fvRestore then S.fvRestore() end end)
     pcall(function() if S.keRestore then S.keRestore() end end)
+    pcall(function() if S.xRestore then S.xRestore() end end)
     for plr in pairs(pvis) do destroyPlayerVis(plr) end
     for inst in pairs(ovis) do destroyObj(inst) end
     pcall(function() espFolder:Destroy() end)
