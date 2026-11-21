@@ -82,7 +82,7 @@ local CATS = {
 local CAT = {}
 for _, c in ipairs(CATS) do CAT[c.key] = c end
 local S = {
-    cat = {}, names = true, dist = true, textSize = 13, maxDist = 600, chaseDist = 40, hookNear = 10,
+    cat = {}, names = true, dist = true, objOn = false, objDist = false, textSize = 13, maxDist = 600, chaseDist = 40, hookNear = 10,
     hideSpec = true, palHideDown = true, genHideDone = true, genProgCol = true, genDoneCol = Color3.fromRGB(0, 255, 80), lobby = false,
     chaseCol = {Color3.fromRGB(0, 255, 80), Color3.fromRGB(255, 235, 0), Color3.fromRGB(255, 40, 40)},
     cone = {on = true, range = 70, angle = 100, color = Color3.fromRGB(255, 60, 60), transp = 0.75, line = true, lineLen = 30, lineColor = Color3.fromRGB(255, 255, 255), body = false, bodyColor = Color3.fromRGB(60, 255, 90)},
@@ -310,8 +310,11 @@ local function makeBB(part, offsetY, h)
     return bb, lbl
 end
 local function setLabel(bb, lbl, text, color, size)
-    lbl.Text, lbl.TextColor3, lbl.TextSize = text, color, size
-    bb.Enabled = text ~= ""
+    if lbl.Text ~= text then lbl.Text = text end
+    if lbl.TextColor3 ~= color then lbl.TextColor3 = color end
+    if lbl.TextSize ~= size then lbl.TextSize = size end
+    local en = text ~= ""
+    if bb.Enabled ~= en then bb.Enabled = en end
 end
 function destroyPlayerVis(plr)
     local v = pvis[plr]
@@ -322,7 +325,8 @@ function destroyObj(inst)
     if o then
         pcall(function()
             o.box:Destroy()
-            if o.nameBB then o.nameBB:Destroy() o.distBB:Destroy() end
+            if o.nameBB then o.nameBB:Destroy() end
+            if o.distBB then o.distBB:Destroy() end
         end)
         ovis[inst] = nil
     end
@@ -350,7 +354,14 @@ local function createObj(cat, inst)
     local o = {cat = cat, box = box}
     if part then
         local hh = halfHeight(inst)
-        o.nameBB, o.nameLbl = makeBB(part, hh)
+        if cat == "generator" then
+            -- persen di TENGAH generator: offset dunia = pusat bounding box - posisi part
+            o.nameBB, o.nameLbl = makeBB(part, 0, 30)
+            local okB, cf = pcall(function() return (inst:GetBoundingBox()) end)
+            if okB and cf then o.nameBB.StudsOffsetWorldSpace = cf.Position - part.Position end
+        else
+            o.nameBB, o.nameLbl = makeBB(part, hh)
+        end
         o.distBB, o.distLbl = makeBB(part, -hh)
     end
     ovis[inst] = o
@@ -451,6 +462,7 @@ local function palletDown(inst)
     return v == true
 end
 S.partOf, S.genProgress, S.palletDown = partOf, genProgress, palletDown
+local objAt, lobbyN = 0, 0
 function update()
     local lc = lp.Character
     local lhrp = lc and lc:FindFirstChild("HumanoidRootPart")
@@ -463,7 +475,10 @@ function update()
         for g in pairs(found.generator) do
             if g.Parent and g:IsDescendantOf(workspace) then live = true break end
         end
-        lobby = (not live) or isSpectator(lp)
+        local raw = (not live) or isSpectator(lp)
+        -- debounce: masuk lobby harus stabil ~1 detik, biar deteksi yang flap ga ngancurin/ngebuat ulang ESP (kedut)
+        lobbyN = raw and (lobbyN + 1) or 0
+        lobby = raw and lobbyN >= 4
     end
     S.lobby = lobby
     if lobby then
@@ -534,42 +549,63 @@ function update()
     elseif selfBB.bb then
         selfBB.bb.Enabled = false
     end
+    -- objek: pass berat (GetDescendants/pivot) dibatasi ~1.2x per detik, bukan 4x -> hilang hitch tiap 0.25 detik
+    local nowC = os.clock()
+    if nowC - objAt < 0.8 then return end
+    objAt = nowC
     local plCount = 0
     for _ in pairs(pvis) do plCount = plCount + 1 end
     local hlBudget = math.max(0, 30 - plCount)
     local cand = {}
     for cat, set in pairs(found) do
-        local enabled = S.cat[cat].on
+        local isGen = cat == "generator"
+        local enabled = S.cat[cat].on and (isGen or S.objOn)
         for inst in pairs(set) do
             if not inst:IsDescendantOf(workspace) then
                 set[inst] = nil
                 destroyObj(inst)
-            elseif enabled and ((cat == "generator" and S.genHideDone and select(2, genProgress(inst))) or (cat == "pallet" and S.palHideDown and palletDown(inst))) then
+            elseif not enabled then
                 destroyObj(inst)
-            elseif enabled then
-                local o = ovis[inst] or createObj(cat, inst)
-                local prog = (cat == "generator" and S.genProgCol) and genProgress(inst) or nil
+            else
                 local dist = lhrp and (inst:GetPivot().Position - lhrp.Position).Magnitude
-                if (not dist) or dist <= maxD then
-                    local c = S.cat[cat].color
-                    if prog then c = c:Lerp(S.genDoneCol, prog) end
-                    o.box.FillColor, o.box.OutlineColor = c, c
-                    cand[#cand + 1] = {o = o, d = dist or 0}
-                    if o.nameBB then
-                        setLabel(o.nameBB, o.nameLbl, S.names and (CAT[cat].label .. (prog and (" " .. math.floor(prog * 100 + 0.5) .. "%") or "")) or "", c, ts)
-                        setLabel(o.distBB, o.distLbl, (S.dist and dist) and ("%dm"):format(math.floor(dist)) or "", c, ts)
+                if dist and dist > maxD then
+                    local o = ovis[inst]
+                    if o then
+                        o.box.Enabled = false
+                        if o.nameBB then o.nameBB.Enabled = false end
+                        if o.distBB then o.distBB.Enabled = false end
                     end
                 else
-                    o.box.Enabled = false
-                    if o.nameBB then o.nameBB.Enabled = false o.distBB.Enabled = false end
+                    local prog, done
+                    if isGen then prog, done = genProgress(inst) end
+                    if (isGen and S.genHideDone and done) or (cat == "pallet" and S.palHideDown and palletDown(inst)) then
+                        destroyObj(inst)
+                    else
+                        local o = ovis[inst] or createObj(cat, inst)
+                        local c = S.cat[cat].color
+                        if isGen and S.genProgCol and prog then c = c:Lerp(S.genDoneCol, prog) end
+                        if o.box.FillColor ~= c then o.box.FillColor, o.box.OutlineColor = c, c end
+                        cand[#cand + 1] = {o = o, d = dist or 0}
+                        if o.nameBB then
+                            local txt
+                            if isGen then
+                                txt = prog and (math.floor(prog * 100 + 0.5) .. "%") or "GEN"
+                            else
+                                txt = S.names and CAT[cat].label or ""
+                            end
+                            setLabel(o.nameBB, o.nameLbl, txt, c, isGen and (ts + 4) or ts)
+                            setLabel(o.distBB, o.distLbl, (S.objDist and dist) and ("%dm"):format(math.floor(dist)) or "", c, ts)
+                        end
+                    end
                 end
-            else
-                destroyObj(inst)
             end
         end
     end
     table.sort(cand, function(a, b) return a.d < b.d end)
-    for idx, e in ipairs(cand) do e.o.box.Enabled = idx <= hlBudget end
+    for idx, e in ipairs(cand) do
+        local en = idx <= hlBudget
+        if e.o.box.Enabled ~= en then e.o.box.Enabled = en end
+    end
 end
 local CONE_N = 12
 coneFolder = Instance.new("Folder")
@@ -639,6 +675,8 @@ function updateCone()
     end
     local k = coneC.ks[1]
     if coneC.selfK or not (k and k.hrp.Parent) then coneFolder.Parent = nil return end
+    if now - (coneC.g or 0) < 0.033 and coneFolder.Parent then return end
+    coneC.g = now
     local cl = k.char:GetAttribute("CamLook")
     local look = (typeof(cl) == "Vector3") and cl or k.hrp.CFrame.LookVector
     look = Vector3.new(look.X, 0, look.Z)
@@ -1175,7 +1213,7 @@ local header = new("Frame", {Size = UDim2.new(1, 0, 0, HEAD), BackgroundTranspar
 new("Frame", {Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = T.stroke, BorderSizePixel = 0}, header)
 local ttl = mkLabel(header, "JÌN SCRIPT", 12, T.text, F_BOLD)
 ttl.Position = UDim2.fromOffset(14, 0); ttl.Size = UDim2.fromOffset(78, HEAD - 1)
-local ver = mkLabel(header, "v3.9", 10, T.dim)
+local ver = mkLabel(header, "v4.0", 10, T.dim)
 ver.Position = UDim2.fromOffset(92, 1); ver.Size = UDim2.fromOffset(30, HEAD - 1)
 local closeBtn = new("TextButton", {Size = UDim2.fromOffset(24, 24), AnchorPoint = Vector2.new(1, 0.5),
     Position = UDim2.new(1, -8, 0.5, -1), BackgroundTransparency = 1, Text = "", AutoButtonColor = false}, header)
@@ -1772,6 +1810,7 @@ do
     local sP, sW = tESP:Sub("Player"), tESP:Sub("World")
     local sD = tESP:Sub("Tampilan")
     local cPlayers, cObj = sP:Group("Players", 1), sW:Group("Objek", 1)
+    cObj:Toggle("ESP_ObjOn", "ESP objek lain (pallet/window/dll)", false, function(v) S.objOn = v end)
     for _, c in ipairs(CATS) do
         local key = c.key
         local target = c.player and cPlayers or cObj
@@ -1785,7 +1824,9 @@ do
     cRange:Slider("ESP_MaxDist", "Jarak max objek (0 = bebas)", 0, 3000, 600, 50, function(v) S.maxDist = v end, "m")
     local cLbl = sD:Group("Label", 1)
     cLbl:Toggle("ESP_Names", "Nama (di atas)", true, function(v) S.names = v end)
-    cLbl:Toggle("ESP_Dist", "Jarak (di bawah)", true, function(v) S.dist = v end)
+    cLbl:Toggle("ESP_Dist", "Jarak player (di bawah)", true, function(v) S.dist = v end)
+    cLbl:Toggle("ESP_ObjDist", "Meter objek (jarak)", false, function(v) S.objDist = v end)
+    cLbl:Label("Generator: persen selalu tampil di tengah.")
     cLbl:Slider("ESP_TextSize", "Ukuran teks", 10, 24, 13, 1, function(v) S.textSize = v end)
     local cCone = sP:Group("Area liat killer (tanah)", 2)
     cCone:Toggle("Cone_On", "Aktif", true, function(v) S.cone.on = v end)
@@ -3935,7 +3976,7 @@ xpcall(function()
     local PathfindingService = game:GetService("PathfindingService")
     local X = {
         sb = {on = false, pct = 15},
-        mw = {on = false, rot = false, btn = true, pos = nil},
+        mw = {latch = false, held = false, rot = false, btn = true, pos = nil, move = false, yaw = nil, t = 0, swing = 28, freq = 8, smooth = 14},
         bp = {on = false, radius = 8, cd = 1.2, last = 0},
         aa = {on = false, range = 10, count = 1, delay = 0.1, cd = 0.8, last = 0, method = "Auto"},
         ap = {on = false, active = false, flee = 45, goal = nil, wps = nil, wi = 2, pathAt = 0, held = nil, thread = nil, lastPos = nil, lastCheck = 0},
@@ -4035,27 +4076,44 @@ xpcall(function()
     end
 
     -- ===== Speed Boost + Moonwalk =====
-    -- Moonwalk: AutoRotate dimatiin, badan dihadapin KEBALIK arah jalan -> animasi jalan maju tapi gerak mundur.
-    -- Jalan di mana aja (lobby juga), ga ada hubungannya sama Killer.
+    -- Moonwalk (tahan tombol): badan muter HALUS (bukan snap) ke arah kebalik jalan, ditambah ayun kanan-kiri cepat
+    -- di atas heading itu -> animasi jalan maju tapi gerak mundur, kerasa kayak trik moonwalk beneran.
+    local fbGui, fbBtn, mwReg, mwBtnClear, mwBtnBuild, mwSync
+    local drag = {input = nil, moved = false, from = nil, startPos = nil}
+    local function wrapPi(a)
+        return (a + math.pi) % (2 * math.pi) - math.pi
+    end
     track(RS.Heartbeat:Connect(function(dt)
         local sb, mw = X.sb, X.mw
-        if not (sb.on or mw.on or mw.rot) then return end
+        -- failsafe: kalo event Ended telat/ilang, state input sendiri yang jadi patokan
+        if mw.held and drag and drag.input and drag.input.UserInputState == Enum.UserInputState.End then
+            mw.held, drag.input = false, nil
+            if mwSync then mwSync() end
+        end
+        local active = mw.latch or mw.held
+        if not (sb.on or active or mw.rot) then return end
         local ch, hum, hrp = myChar()
-        if not ch then return end
+        if not ch then mw.yaw = nil return end
         local md = hum.MoveDirection
         local moving = md.Magnitude > 0.1 and not hum.Sit
-        if mw.on then
+        if active then
             if hum.AutoRotate then hum.AutoRotate = false end
             mw.rot = true
+            local lv = hrp.CFrame.LookVector
+            if not mw.yaw then mw.yaw = math.atan2(-lv.X, -lv.Z) end
             if moving then
-                local flat = Vector3.new(md.X, 0, md.Z)
-                if flat.Magnitude > 0.05 then
-                    hrp.CFrame = CFrame.lookAt(hrp.Position, hrp.Position - flat)
-                end
+                mw.t = mw.t + dt
+                local target = math.atan2(md.X, md.Z) -- yaw arah KEBALIK gerak (look = -md)
+                mw.yaw = mw.yaw + wrapPi(target - mw.yaw) * (1 - math.exp(-dt * mw.smooth))
+                local wob = math.sin(mw.t * mw.freq * 2 * math.pi) * math.rad(mw.swing)
+                hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, mw.yaw + wob, 0)
             end
-        elseif mw.rot then
-            mw.rot = false
-            hum.AutoRotate = true
+        else
+            mw.yaw = nil
+            if mw.rot then
+                mw.rot = false
+                hum.AutoRotate = true
+            end
         end
         if sb.on and moving then
             hrp.CFrame = hrp.CFrame + md * (hum.WalkSpeed * sb.pct / 100 * dt)
@@ -4108,19 +4166,20 @@ xpcall(function()
     end
 
     -- ===== Tombol melayang ↑↓ (toggle moonwalk, bisa digeser) =====
-    local fbGui, fbBtn, mwReg, mwBtnClear, mwBtnBuild
-    local drag = {input = nil, moved = false, from = nil, startPos = nil}
-    local function mwSync()
+    mwSync = function()
         if not fbBtn then return end
-        local on = X.mw.on
-        fbBtn.BackgroundColor3 = on and Color3.fromRGB(245, 245, 245) or Color3.fromRGB(28, 28, 28)
-        fbBtn.TextColor3 = on and Color3.fromRGB(12, 12, 12) or Color3.fromRGB(240, 240, 240)
-    end
-    local function mwToggle()
-        if mwReg then mwReg.set(not X.mw.on) else X.mw.on = not X.mw.on mwSync() end
+        local on = X.mw.latch or X.mw.held
+        if X.mw.move then
+            fbBtn.BackgroundColor3 = Color3.fromRGB(60, 90, 160)
+            fbBtn.TextColor3 = Color3.fromRGB(240, 240, 240)
+        else
+            fbBtn.BackgroundColor3 = on and Color3.fromRGB(245, 245, 245) or Color3.fromRGB(28, 28, 28)
+            fbBtn.TextColor3 = on and Color3.fromRGB(12, 12, 12) or Color3.fromRGB(240, 240, 240)
+        end
     end
     mwBtnClear = function()
         drag.input = nil
+        X.mw.held = false
         if fbGui then pcall(function() fbGui:Destroy() end) end
         fbGui, fbBtn = nil, nil
     end
@@ -4160,32 +4219,36 @@ xpcall(function()
             if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
                 drag.input, drag.moved = i, false
                 drag.from, drag.startPos = i.Position, b.AbsolutePosition
+                if not X.mw.move then
+                    X.mw.held = true
+                    mwSync()
+                end
             end
         end)
     end
     -- listener global dibuat sekali; pakai input object yang sama biar jempol joystick ga ikut narik tombol
     track(UIS.InputChanged:Connect(function(i)
         local d = drag.input
-        if not d or not fbBtn then return end
+        if not d or not fbBtn or not X.mw.move then return end
         local isMouse = d.UserInputType == Enum.UserInputType.MouseButton1 and i.UserInputType == Enum.UserInputType.MouseMovement
         if not (isMouse or i == d) then return end
         local delta = i.Position - drag.from
-        if delta.Magnitude > 8 then drag.moved = true end
-        if drag.moved then
-            local cam = workspace.CurrentCamera
-            local vp = cam and cam.ViewportSize or Vector2.new(800, 600)
-            local x = math.clamp(drag.startPos.X + delta.X, 0, math.max(0, vp.X - 52))
-            local y = math.clamp(drag.startPos.Y + delta.Y, 0, math.max(0, vp.Y - 52))
-            fbBtn.Position = UDim2.fromOffset(x, y)
-            X.mw.pos = fbBtn.Position
-        end
+        local cam = workspace.CurrentCamera
+        local vp = cam and cam.ViewportSize or Vector2.new(800, 600)
+        local x = math.clamp(drag.startPos.X + delta.X, 0, math.max(0, vp.X - 52))
+        local y = math.clamp(drag.startPos.Y + delta.Y, 0, math.max(0, vp.Y - 52))
+        fbBtn.Position = UDim2.fromOffset(x, y)
+        X.mw.pos = fbBtn.Position
     end))
     track(UIS.InputEnded:Connect(function(i)
         local d = drag.input
         if not d then return end
         if i == d or (d.UserInputType == Enum.UserInputType.MouseButton1 and i.UserInputType == Enum.UserInputType.MouseButton1) then
             drag.input = nil
-            if not drag.moved then mwToggle() end
+            if X.mw.held then
+                X.mw.held = false
+                mwSync()
+            end
         end
     end))
 
@@ -4542,9 +4605,13 @@ xpcall(function()
     cAP:Label("Biarkan Skill check (F6) tetap ON supaya repair jalan. Belum ada heal teman.")
 
     local cMW = tMs:Group("Fun menu", 1)
-    cMW:Toggle("MW_On", "Moonwalk (jalan mundur)", false, function(v) X.mw.on = v mwSync() end)
+    cMW:Toggle("MW_On", "Moonwalk (nyala terus)", false, function(v) X.mw.latch = v mwSync() end)
     cMW:Toggle("MW_Btn", "Tombol ↑↓ di layar", true, function(v) X.mw.btn = v mwBtnBuild() end)
-    cMW:Label("Tombol ↑↓ bisa digeser. Tap = moonwalk ON/OFF. Jalan kapan aja, ga nunggu Killer.")
+    cMW:Toggle("MW_Move", "Mode geser tombol", false, function(v) X.mw.move = v mwSync() end)
+    cMW:Slider("MW_Swing", "Ayun kanan-kiri", 0, 60, 28, 2, function(v) X.mw.swing = v end, "°")
+    cMW:Slider("MW_Freq", "Kecepatan ayun", 3, 16, 8, 1, function(v) X.mw.freq = v end, "Hz")
+    cMW:Slider("MW_Smooth", "Kehalusan putar", 6, 30, 14, 1, function(v) X.mw.smooth = v end)
+    cMW:Label("TAHAN tombol ↑↓ buat moonwalk, lepas = balik normal. Mau pindahin tombol: nyalain Mode geser, geser, matiin lagi.")
     X.mw.btn = true
     mwBtnBuild()
 
@@ -4580,12 +4647,12 @@ xpcall(function()
 
     mwReg = Reg["MW_On"]
     -- toggle yang menghasilkan input / gerak tidak ikut disimpan di config
-    for _, id in ipairs({"AP_On", "MW_On", "BP_On", "AA_On", "SB_On"}) do
+    for _, id in ipairs({"AP_On", "MW_On", "MW_Move", "BP_On", "AA_On", "SB_On"}) do
         Reg[id] = nil
     end
 
     S.xRestore = function()
-        X.sb.on, X.mw.on, X.bp.on, X.aa.on = false, false, false, false
+        X.sb.on, X.mw.latch, X.mw.held, X.bp.on, X.aa.on = false, false, false, false, false
         apSet(false)
         chClear()
         mwBtnClear()
@@ -4723,5 +4790,5 @@ loadConfig()
 loading = false
 pcall(refreshDash)
 setOpen(true)
-notify("Jìn Script", "Loaded")
-warn("[jin] v3.9 loaded (patched)")
+notify("Jìn Script", "Loaded v4.0")
+warn("[jin] v4.0 loaded (ESP+moonwalk patch)")
