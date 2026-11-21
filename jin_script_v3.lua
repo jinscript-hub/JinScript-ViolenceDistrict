@@ -305,6 +305,7 @@ local function makeBB(part, offsetY, h)
     lbl.BackgroundTransparency = 1
     lbl.Font = Enum.Font.GothamMedium
     lbl.TextColor3 = Color3.new(1, 1, 1)
+    lbl.RichText = true
     lbl.TextStrokeTransparency = 0.35
     lbl.Parent = bb
     bb.Parent = espFolder
@@ -465,6 +466,12 @@ end
 S.partOf, S.genProgress, S.palletDown = partOf, genProgress, palletDown
 local objAt, lobbyN = 0, 0
 local ESP_WHITE = Color3.new(1, 1, 1)
+local function esc(t)
+    return (t:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"))
+end
+local function rich(t, col)
+    return '<font color="#' .. col:ToHex() .. '">' .. esc(t) .. "</font>"
+end
 function update()
     local lc = lp.Character
     local lhrp = lc and lc:FindFirstChild("HumanoidRootPart")
@@ -523,10 +530,11 @@ function update()
                 if vk then c = (vk == "lock") and vl.colLock or vl.colFov end
                 v.hl.FillColor, v.hl.OutlineColor = c, c
                 local dist = lhrp and math.floor((hrp.Position - lhrp.Position).Magnitude)
-                -- satu baris: Display_Name [27M], putih (warna state tetep di highlight)
-                local txt = S.names and plr.DisplayName or ""
-                if S.dist and dist then txt = (txt ~= "" and (txt .. " ") or "") .. ("[%dM]"):format(dist) end
-                if vk == "lock" then txt = txt .. " [LOCK]" end
+                -- satu baris: Nama [tag] berwarna (kayak dulu) + [72M] putih
+                local tag = TAG[key]
+                local nameTxt = plr.DisplayName .. (tag and (" [" .. tag .. "]") or "") .. (vk == "lock" and " [LOCK]" or "")
+                local txt = S.names and rich(nameTxt, c) or ""
+                if S.dist and dist then txt = txt .. (txt ~= "" and " " or "") .. rich(("[%dM]"):format(dist), ESP_WHITE) end
                 setLabel(v.nameBB, v.nameLbl, txt, ESP_WHITE, ts)
                 setLabel(v.distBB, v.distLbl, "", ESP_WHITE, ts)
             else
@@ -601,8 +609,8 @@ function update()
                                 setLabel(o.nameBB, o.nameLbl, txt, c, ts + 4)
                                 setLabel(o.distBB, o.distLbl, ds or "", ESP_WHITE, ts)
                             else
-                                local nm = S.names and CAT[cat].label or ""
-                                local txt = ds and (nm ~= "" and (nm .. " " .. ds) or ds) or nm
+                                local txt = S.names and rich(CAT[cat].label, c) or ""
+                                if ds then txt = txt .. (txt ~= "" and " " or "") .. rich(ds, ESP_WHITE) end
                                 setLabel(o.nameBB, o.nameLbl, txt, ESP_WHITE, ts)
                                 setLabel(o.distBB, o.distLbl, "", ESP_WHITE, ts)
                             end
@@ -1224,7 +1232,7 @@ local header = new("Frame", {Size = UDim2.new(1, 0, 0, HEAD), BackgroundTranspar
 new("Frame", {Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = T.stroke, BorderSizePixel = 0}, header)
 local ttl = mkLabel(header, "JÌN SCRIPT", 12, T.text, F_BOLD)
 ttl.Position = UDim2.fromOffset(14, 0); ttl.Size = UDim2.fromOffset(78, HEAD - 1)
-local ver = mkLabel(header, "v4.5", 10, T.dim)
+local ver = mkLabel(header, "v4.6", 10, T.dim)
 ver.Position = UDim2.fromOffset(92, 1); ver.Size = UDim2.fromOffset(30, HEAD - 1)
 local closeBtn = new("TextButton", {Size = UDim2.fromOffset(24, 24), AnchorPoint = Vector2.new(1, 0.5),
     Position = UDim2.new(1, -8, 0.5, -1), BackgroundTransparency = 1, Text = "", AutoButtonColor = false}, header)
@@ -4058,7 +4066,7 @@ xpcall(function()
         mw = {latch = false, held = false, rot = false, btn = true, pos = nil, move = false, yaw = nil, t = 0, swing = 28, freq = 8, smooth = 14},
         bp = {on = false, radius = 8, cd = 1.2, last = 0},
         aa = {on = false, range = 10, count = 1, delay = 0.1, cd = 0.8, last = 0, method = "Auto"},
-        ap = {on = false, active = false, btn = nil, btnWho = nil, mode = "work", btnT = 0, btnProg = 0, faced = nil, gateT = nil, fleeUntil = 0, fleePt = nil, fleeAt = 0, fleeVec = nil, goalInst = nil, goalKind = nil, flee = 45, goal = nil, wps = nil, wi = 2, pathAt = 0, held = nil, thread = nil, lastPos = nil, lastCheck = 0},
+        ap = {on = false, active = false, sprint = true, sprT = 0, sprN = 0, walkAt = 0, dest = nil, computing = false, wpsGoal = nil, btn = nil, btnWho = nil, mode = "work", btnT = 0, btnProg = 0, faced = nil, gateT = nil, fleeUntil = 0, fleePt = nil, fleeAt = 0, fleeVec = nil, goalInst = nil, goalKind = nil, flee = 45, goal = nil, wps = nil, wi = 2, pathAt = 0, held = nil, thread = nil, lastPos = nil, lastCheck = 0},
         ch = {on = false, style = "Plus", size = 12, thick = 2, gap = 4, ox = 0, oy = 0, color = "Putih"},
     }
     S.x = X
@@ -4570,27 +4578,33 @@ xpcall(function()
         apBtnUp()
     end
 
+    -- Jalur dihitung di thread terpisah (ComputeAsync yield -> dulu karakter berhenti tiap re-path = "sendat"),
+    -- gerak sebenernya diurus apSteer di Heartbeat: selalu ngarah ke titik look-ahead ~9 stud di depan.
+    local function apRepath(hrp, pos)
+        if ap.computing then return end
+        ap.computing = true
+        local from = hrp.Position
+        task.spawn(function()
+            local path = PathfindingService:CreatePath({AgentRadius = 2, AgentHeight = 5, AgentCanJump = true})
+            local ok = pcall(function() path:ComputeAsync(from, pos) end)
+            if ok and path.Status == Enum.PathStatus.Success then
+                ap.wps, ap.wi = path:GetWaypoints(), 2
+            else
+                ap.wps = nil
+            end
+            ap.wpsGoal, ap.pathAt, ap.computing = pos, os.clock(), false
+        end)
+    end
     local function apGoTo(hum, hrp, pos)
         local now = os.clock()
-        local goalMoved = (not ap.goal) or (ap.goal - pos).Magnitude > 6
-        if goalMoved or now - ap.pathAt > 2 then
-            ap.goal, ap.pathAt, ap.wps, ap.wi = pos, now, nil, 2
-            local path = PathfindingService:CreatePath({AgentRadius = 2, AgentHeight = 5, AgentCanJump = true})
-            local ok = pcall(function() path:ComputeAsync(hrp.Position, pos) end)
-            if ok and path.Status == Enum.PathStatus.Success then
-                ap.wps = path:GetWaypoints()
-            end
+        if now - ap.walkAt > 1 then ap.sprN = 0 end -- segmen jalan baru
+        ap.dest, ap.walkAt = pos, now
+        local goalMoved = (not ap.wpsGoal) or (ap.wpsGoal - pos).Magnitude > 6
+        local pathEnded = ap.wps and ap.wi > #ap.wps
+        if goalMoved or ((not ap.wps or pathEnded) and now - ap.pathAt > 1.5) then
+            apRepath(hrp, pos)
         end
-        local wp = ap.wps and ap.wps[ap.wi]
-        if wp then
-            if wp.Action == Enum.PathWaypointAction.Jump then hum.Jump = true end
-            hum:MoveTo(wp.Position)
-            local dx, dz = wp.Position.X - hrp.Position.X, wp.Position.Z - hrp.Position.Z
-            if math.sqrt(dx * dx + dz * dz) < 3.5 then ap.wi = ap.wi + 1 end
-        else
-            hum:MoveTo(pos)
-        end
-        -- deteksi nyangkut: kalau 2 detik hampir ga gerak, lompat dan hitung ulang jalur
+        -- deteksi nyangkut: 2 detik hampir ga gerak -> lompat + hitung ulang jalur
         if now - ap.lastCheck > 2 then
             if ap.lastPos and (hrp.Position - ap.lastPos).Magnitude < 1.5 then
                 hum.Jump = true
@@ -4599,6 +4613,43 @@ xpcall(function()
             end
             ap.lastPos, ap.lastCheck = hrp.Position, now
         end
+    end
+    local steerAt = 0
+    track(RS.Heartbeat:Connect(function()
+        if not ap.on or not ap.dest then return end
+        local now = os.clock()
+        if now - ap.walkAt > 0.4 or now - steerAt < 0.03 then return end
+        steerAt = now
+        local ch, hum, hrp = myChar()
+        if not ch then return end
+        local pos = hrp.Position
+        local function hd(v) return Vector3.new(v.X - pos.X, 0, v.Z - pos.Z).Magnitude end
+        local wps, target = ap.wps, ap.dest
+        if wps and #wps > 0 then
+            local n = #wps
+            local wi = math.clamp(ap.wi, 1, n)
+            while wi < n and (hd(wps[wi].Position) < 3 or hd(wps[wi + 1].Position) < hd(wps[wi].Position)) do wi = wi + 1 end
+            ap.wi = wi
+            local j = wi
+            while j < n and hd(wps[j + 1].Position) < 9
+                and wps[j + 1].Action ~= Enum.PathWaypointAction.Jump and wps[j].Action ~= Enum.PathWaypointAction.Jump do
+                j = j + 1
+            end
+            target = wps[j].Position
+            if wps[wi].Action == Enum.PathWaypointAction.Jump and hd(wps[wi].Position) < 5 then hum.Jump = true end
+        end
+        hum:MoveTo(target)
+    end))
+    -- lari: pencet tombol sprint game cuma kalo lagi jalan tapi atribut Sprinting belum true (maks 3x per segmen)
+    local function apSprint(ch, hrp)
+        if not ap.sprint or ch:GetAttribute("Sprinting") == true or ap.sprN >= 3 then return end
+        local now = os.clock()
+        if now - ap.sprT < 1.2 then return end
+        local v = hrp.AssemblyLinearVelocity
+        if Vector3.new(v.X, 0, v.Z).Magnitude < 3 then return end
+        ap.sprT, ap.sprN = now, ap.sprN + 1
+        local b = findMobBtn({"sprint"})
+        if b then pcall(btnFire, b, "Tap") end
     end
 
     local function apStep()
@@ -4649,7 +4700,10 @@ xpcall(function()
                     local dir = fleeDir(ch, hrp, away.Unit, ap.fleeVec)
                     ap.fleeVec, ap.fleePt, ap.fleeAt = dir, hrp.Position + dir * 40, now
                 end
+                ap.walkAt = 0
                 hum:MoveTo(ap.fleePt)
+                if now - ap.fleeAt < 0.5 then ap.sprN = 0 end
+                apSprint(ch, hrp)
                 setLbl(apLbl, "Status: menghindar dari Killer (" .. math.floor(kd) .. "m)")
                 return
             end
@@ -4717,10 +4771,12 @@ xpcall(function()
             apRelease()
             ap.faced = nil
             apGoTo(hum, hrp, pos)
+            apSprint(ch, hrp)
             setLbl(apLbl, goalKind == "gen" and "Status: menuju generator" or "Status: menuju exit gate")
             return
         end
         ap.lastPos = nil
+        ap.walkAt = 0 -- udah nyampe: steering berhenti
         -- hadap generator sekali tiap nyampe
         if goalKind == "gen" and ap.faced ~= goalInst then
             ap.faced = goalInst
@@ -4786,7 +4842,7 @@ xpcall(function()
         while running and ap.on do
             local ok, err = pcall(apStep)
             if not ok then setLbl(apLbl, "Status: error " .. tostring(err):sub(1, 40)) end
-            task.wait(0.15)
+            task.wait(0.1)
         end
         ap.thread = nil
         apRelease()
@@ -4984,6 +5040,7 @@ xpcall(function()
     local cAP = tSv:Group("Auto Play (survivor)", 1)
     apLbl = cAP:Label("Status: mati")
     cAP:Toggle("AP_On", "Auto Play", false, function(v) apSet(v) end)
+    cAP:Toggle("AP_Sprint", "Lari otomatis (sprint)", true, function(v) ap.sprint = v end)
     cAP:Slider("AP_Flee", "Jarak menghindar Killer", 15, 90, 45, 5, function(v) ap.flee = v end, "m")
     cAP:Label("Biarkan Skill check (F6) tetap ON supaya repair jalan. Belum ada heal teman.")
 
@@ -5433,5 +5490,5 @@ loadConfig()
 loading = false
 pcall(refreshDash)
 setOpen(true)
-notify("Jìn Script", "Loaded v4.5")
-warn("[jin] v4.5 loaded (ui rombak + veil hold)")
+notify("Jìn Script", "Loaded v4.6")
+warn("[jin] v4.6 loaded (esp warna + autoplay mulus)")
