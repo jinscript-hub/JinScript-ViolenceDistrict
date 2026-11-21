@@ -968,13 +968,13 @@ function setQuality(low)
 end
 local F_MED, F_BOLD = Enum.Font.GothamMedium, Enum.Font.GothamBold
 local T = {
-    text = Color3.fromRGB(240, 240, 240), dim = Color3.fromRGB(138, 138, 138),
-    stroke = Color3.fromRGB(48, 48, 48), off = Color3.fromRGB(52, 52, 52), btn = Color3.fromRGB(32, 32, 32),
-    acc0 = Color3.fromRGB(245, 245, 245), acc1 = Color3.fromRGB(140, 140, 140),
-    bg0 = Color3.fromRGB(23, 23, 23), bg1 = Color3.fromRGB(9, 9, 9),
-    side0 = Color3.fromRGB(17, 17, 17), side1 = Color3.fromRGB(10, 10, 10),
-    card0 = Color3.fromRGB(29, 29, 29), card1 = Color3.fromRGB(19, 19, 19),
-    sel = Color3.fromRGB(46, 46, 46),
+    text = Color3.fromRGB(244, 244, 245), dim = Color3.fromRGB(128, 128, 134),
+    stroke = Color3.fromRGB(38, 38, 40), off = Color3.fromRGB(44, 44, 47), btn = Color3.fromRGB(26, 26, 28),
+    acc0 = Color3.fromRGB(255, 255, 255), acc1 = Color3.fromRGB(168, 168, 174),
+    bg0 = Color3.fromRGB(20, 20, 21), bg1 = Color3.fromRGB(8, 8, 9),
+    side0 = Color3.fromRGB(14, 14, 15), side1 = Color3.fromRGB(9, 9, 10),
+    card0 = Color3.fromRGB(24, 24, 26), card1 = Color3.fromRGB(16, 16, 17),
+    sel = Color3.fromRGB(38, 38, 41),
 }
 T.card = T.card1
 local WHITE, INK = Color3.new(1, 1, 1), Color3.fromRGB(12, 12, 12)
@@ -1230,9 +1230,9 @@ attach(gui)
 local ICON = loadLogo()
 local cam = workspace.CurrentCamera
 local vp = cam and cam.ViewportSize or Vector2.new(844, 390)
-local SB = 46
-HEAD = 38
-PADL, PADR = 12, 14
+local SB = 52
+HEAD = 40
+PADL, PADR = 14, 14
 local SIZES = {Kecil = 0.7, Sedang = 0.85, Besar = 1.0, Jumbo = 1.15}
 local RATIOS = {["4:3"] = {500, 375}, ["16:10"] = {560, 350}, ["16:9"] = {600, 338}, ["21:9"] = {680, 291}}
 curSize, curRatio = "Sedang", "16:9"
@@ -1246,9 +1246,9 @@ local main = new("Frame", {
     Size = UDim2.fromOffset(RATIOS[curRatio][1], RATIOS[curRatio][2]), AnchorPoint = Vector2.new(0.5, 0.5),
     Position = UDim2.new(0.5, 0, 0.5, 0),
     BackgroundColor3 = WHITE, BorderSizePixel = 0, Visible = false, ClipsDescendants = true, Active = true}, gui)
-round(main, 10)
+round(main, 14)
 grad(main, T.bg0, T.bg1, 35)
-grad(outline(main, WHITE, 1), T.acc0, T.stroke, 45)
+grad(outline(main, WHITE, 1), Color3.fromRGB(96, 96, 102), Color3.fromRGB(26, 26, 28), 45)
 local uiScale = new("UIScale", {Scale = layoutScale()}, main)
 isOpen = false
 function setOpen(v)
@@ -1272,11 +1272,14 @@ pcall(function()
     track(workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(applyLayout))
 end)
 local side = new("Frame", {Size = UDim2.new(0, SB, 1, 0), BackgroundColor3 = WHITE, BorderSizePixel = 0}, main)
-round(side, 10)
+round(side, 14)
 grad(side, T.side0, T.side1, 90)
-local sideCover = new("Frame", {Size = UDim2.new(0, 10, 1, 0), Position = UDim2.new(1, -10, 0, 0), BackgroundColor3 = WHITE, BorderSizePixel = 0}, side)
+local sideCover = new("Frame", {Size = UDim2.new(0, 14, 1, 0), Position = UDim2.new(1, -14, 0, 0), BackgroundColor3 = WHITE, BorderSizePixel = 0}, side)
 grad(sideCover, T.side0, T.side1, 90)
-new("Frame", {Size = UDim2.new(0, 1, 1, 0), Position = UDim2.new(0, SB, 0, 0), BackgroundColor3 = T.stroke, BorderSizePixel = 0}, main)
+local vdiv = new("Frame", {Size = UDim2.new(0, 1, 1, -28), Position = UDim2.new(0, SB, 0, 14), BackgroundColor3 = WHITE,
+    BackgroundTransparency = 0.86, BorderSizePixel = 0}, main)
+new("UIGradient", {Rotation = 90, Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 1),
+    NumberSequenceKeypoint.new(0.2, 0), NumberSequenceKeypoint.new(0.8, 0), NumberSequenceKeypoint.new(1, 1)})}, vdiv)
 if ICON then
     new("ImageLabel", {Size = UDim2.fromOffset(26, 26), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0, HEAD / 2),
         BackgroundTransparency = 1, Image = ICON, ScaleType = Enum.ScaleType.Fit}, side)
@@ -1285,15 +1288,22 @@ else
     j.Size = UDim2.new(1, 0, 0, HEAD)
 end
 tabHolder = new("Frame", {Size = UDim2.new(1, 0, 1, -(HEAD + 8)), Position = UDim2.fromOffset(0, HEAD + 6), BackgroundTransparency = 1}, side)
-new("UIListLayout", {Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder,
+new("UIListLayout", {Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder,
     HorizontalAlignment = Enum.HorizontalAlignment.Center}, tabHolder)
 content = new("Frame", {Size = UDim2.new(1, -SB - 1, 1, 0), Position = UDim2.new(0, SB + 1, 0, 0), BackgroundTransparency = 1}, main)
 local header = new("Frame", {Size = UDim2.new(1, 0, 0, HEAD), BackgroundTransparency = 1, Active = true}, content)
 new("Frame", {Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = T.stroke, BorderSizePixel = 0}, header)
-local ttl = mkLabel(header, "JÌN SCRIPT", 12, T.text, F_BOLD)
-ttl.Position = UDim2.fromOffset(14, 0); ttl.Size = UDim2.fromOffset(78, HEAD - 1)
-local ver = mkLabel(header, "v4.6", 10, T.dim)
-ver.Position = UDim2.fromOffset(92, 1); ver.Size = UDim2.fromOffset(30, HEAD - 1)
+local hl = new("Frame", {Size = UDim2.new(1, -150, 1, -1), Position = UDim2.fromOffset(PADL, 0), BackgroundTransparency = 1}, header)
+new("UIListLayout", {FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 8),
+    VerticalAlignment = Enum.VerticalAlignment.Center, SortOrder = Enum.SortOrder.LayoutOrder}, hl)
+local ttl = mkLabel(hl, "Jìn Script", 13, T.text, F_BOLD)
+ttl.Size = UDim2.fromOffset(0, 20); ttl.AutomaticSize = Enum.AutomaticSize.X; ttl.LayoutOrder = 1
+local chip = new("Frame", {Size = UDim2.fromOffset(0, 16), AutomaticSize = Enum.AutomaticSize.X,
+    BackgroundColor3 = T.sel, BorderSizePixel = 0, LayoutOrder = 2}, hl)
+round(chip, 8)
+pad(chip, 7, 0, 7, 0)
+local ver = mkLabel(chip, "v4.7", 9, T.dim, F_BOLD, CENTER)
+ver.Size = UDim2.fromOffset(0, 16); ver.AutomaticSize = Enum.AutomaticSize.X
 local closeBtn = new("TextButton", {Size = UDim2.fromOffset(24, 24), AnchorPoint = Vector2.new(1, 0.5),
     Position = UDim2.new(1, -8, 0.5, -1), BackgroundTransparency = 1, Text = "", AutoButtonColor = false}, header)
 local closeIc = mkIcon(closeBtn, "xmark", T.dim, 12)
@@ -1358,7 +1368,7 @@ end
 notify = function(t, c)
     local f = new("Frame", {Size = UDim2.fromOffset(240, 42), AnchorPoint = Vector2.new(0.5, 0),
         Position = UDim2.new(0.5, 0, 0, -56), BackgroundColor3 = T.card, BorderSizePixel = 0}, gui)
-    round(f, 9)
+    round(f, 12)
     panel(f)
     outline(f, T.stroke, 1)
     local a = mkLabel(f, t, 12, T.text, F_BOLD)
@@ -1398,20 +1408,20 @@ function selectTab(t)
         o.ic:Tween(sel and T.text or T.dim, 0.18)
         tw(o.bar, 0.24, {
             BackgroundTransparency = sel and 0 or 1,
-            Size = sel and UDim2.fromOffset(2, 16) or UDim2.fromOffset(2, 6),
-            Position = sel and UDim2.new(0, -5, 0.5, -8) or UDim2.new(0, -5, 0.5, -3),
+            Size = sel and UDim2.fromOffset(3, 18) or UDim2.fromOffset(3, 6),
+            Position = sel and UDim2.new(0, -6, 0.5, -9) or UDim2.new(0, -6, 0.5, -3),
         }, Enum.EasingStyle.Quint)
     end
 end
 local function addTab(name, iconKey, single)
-    local btn = new("TextButton", {Size = UDim2.fromOffset(36, 34), BackgroundColor3 = T.sel, BackgroundTransparency = 1,
+    local btn = new("TextButton", {Size = UDim2.fromOffset(40, 38), BackgroundColor3 = T.sel, BackgroundTransparency = 1,
         Text = "", AutoButtonColor = false, LayoutOrder = #tabList + 1}, tabHolder)
-    round(btn, 8)
-    local ic = mkIcon(btn, iconKey, T.dim, 16)
+    round(btn, 11)
+    local ic = mkIcon(btn, iconKey, T.dim, 18)
     ic.box.Position = UDim2.new(0.5, 0, 0.5, 0)
-    local bar = new("Frame", {Size = UDim2.fromOffset(2, 6), Position = UDim2.new(0, -5, 0.5, -3),
+    local bar = new("Frame", {Size = UDim2.fromOffset(3, 6), Position = UDim2.new(0, -6, 0.5, -3),
         BackgroundColor3 = WHITE, BackgroundTransparency = 1, BorderSizePixel = 0}, btn)
-    round(bar, 1)
+    round(bar, 2)
     local page = new("Frame", {Size = UDim2.new(1, 0, 1, -HEAD), Position = UDim2.fromOffset(0, HEAD),
         BackgroundTransparency = 1, Visible = false}, content)
     local pIc = mkIcon(page, iconKey, T.text, 16)
@@ -1419,7 +1429,7 @@ local function addTab(name, iconKey, single)
     local pLb = mkLabel(page, name, 14, T.text, F_BOLD)
     pLb.Position = UDim2.fromOffset(PADL + 24, 2); pLb.Size = UDim2.new(1, -PADL - 24, 0, 30)
     local scroll = new("ScrollingFrame", {Size = UDim2.new(1, 0, 1, -34), Position = UDim2.fromOffset(0, 34),
-        BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3, ScrollBarImageColor3 = T.stroke,
+        BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 2, ScrollBarImageColor3 = Color3.fromRGB(70, 70, 74),
         AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = UDim2.new()}, page)
     pad(scroll, PADL, 2, 0, 14)
     local cols = new("Frame", {Size = UDim2.new(1, -PADR, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1}, scroll)
@@ -1449,6 +1459,7 @@ local function sectionLabel(parent, text, order)
     local l = mkLabel(parent, string.upper(text), 10, T.dim, F_BOLD)
     l.Size = UDim2.new(1, 0, 0, 14)
     l.LayoutOrder = order or 1
+    new("UIPadding", {PaddingLeft = UDim.new(0, 4)}, l)
     return l
 end
 function Tab:Group(titleText, col)
@@ -1460,15 +1471,15 @@ function Tab:Group(titleText, col)
     self.load[col] = self.load[col] + 1.5
     local holder = new("Frame", {Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
         BackgroundTransparency = 1}, self.cols[col])
-    vlist(holder, 6)
+    vlist(holder, 7)
     sectionLabel(holder, titleText, 1)
     local card = new("Frame", {Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
         BackgroundColor3 = T.card, BorderSizePixel = 0, LayoutOrder = 2}, holder)
-    round(card, 8)
+    round(card, 12)
     panel(card)
     outline(card)
-    pad(card, 10, 10, 10, 10)
-    vlist(card, 8)
+    pad(card, 12, 12, 12, 12)
+    vlist(card, 9)
     return setmetatable({body = card, tab = self, order = 0, col = col}, Card)
 end
 function Tab:SelectSub(sub)
@@ -1482,7 +1493,7 @@ function Tab:SelectSub(sub)
         elseif not sel then
             o.frame.Visible = false
         end
-        tw(o.btn, 0.18, {BackgroundTransparency = sel and 0 or 1, TextColor3 = sel and T.text or T.dim})
+        tw(o.btn, 0.18, {BackgroundTransparency = sel and 0 or 1, TextColor3 = sel and INK or T.dim})
     end
     self.scroll.CanvasPosition = Vector2.new(0, 0)
 end
@@ -1501,14 +1512,14 @@ function Tab:Sub(name)
     vlist(c1, 10)
     local c2 = new("Frame", {Size = UDim2.new(0.5, -4, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, LayoutOrder = 2}, frame)
     vlist(c2, 10)
-    local btn = new("TextButton", {Size = UDim2.fromOffset(#name * 7 + 24, 24), BackgroundColor3 = T.sel, BackgroundTransparency = 1,
+    local btn = new("TextButton", {Size = UDim2.fromOffset(#name * 7 + 24, 24), BackgroundColor3 = Color3.fromRGB(240, 240, 242), BackgroundTransparency = 1,
         Text = name, TextSize = 12, Font = F_BOLD, TextColor3 = T.dim, AutoButtonColor = false, LayoutOrder = #self.subs + 1}, self.strip)
     round(btn, 12)
     local sub = setmetatable({cols = {c1, c2}, nextCol = 1, load = {0, 0}, frame = frame, btn = btn, scroll = self.scroll}, Tab)
     self.subs[#self.subs + 1] = sub
     local owner = self
     track(btn.MouseButton1Click:Connect(function() owner:SelectSub(sub) end))
-    track(btn.MouseEnter:Connect(function() if not sub.sel then tw(btn, 0.12, {BackgroundTransparency = 0.6}) end end))
+    track(btn.MouseEnter:Connect(function() if not sub.sel then tw(btn, 0.12, {BackgroundTransparency = 0.9}) end end))
     track(btn.MouseLeave:Connect(function() if not sub.sel then tw(btn, 0.15, {BackgroundTransparency = 1}) end end))
     if #self.subs == 1 then self:SelectSub(sub) end
     return sub
@@ -1521,26 +1532,26 @@ function Card:nextOrder()
 end
 function Card:Toggle(id, txt, default, cb, color)
     local o = self:nextOrder()
-    local row = new("Frame", {Size = UDim2.new(1, 0, 0, 26), BackgroundTransparency = 1, LayoutOrder = o}, self.body)
+    local row = new("Frame", {Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1, LayoutOrder = o}, self.body)
     local lb = mkLabel(row, txt, 12, T.text)
-    lb.Size = UDim2.new(1, color and -76 or -46, 1, 0)
+    lb.Size = UDim2.new(1, color and -78 or -50, 1, 0)
     lb.TextTruncate = Enum.TextTruncate.AtEnd
     local state = default
     local KNOB_ON, KNOB_OFF = INK, Color3.fromRGB(170, 170, 170)
-    local sw = new("Frame", {Size = UDim2.fromOffset(34, 18), Position = UDim2.new(1, -34, 0.5, -9),
+    local sw = new("Frame", {Size = UDim2.fromOffset(38, 22), Position = UDim2.new(1, -38, 0.5, -11),
         BackgroundColor3 = state and WHITE or T.off, BorderSizePixel = 0}, row)
-    round(sw, 9)
+    round(sw, 11)
     grad(sw, T.acc0, T.acc1, 0)
-    local knob = new("Frame", {Size = UDim2.fromOffset(14, 14),
-        Position = state and UDim2.new(1, -16, 0.5, -7) or UDim2.new(0, 2, 0.5, -7),
+    local knob = new("Frame", {Size = UDim2.fromOffset(16, 16),
+        Position = state and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8),
         BackgroundColor3 = state and KNOB_ON or KNOB_OFF, BorderSizePixel = 0}, sw)
-    round(knob, 7)
+    round(knob, 8)
     local hit = new("TextButton", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = "", ZIndex = 2}, row)
     local function set(v, silent)
         state = v and true or false
         tw(sw, 0.22, {BackgroundColor3 = state and WHITE or T.off}, Enum.EasingStyle.Quint)
         tw(knob, 0.22, {
-            Position = state and UDim2.new(1, -16, 0.5, -7) or UDim2.new(0, 2, 0.5, -7),
+            Position = state and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8),
             BackgroundColor3 = state and KNOB_ON or KNOB_OFF,
         }, Enum.EasingStyle.Quint)
         if not silent then cb(state) touch() end
@@ -1549,7 +1560,7 @@ function Card:Toggle(id, txt, default, cb, color)
     Reg[id] = {get = function() return state end, set = function(v) set(v) end}
     if color then
         local col = color.default
-        local dot = new("TextButton", {Size = UDim2.fromOffset(16, 16), Position = UDim2.new(1, -60, 0.5, -8),
+        local dot = new("TextButton", {Size = UDim2.fromOffset(16, 16), Position = UDim2.new(1, -64, 0.5, -8),
             BackgroundColor3 = col, Text = "", ZIndex = 3, AutoButtonColor = false}, row)
         round(dot, 8)
         outline(dot, Color3.fromRGB(110, 110, 120))
@@ -1592,18 +1603,18 @@ function Card:Toggle(id, txt, default, cb, color)
     end
 end
 function Card:Slider(id, txt, min, max, default, step, cb, suffix)
-    local row = new("Frame", {Size = UDim2.new(1, 0, 0, 38), BackgroundTransparency = 1, LayoutOrder = self:nextOrder()}, self.body)
+    local row = new("Frame", {Size = UDim2.new(1, 0, 0, 40), BackgroundTransparency = 1, LayoutOrder = self:nextOrder()}, self.body)
     local lb = mkLabel(row, txt, 12, T.text)
     lb.Size = UDim2.new(1, -64, 0, 16)
     lb.TextTruncate = Enum.TextTruncate.AtEnd
     local val = mkLabel(row, "", 12, T.dim, F_MED, RIGHT)
     val.Size = UDim2.fromOffset(60, 16); val.Position = UDim2.new(1, -60, 0, 0)
-    local bar = new("Frame", {Size = UDim2.new(1, 0, 0, 6), Position = UDim2.fromOffset(0, 26), BackgroundColor3 = T.off, BorderSizePixel = 0}, row)
-    round(bar, 3)
+    local bar = new("Frame", {Size = UDim2.new(1, 0, 0, 4), Position = UDim2.fromOffset(0, 29), BackgroundColor3 = T.off, BorderSizePixel = 0}, row)
+    round(bar, 2)
     local fill = new("Frame", {Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = WHITE, BorderSizePixel = 0}, bar)
-    round(fill, 3)
+    round(fill, 2)
     grad(fill, T.acc0, T.acc1, 0)
-    local knob = new("Frame", {Size = UDim2.fromOffset(12, 12), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0, 0, 0.5, 0),
+    local knob = new("Frame", {Size = UDim2.fromOffset(14, 14), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0, 0, 0.5, 0),
         BackgroundColor3 = WHITE, BorderSizePixel = 0}, bar)
     new("UICorner", {CornerRadius = UDim.new(0.5, 0)}, knob)
     local hit = new("TextButton", {Size = UDim2.new(1, 0, 0, 26), Position = UDim2.fromOffset(0, 16), BackgroundTransparency = 1, Text = "", ZIndex = 2}, row)
@@ -1631,15 +1642,15 @@ function Card:Slider(id, txt, min, max, default, step, cb, suffix)
         local p = math.clamp((x - bar.AbsolutePosition.X) / bar.AbsoluteSize.X, 0, 1)
         set(min + p * (max - min))
     end)
-    track(hit.MouseEnter:Connect(function() tw(knob, 0.12, {Size = UDim2.fromOffset(15, 15)}, Enum.EasingStyle.Quint) end))
-    track(hit.MouseLeave:Connect(function() tw(knob, 0.16, {Size = UDim2.fromOffset(12, 12)}, Enum.EasingStyle.Quint) end))
+    track(hit.MouseEnter:Connect(function() tw(knob, 0.12, {Size = UDim2.fromOffset(18, 18)}, Enum.EasingStyle.Quint) end))
+    track(hit.MouseLeave:Connect(function() tw(knob, 0.16, {Size = UDim2.fromOffset(14, 14)}, Enum.EasingStyle.Quint) end))
     Reg[id] = {get = function() return value end, set = function(v) if type(v) == "number" then set(v) end end}
 end
 function Card:Dropdown(id, txt, values, default, cb)
     local o = self:nextOrder()
-    local row = new("TextButton", {Size = UDim2.new(1, 0, 0, 28), BackgroundColor3 = T.btn, Text = "",
+    local row = new("TextButton", {Size = UDim2.new(1, 0, 0, 32), BackgroundColor3 = T.btn, Text = "",
         AutoButtonColor = false, LayoutOrder = o}, self.body)
-    round(row, 7)
+    round(row, 9)
     hover(row, T.btn, T.off)
     local lb = mkLabel(row, txt, 12, T.dim)
     lb.Position = UDim2.fromOffset(10, 0); lb.Size = UDim2.new(0.4, -10, 1, 0)
@@ -1649,7 +1660,7 @@ function Card:Dropdown(id, txt, values, default, cb)
     arrow.box.Position = UDim2.new(1, -14, 0.5, 0)
     local lst = new("Frame", {Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = T.btn,
         Visible = false, BorderSizePixel = 0, LayoutOrder = o + 1}, self.body)
-    round(lst, 7)
+    round(lst, 9)
     pad(lst, 4, 4, 4, 4)
     vlist(lst, 2)
     local value = default
@@ -1663,7 +1674,7 @@ function Card:Dropdown(id, txt, values, default, cb)
     for _, v in ipairs(values) do
         local b = new("TextButton", {Size = UDim2.new(1, 0, 0, 24), BackgroundTransparency = 1, Text = v, TextColor3 = T.text,
             Font = F_MED, TextSize = 12, AutoButtonColor = false}, lst)
-        round(b, 6)
+        round(b, 7)
         track(b.MouseEnter:Connect(function() tw(b, 0.1, {BackgroundTransparency = 0.88, BackgroundColor3 = WHITE}) end))
         track(b.MouseLeave:Connect(function() tw(b, 0.12, {BackgroundTransparency = 1}) end))
         track(b.MouseButton1Click:Connect(function() set(v) end))
@@ -1676,12 +1687,13 @@ function Card:Dropdown(id, txt, values, default, cb)
     Reg[id] = {get = function() return value end, set = function(v) if table.find(values, v) then set(v) end end}
 end
 function Card:Button(txt, cb)
-    local b = new("TextButton", {Size = UDim2.new(1, 0, 0, 28), BackgroundColor3 = T.btn, Text = txt, TextColor3 = T.text,
+    local b = new("TextButton", {Size = UDim2.new(1, 0, 0, 32), BackgroundColor3 = T.btn, Text = txt, TextColor3 = T.text,
         Font = F_MED, TextSize = 12, AutoButtonColor = false, LayoutOrder = self:nextOrder()}, self.body)
-    round(b, 7)
-    hover(b, T.btn, Color3.fromRGB(46, 46, 52))
+    round(b, 9)
+    outline(b, T.stroke, 1)
+    hover(b, T.btn, Color3.fromRGB(40, 40, 44))
     track(b.MouseButton1Down:Connect(function() tw(b, 0.08, {BackgroundColor3 = T.off}) end))
-    track(b.MouseButton1Up:Connect(function() tw(b, 0.14, {BackgroundColor3 = Color3.fromRGB(46, 46, 52)}) end))
+    track(b.MouseButton1Up:Connect(function() tw(b, 0.14, {BackgroundColor3 = Color3.fromRGB(40, 40, 44)}) end))
     track(b.MouseButton1Click:Connect(function() cb() end))
 end
 function Card:Label(txt)
@@ -1727,10 +1739,10 @@ curFps = 0
 local chipSig = ""
 local avatarTag = {}
 local wel = new("Frame", {Size = UDim2.new(1, 0, 0, 64), BackgroundColor3 = T.card, BorderSizePixel = 0, LayoutOrder = 1}, homeCol)
-round(wel, 8)
+round(wel, 12)
 panel(wel)
 outline(wel)
-local wTitle = mkLabel(wel, ("Welcome back, %s!"):format(lp.DisplayName), 14, T.text, F_BOLD)
+local wTitle = mkLabel(wel, ("Welcome back, %s!"):format(lp.DisplayName), 15, T.text, F_BOLD)
 wTitle.Position = UDim2.fromOffset(12, 12); wTitle.Size = UDim2.new(1, -78, 0, 18)
 wTitle.TextTruncate = Enum.TextTruncate.AtEnd
 local wSub = mkLabel(wel, "", 11, T.dim)
@@ -1749,7 +1761,7 @@ local chipScroll = new("ScrollingFrame", {Size = UDim2.new(1, 0, 0, 30), Backgro
 vlist(chipScroll, 6, Enum.FillDirection.Horizontal)
 local det = new("Frame", {Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = T.card,
     BorderSizePixel = 0, LayoutOrder = 4}, homeCol)
-round(det, 8)
+round(det, 12)
 panel(det)
 outline(det)
 pad(det, 12, 10, 12, 12)
@@ -1814,7 +1826,7 @@ end
 sectionLabel(homeCol, "Round info", 5)
 local rc = new("Frame", {Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = T.card,
     BorderSizePixel = 0, LayoutOrder = 6}, homeCol)
-round(rc, 8)
+round(rc, 12)
 panel(rc)
 outline(rc)
 pad(rc, 12, 10, 12, 10)
