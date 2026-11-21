@@ -3935,10 +3935,10 @@ xpcall(function()
     local PathfindingService = game:GetService("PathfindingService")
     local X = {
         sb = {on = false, pct = 15},
-        mw = {on = false, power = 3, boost = 10, range = 60, t = 0},
+        mw = {on = false, rot = false, btn = true, pos = nil},
         bp = {on = false, radius = 8, cd = 1.2, last = 0},
         aa = {on = false, range = 10, count = 1, delay = 0.1, cd = 0.8, last = 0, method = "Auto"},
-        ap = {on = false, flee = 45, goal = nil, wps = nil, wi = 2, pathAt = 0, held = nil, thread = nil, lastPos = nil, lastCheck = 0},
+        ap = {on = false, active = false, flee = 45, goal = nil, wps = nil, wi = 2, pathAt = 0, held = nil, thread = nil, lastPos = nil, lastCheck = 0},
         ch = {on = false, style = "Plus", size = 12, thick = 2, gap = 4, ox = 0, oy = 0, color = "Putih"},
     }
     S.x = X
@@ -4034,30 +4034,158 @@ xpcall(function()
         end)
     end
 
-    -- ===== Speed Boost + Moonwalk (geser CFrame searah MoveDirection) =====
+    -- ===== Speed Boost + Moonwalk =====
+    -- Moonwalk: AutoRotate dimatiin, badan dihadapin KEBALIK arah jalan -> animasi jalan maju tapi gerak mundur.
+    -- Jalan di mana aja (lobby juga), ga ada hubungannya sama Killer.
     track(RS.Heartbeat:Connect(function(dt)
         local sb, mw = X.sb, X.mw
-        if not (sb.on or mw.on) then return end
+        if not (sb.on or mw.on or mw.rot) then return end
         local ch, hum, hrp = myChar()
-        if not ch or hum.Sit then return end
+        if not ch then return end
         local md = hum.MoveDirection
-        if md.Magnitude < 0.1 then return end
-        local ws = hum.WalkSpeed
-        local delta = Vector3.new(0, 0, 0)
-        if sb.on then
-            delta = delta + md * (ws * sb.pct / 100 * dt)
-        end
-        if mw.on and myRole() == "survivor" then
-            local k, d = nearestKiller(hrp.Position)
-            if k and d <= mw.range then
-                mw.t = mw.t + dt * 7
-                local side = Vector3.new(-md.Z, 0, md.X)
-                delta = delta + side * (math.sin(mw.t) * ws * (mw.power * 0.12) * dt)
-                delta = delta + md * (ws * mw.boost / 100 * dt)
+        local moving = md.Magnitude > 0.1 and not hum.Sit
+        if mw.on then
+            if hum.AutoRotate then hum.AutoRotate = false end
+            mw.rot = true
+            if moving then
+                local flat = Vector3.new(md.X, 0, md.Z)
+                if flat.Magnitude > 0.05 then
+                    hrp.CFrame = CFrame.lookAt(hrp.Position, hrp.Position - flat)
+                end
             end
+        elseif mw.rot then
+            mw.rot = false
+            hum.AutoRotate = true
         end
-        if delta.Magnitude > 0 then
-            hrp.CFrame = hrp.CFrame + delta
+        if sb.on and moving then
+            hrp.CFrame = hrp.CFrame + md * (hum.WalkSpeed * sb.pct / 100 * dt)
+        end
+    end))
+
+    -- ===== Gate Auto Play: cuma jalan kalo lu Survivor yang BENERAN lagi main =====
+    -- roleOf() default-nya "survivor" kalo ga nemu team/atribut, jadi spectator & lobby ikut kebaca survivor.
+    -- Syarat: ada generator hidup di workspace, bukan spectator, ga lagi nonton orang lain, role survivor.
+    local mAt, mVal, mWhy = 0, false, "belum ada match"
+    local function inMatch()
+        local now = os.clock()
+        if now - mAt < 0.4 then return mVal, mWhy end
+        mAt = now
+        local live = false
+        for g in pairs(found.generator) do
+            if g.Parent and g:IsDescendantOf(workspace) then live = true break end
+        end
+        local okS, spec = pcall(isSpectator, lp)
+        local cam = workspace.CurrentCamera
+        local cs = cam and cam.CameraSubject
+        local ch = lp.Character
+        local watching = cs and ch and not cs:IsDescendantOf(ch)
+        if not live then mVal, mWhy = false, "belum ada match"
+        elseif okS and spec then mVal, mWhy = false, "lagi spectator"
+        elseif watching then mVal, mWhy = false, "lagi nonton orang lain"
+        elseif myRole() ~= "survivor" then mVal, mWhy = false, "bukan Survivor"
+        else mVal, mWhy = true, "" end
+        return mVal, mWhy
+    end
+
+    -- arah kabur: coba 8 arah, pilih yang paling lowong + paling jauh dari Killer (bukan lurus nabrak tembok)
+    local fleeRP = RaycastParams.new()
+    fleeRP.FilterType = Enum.RaycastFilterType.Exclude
+    fleeRP.RespectCanCollide = true
+    local function fleeDir(ch, hrp, away)
+        local ex = {ch}
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p.Character then ex[#ex + 1] = p.Character end
+        end
+        fleeRP.FilterDescendantsInstances = ex
+        local best, bestScore = away, -math.huge
+        for i = 0, 7 do
+            local dir = CFrame.Angles(0, math.rad(i * 45), 0):VectorToWorldSpace(away)
+            local r = workspace:Raycast(hrp.Position, dir * 30, fleeRP)
+            local score = (r and r.Distance or 30) + dir:Dot(away) * 20
+            if score > bestScore then best, bestScore = dir, score end
+        end
+        return best
+    end
+
+    -- ===== Tombol melayang ↑↓ (toggle moonwalk, bisa digeser) =====
+    local fbGui, fbBtn, mwReg, mwBtnClear, mwBtnBuild
+    local drag = {input = nil, moved = false, from = nil, startPos = nil}
+    local function mwSync()
+        if not fbBtn then return end
+        local on = X.mw.on
+        fbBtn.BackgroundColor3 = on and Color3.fromRGB(245, 245, 245) or Color3.fromRGB(28, 28, 28)
+        fbBtn.TextColor3 = on and Color3.fromRGB(12, 12, 12) or Color3.fromRGB(240, 240, 240)
+    end
+    local function mwToggle()
+        if mwReg then mwReg.set(not X.mw.on) else X.mw.on = not X.mw.on mwSync() end
+    end
+    mwBtnClear = function()
+        drag.input = nil
+        if fbGui then pcall(function() fbGui:Destroy() end) end
+        fbGui, fbBtn = nil, nil
+    end
+    mwBtnBuild = function()
+        mwBtnClear()
+        if not X.mw.btn or not running then return end
+        local g = Instance.new("ScreenGui")
+        g.Name = "JinFun"
+        g.ResetOnSpawn = false
+        g.IgnoreGuiInset = true
+        g.DisplayOrder = 21
+        attach(g)
+        fbGui = g
+        local cam = workspace.CurrentCamera
+        local vp = cam and cam.ViewportSize or Vector2.new(800, 600)
+        local b = Instance.new("TextButton")
+        b.Name = "MW"
+        b.Size = UDim2.fromOffset(52, 52)
+        b.Position = X.mw.pos or UDim2.fromOffset(math.max(0, vp.X - 96), math.floor(vp.Y * 0.5))
+        b.AutoButtonColor = false
+        b.Active = true
+        b.Text = "\u{2191}\u{2193}"
+        b.TextSize = 24
+        b.Font = Enum.Font.SourceSansBold
+        b.BorderSizePixel = 0
+        local uc = Instance.new("UICorner")
+        uc.CornerRadius = UDim.new(0.5, 0)
+        uc.Parent = b
+        local st = Instance.new("UIStroke")
+        st.Color = Color3.fromRGB(90, 90, 90)
+        st.Thickness = 1.5
+        st.Parent = b
+        b.Parent = g
+        fbBtn = b
+        mwSync()
+        b.InputBegan:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+                drag.input, drag.moved = i, false
+                drag.from, drag.startPos = i.Position, b.AbsolutePosition
+            end
+        end)
+    end
+    -- listener global dibuat sekali; pakai input object yang sama biar jempol joystick ga ikut narik tombol
+    track(UIS.InputChanged:Connect(function(i)
+        local d = drag.input
+        if not d or not fbBtn then return end
+        local isMouse = d.UserInputType == Enum.UserInputType.MouseButton1 and i.UserInputType == Enum.UserInputType.MouseMovement
+        if not (isMouse or i == d) then return end
+        local delta = i.Position - drag.from
+        if delta.Magnitude > 8 then drag.moved = true end
+        if drag.moved then
+            local cam = workspace.CurrentCamera
+            local vp = cam and cam.ViewportSize or Vector2.new(800, 600)
+            local x = math.clamp(drag.startPos.X + delta.X, 0, math.max(0, vp.X - 52))
+            local y = math.clamp(drag.startPos.Y + delta.Y, 0, math.max(0, vp.Y - 52))
+            fbBtn.Position = UDim2.fromOffset(x, y)
+            X.mw.pos = fbBtn.Position
+        end
+    end))
+    track(UIS.InputEnded:Connect(function(i)
+        local d = drag.input
+        if not d then return end
+        if i == d or (d.UserInputType == Enum.UserInputType.MouseButton1 and i.UserInputType == Enum.UserInputType.MouseButton1) then
+            drag.input = nil
+            if not drag.moved then mwToggle() end
         end
     end))
 
@@ -4213,7 +4341,18 @@ xpcall(function()
     local function apStep()
         local ch, hum, hrp = myChar()
         if not ch then setLbl(apLbl, "Status: karakter belum hidup") return end
-        if myRole() ~= "survivor" then setLbl(apLbl, "Status: nunggu role Survivor") return end
+        local playing, why = inMatch()
+        if not playing then
+            apRelease()
+            ap.wps, ap.goal = nil, nil
+            if ap.active then
+                ap.active = false
+                pcall(function() hum:MoveTo(hrp.Position) end)
+            end
+            setLbl(apLbl, "Status: nunggu match (" .. why .. ")")
+            return
+        end
+        ap.active = true
         local ks = killers()
         local okS, key = pcall(survivorState, lp, ch, hum, hrp, ks)
         if okS and (key == "hooked" or key == "knocked") then
@@ -4228,7 +4367,7 @@ xpcall(function()
             local away = hrp.Position - k.hrp.Position
             away = Vector3.new(away.X, 0, away.Z)
             if away.Magnitude < 0.1 then away = Vector3.new(1, 0, 0) end
-            hum:MoveTo(hrp.Position + away.Unit * 40)
+            hum:MoveTo(hrp.Position + fleeDir(ch, hrp, away.Unit) * 40)
             setLbl(apLbl, "Status: menghindar dari Killer (" .. math.floor(kd) .. "m)")
             return
         end
@@ -4268,6 +4407,7 @@ xpcall(function()
             setLbl(apLbl, goalKind == "gen" and "Status: menuju generator" or "Status: menuju exit gate")
             return
         end
+        ap.lastPos = nil
         -- sudah dekat: tahan prompt interaksi selama masih valid
         local p = ap.held
         if not (p and p.Parent and p.Enabled) then
@@ -4401,11 +4541,12 @@ xpcall(function()
     cAP:Slider("AP_Flee", "Jarak menghindar Killer", 15, 90, 45, 5, function(v) ap.flee = v end, "m")
     cAP:Label("Biarkan Skill check (F6) tetap ON supaya repair jalan. Belum ada heal teman.")
 
-    local cMW = tSv:Group("Moonwalk (zigzag)", 2)
-    cMW:Toggle("MW_On", "Moonwalk", false, function(v) X.mw.on = v end)
-    cMW:Slider("MW_Power", "Intensitas zigzag", 1, 10, 3, 1, function(v) X.mw.power = v end)
-    cMW:Slider("MW_Boost", "Tambahan kecepatan", 0, 50, 10, 5, function(v) X.mw.boost = v end, "%")
-    cMW:Slider("MW_Range", "Aktif kalau Killer dalam", 20, 150, 60, 5, function(v) X.mw.range = v end, "m")
+    local cMW = tMs:Group("Fun menu", 1)
+    cMW:Toggle("MW_On", "Moonwalk (jalan mundur)", false, function(v) X.mw.on = v mwSync() end)
+    cMW:Toggle("MW_Btn", "Tombol ↑↓ di layar", true, function(v) X.mw.btn = v mwBtnBuild() end)
+    cMW:Label("Tombol ↑↓ bisa digeser. Tap = moonwalk ON/OFF. Jalan kapan aja, ga nunggu Killer.")
+    X.mw.btn = true
+    mwBtnBuild()
 
     local cBP = tKl:Group("Auto break pallet", 1)
     bpLbl = cBP:Label("Status: mati")
@@ -4437,6 +4578,7 @@ xpcall(function()
     cCH:Slider("CH_X", "Geser horizontal", -150, 150, 0, 1, function(v) X.ch.ox = v chBuild() end, "px")
     cCH:Slider("CH_Y", "Geser vertikal", -150, 150, 0, 1, function(v) X.ch.oy = v chBuild() end, "px")
 
+    mwReg = Reg["MW_On"]
     -- toggle yang menghasilkan input / gerak tidak ikut disimpan di config
     for _, id in ipairs({"AP_On", "MW_On", "BP_On", "AA_On", "SB_On"}) do
         Reg[id] = nil
@@ -4446,6 +4588,10 @@ xpcall(function()
         X.sb.on, X.mw.on, X.bp.on, X.aa.on = false, false, false, false
         apSet(false)
         chClear()
+        mwBtnClear()
+        local _, mhum = myChar()
+        if mhum and X.mw.rot then mhum.AutoRotate = true end
+        X.mw.rot = false
     end
 end, function(e) warn("[jin] Extras gagal dipasang: " .. tostring(e)) end)
 
