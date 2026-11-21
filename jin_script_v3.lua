@@ -1213,7 +1213,7 @@ local header = new("Frame", {Size = UDim2.new(1, 0, 0, HEAD), BackgroundTranspar
 new("Frame", {Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = T.stroke, BorderSizePixel = 0}, header)
 local ttl = mkLabel(header, "JÌN SCRIPT", 12, T.text, F_BOLD)
 ttl.Position = UDim2.fromOffset(14, 0); ttl.Size = UDim2.fromOffset(78, HEAD - 1)
-local ver = mkLabel(header, "v4.0", 10, T.dim)
+local ver = mkLabel(header, "v4.1", 10, T.dim)
 ver.Position = UDim2.fromOffset(92, 1); ver.Size = UDim2.fromOffset(30, HEAD - 1)
 local closeBtn = new("TextButton", {Size = UDim2.fromOffset(24, 24), AnchorPoint = Vector2.new(1, 0.5),
     Position = UDim2.new(1, -8, 0.5, -1), BackgroundTransparency = 1, Text = "", AutoButtonColor = false}, header)
@@ -3952,7 +3952,10 @@ xpcall(function()
         end
     end)
 
-    cKE:Toggle("KE_Stalk", "Auto Stalk", false, function(v) KE.stalk = v end)
+    cKE:Toggle("KE_Stalk", "Auto Stalk", false, function(v)
+        KE.stalk = v
+        if v and not stalkRemote() then notify("Auto Stalk", "remote StartStalking ga ada di build ini (cek Dump info)") end
+    end)
     cKE:Slider("KE_StalkRange", "Jarak stalk", 50, 400, 150, 10, function(v) KE.stalkRange = v end, "m")
     cKE:Toggle("KE_CP", "Counter Auto Parry", false, function(v)
         KE.cp = v
@@ -3979,7 +3982,7 @@ xpcall(function()
         mw = {latch = false, held = false, rot = false, btn = true, pos = nil, move = false, yaw = nil, t = 0, swing = 28, freq = 8, smooth = 14},
         bp = {on = false, radius = 8, cd = 1.2, last = 0},
         aa = {on = false, range = 10, count = 1, delay = 0.1, cd = 0.8, last = 0, method = "Auto"},
-        ap = {on = false, active = false, flee = 45, goal = nil, wps = nil, wi = 2, pathAt = 0, held = nil, thread = nil, lastPos = nil, lastCheck = 0},
+        ap = {on = false, active = false, btn = nil, btnWho = nil, flee = 45, goal = nil, wps = nil, wi = 2, pathAt = 0, held = nil, thread = nil, lastPos = nil, lastCheck = 0},
         ch = {on = false, style = "Plus", size = 12, thick = 2, gap = 4, ox = 0, oy = 0, color = "Putih"},
     }
     S.x = X
@@ -4075,6 +4078,63 @@ xpcall(function()
         end)
     end
 
+    -- ===== Tombol HP (PlayerGui.*-mob.Controls.*) =====
+    -- Game ini jalan lewat tombol mobile (skill check & parry juga lewat sini), jadi interaksi/serang
+    -- dipicu dengan manggil handler tombolnya, sama teknik kayak skill check. Handler Skillcheck_* sengaja di-skip.
+    local SKIP_SC = {Skillcheck_gen = true, Skillcheck_player = true}
+    local function findMobBtn(words)
+        local gui = lp:FindFirstChild("PlayerGui")
+        if not gui then return nil end
+        local fallback
+        for _, g in ipairs(gui:GetChildren()) do
+            if g:IsA("ScreenGui") and g.Name:lower():find("mob", 1, true) then
+                local ctl = g:FindFirstChild("Controls") or g
+                for _, b in ipairs(ctl:GetDescendants()) do
+                    if b:IsA("GuiButton") then
+                        local n = b.Name:lower()
+                        for _, w in ipairs(words) do
+                            if n:find(w, 1, true) then
+                                if g.Enabled and b.Visible then return b end
+                                fallback = fallback or b
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        return fallback
+    end
+    local function btnFire(b, which)
+        local pos = b.AbsolutePosition + b.AbsoluteSize / 2
+        local sigs = {Down = {"MouseButton1Down"}, Up = {"MouseButton1Up"},
+            Tap = {"MouseButton1Down", "MouseButton1Up", "Activated", "MouseButton1Click"}}
+        local n, total, names = 0, 0, {}
+        for _, sn in ipairs(sigs[which] or sigs.Tap) do
+            local sig = b[sn]
+            if getconnections then
+                local ok, cs = pcall(getconnections, sig)
+                if ok then
+                    for _, c in ipairs(cs) do
+                        total = total + 1
+                        local f = c.Function
+                        local okS, sc = pcall(function() return getfenv(f).script end)
+                        local nm = (okS and sc and sc.Name) or "?"
+                        if f and not SKIP_SC[nm] and pcall(f, pos.X, pos.Y) then
+                            n = n + 1
+                            names[#names + 1] = nm
+                        end
+                    end
+                end
+            end
+            -- firesignal cuma kalo tombolnya bener-bener ga punya koneksi (biar ga nyenggol Skillcheck)
+            if total == 0 and firesignal and pcall(firesignal, sig, pos.X, pos.Y) then
+                n = n + 1
+                names[#names + 1] = "firesignal"
+            end
+        end
+        return n, table.concat(names, ",")
+    end
+
     -- ===== Speed Boost + Moonwalk =====
     -- Moonwalk (tahan tombol): badan muter HALUS (bukan snap) ke arah kebalik jalan, ditambah ayun kanan-kiri cepat
     -- di atas heading itu -> animasi jalan maju tapi gerak mundur, kerasa kayak trik moonwalk beneran.
@@ -4136,7 +4196,12 @@ xpcall(function()
         local cam = workspace.CurrentCamera
         local cs = cam and cam.CameraSubject
         local ch = lp.Character
-        local watching = cs and ch and not cs:IsDescendantOf(ch)
+        local watching = false
+        if cs and ch and not cs:IsDescendantOf(ch) then
+            local mdl = cs:FindFirstAncestorOfClass("Model")
+            local owner = mdl and Players:GetPlayerFromCharacter(mdl)
+            watching = owner ~= nil and owner ~= lp
+        end
         if not live then mVal, mWhy = false, "belum ada match"
         elseif okS and spec then mVal, mWhy = false, "lagi spectator"
         elseif watching then mVal, mWhy = false, "lagi nonton orang lain"
@@ -4254,6 +4319,7 @@ xpcall(function()
 
     -- ===== Auto Break Pallet (Killer) =====
     local bpLbl
+    local clickOnce
     task.spawn(function()
         while running do
             task.wait(0.25)
@@ -4262,7 +4328,7 @@ xpcall(function()
                 local ch, hum, hrp = myChar()
                 if hrp then
                     local target, targetPrompt, bestD = nil, nil, math.huge
-                    local note = nil
+                    local note, fallbackT = nil, nil
                     for inst in pairs(found.pallet) do
                         if inst.Parent then
                             local pos = posOf(inst)
@@ -4280,6 +4346,7 @@ xpcall(function()
                                             end
                                         else
                                             note = "pallet jatuh, prompt break ga ketemu"
+                                            fallbackT = inst
                                         end
                                     end
                                 end
@@ -4290,6 +4357,10 @@ xpcall(function()
                         bp.last = os.clock()
                         pressPrompt(targetPrompt)
                         setLbl(bpLbl, "Status: break dikirim ke " .. target.Name)
+                    elseif fallbackT then
+                        bp.last = os.clock()
+                        local used = clickOnce()
+                        setLbl(bpLbl, used and ("Status: pallet dihancurin via " .. used) or "Status: pallet jatuh, ga ada input yang jalan")
                     elseif note then
                         setLbl(bpLbl, "Status: " .. note)
                     end
@@ -4303,8 +4374,20 @@ xpcall(function()
     local aaRP = RaycastParams.new()
     aaRP.FilterType = Enum.RaycastFilterType.Exclude
 
-    local function clickOnce()
+    clickOnce = function()
         local m = X.aa.method
+        if m == "Auto" or m == "Tombol HP" then
+            local b = findMobBtn({"attack", "attak", "slash", "swing", "hit", "action"})
+            if b then
+                local n, who = btnFire(b, "Tap")
+                if n > 0 then return "tombol " .. b.Name .. " (" .. who .. ")" end
+            end
+        end
+        if m == "Auto" or m == "Tool" then
+            local ch = lp.Character
+            local tool = ch and ch:FindFirstChildOfClass("Tool")
+            if tool and pcall(function() tool:Activate() end) then return "Tool " .. tool.Name end
+        end
         if (m == "Auto" or m == "mouse1click") and mouse1click then
             if pcall(mouse1click) then return "mouse1click" end
         end
@@ -4364,10 +4447,16 @@ xpcall(function()
     local ap = X.ap
     local apLbl
 
+    local function apBtnUp()
+        local b = ap.btn
+        ap.btn = nil
+        if b and b.Parent then pcall(btnFire, b, "Up") end
+    end
     local function apRelease()
         local p = ap.held
         ap.held = nil
         if p then pcall(function() p:InputHoldEnd() end) end
+        apBtnUp()
     end
 
     local function apGoTo(hum, hrp, pos)
@@ -4474,7 +4563,10 @@ xpcall(function()
         -- sudah dekat: tahan prompt interaksi selama masih valid
         local p = ap.held
         if not (p and p.Parent and p.Enabled) then
-            apRelease()
+            if p then
+                ap.held = nil
+                pcall(function() p:InputHoldEnd() end)
+            end
             p = pickPrompt(goalInst, goalKind == "gen" and {"repair", "fix", "perbaik"} or {"open", "exit", "buka"})
             if p then
                 ap.held = p
@@ -4484,14 +4576,26 @@ xpcall(function()
                 end
             end
         end
-        if ap.held then
-            setLbl(apLbl, goalKind == "gen" and "Status: memperbaiki generator" or "Status: membuka exit gate")
+        if not ap.held then
+            -- ga ada ProximityPrompt -> pencet tombol action HP (Down sekali, Up pas dilepas)
+            local b = findMobBtn(goalKind == "gen" and {"action", "repair", "interact", "fix"} or {"action", "interact", "open", "exit"})
+            if b and ap.btn ~= b then
+                apBtnUp()
+                local n, who = btnFire(b, "Down")
+                if n > 0 then ap.btn, ap.btnWho = b, who end
+            end
+        elseif ap.btn then
+            apBtnUp()
+        end
+        if ap.held or ap.btn then
+            local via = ap.btn and (" via tombol " .. ap.btn.Name .. " [" .. tostring(ap.btnWho) .. "]") or ""
+            setLbl(apLbl, (goalKind == "gen" and "Status: memperbaiki generator" or "Status: membuka exit gate") .. via)
         elseif goalKind == "gate" then
             hum:MoveTo(pos)
             setLbl(apLbl, "Status: jalan lewat exit gate")
         else
             hum:MoveTo(hrp.Position)
-            setLbl(apLbl, "Status: prompt repair ga ketemu di " .. goalInst.Name)
+            setLbl(apLbl, "Status: ga ada prompt/tombol interaksi yang kepencet di " .. goalInst.Name .. " (pake Dump info)")
         end
     end
 
@@ -4597,6 +4701,102 @@ xpcall(function()
         end
     end
 
+    -- ===== Dump info game: ngumpulin struktur GUI/objek/remote buat ngecek fitur yang ga jalan =====
+    local function dumpInfo()
+        local out = {}
+        local function add(t) out[#out + 1] = t end
+        local function attrs(o)
+            local t = {}
+            for k, v in pairs(o:GetAttributes()) do t[#t + 1] = k .. "=" .. tostring(v) end
+            return #t > 0 and (" {" .. table.concat(t, ", ") .. "}") or ""
+        end
+        local function tree(o, depth, maxd, budget, filter)
+            if budget.n <= 0 then return end
+            budget.n = budget.n - 1
+            local extra = ""
+            if o:IsA("ProximityPrompt") then
+                extra = (" [PP action='%s' obj='%s' hold=%s en=%s dist=%s]"):format(o.ActionText, o.ObjectText,
+                    tostring(o.HoldDuration), tostring(o.Enabled), tostring(o.MaxActivationDistance))
+            elseif o:IsA("ValueBase") then
+                extra = " = " .. tostring(o.Value)
+            end
+            add(("  "):rep(depth) .. o.Name .. " <" .. o.ClassName .. ">" .. extra .. attrs(o))
+            if depth < maxd then
+                for _, c in ipairs(o:GetChildren()) do
+                    if not filter or filter(c) then tree(c, depth + 1, maxd, budget, filter) end
+                end
+            end
+        end
+        add("== ENV ==")
+        add(("executor=%s getconnections=%s firesignal=%s fireproximityprompt=%s getfenv=%s setclipboard=%s"):format(
+            tostring(EXEC), tostring(getconnections ~= nil), tostring(firesignal ~= nil),
+            tostring(fireproximityprompt ~= nil), tostring(getfenv ~= nil), tostring(setclipboard ~= nil)))
+        local _, playing, why = pcall(inMatch)
+        add("role=" .. tostring(roleOf(lp)) .. " spectator=" .. tostring(isSpectator(lp)) .. " inMatch=" .. tostring(playing) .. " (" .. tostring(why) .. ")")
+        add("team=" .. (lp.Team and lp.Team.Name or "nil") .. attrs(lp))
+        if lp.Character then add("char" .. attrs(lp.Character)) end
+        add("generators=" .. (function() local n = 0 for _ in pairs(found.generator) do n = n + 1 end return n end)())
+        add("== GUI ==")
+        local SIGS = {"MouseButton1Down", "MouseButton1Up", "MouseButton1Click", "Activated"}
+        for _, g in ipairs(pg:GetChildren()) do
+            if g:IsA("ScreenGui") then
+                local isMob = g.Name:lower():find("mob", 1, true) ~= nil
+                add(g.Name .. " Enabled=" .. tostring(g.Enabled))
+                local root = isMob and g or g:FindFirstChild("Controls")
+                if root then
+                    for _, b in ipairs(root:GetDescendants()) do
+                        if b:IsA("GuiButton") then
+                            local parts = {}
+                            if getconnections then
+                                for _, sn in ipairs(SIGS) do
+                                    local ok, cs = pcall(getconnections, b[sn])
+                                    if ok and #cs > 0 then
+                                        local names = {}
+                                        for _, c in ipairs(cs) do
+                                            local okS, sc = pcall(function() return getfenv(c.Function).script end)
+                                            names[#names + 1] = (okS and sc and sc.Name) or "?"
+                                        end
+                                        parts[#parts + 1] = sn .. "=" .. table.concat(names, "/")
+                                    end
+                                end
+                            end
+                            add(("  btn %s vis=%s %s"):format((b:GetFullName():gsub("^.*PlayerGui%.", "")), tostring(b.Visible), table.concat(parts, " ")))
+                        end
+                    end
+                end
+            end
+        end
+        local lh = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+        for _, cat in ipairs({"generator", "pallet", "gate"}) do
+            add("== " .. cat:upper() .. " terdekat ==")
+            local best, bd = nil, math.huge
+            for i in pairs(found[cat]) do
+                if i.Parent then
+                    local ps = posOf(i)
+                    local d = (ps and lh) and (ps - lh.Position).Magnitude or 0
+                    if d < bd then best, bd = i, d end
+                end
+            end
+            if best then
+                add(best:GetFullName() .. " jarak=" .. math.floor(bd))
+                tree(best, 0, 3, {n = 60})
+            else
+                add("(ga ketemu)")
+            end
+        end
+        add("== REMOTES ==")
+        local rsv = game:GetService("ReplicatedStorage")
+        local rr = rsv:FindFirstChild("Remotes")
+        tree(rr or rsv, 0, 3, {n = 150}, function(c)
+            return c:IsA("Folder") or c:IsA("RemoteEvent") or c:IsA("RemoteFunction") or c:IsA("BindableEvent")
+        end)
+        local text = table.concat(out, "\n")
+        if writefile then pcall(writefile, BASE .. "jin_dump.txt", text) end
+        if setclipboard then pcall(setclipboard, text) end
+        warn("[jin] dump:\n" .. text)
+        notify("Dump info", (setclipboard and "udah di-copy" or "ga ada setclipboard") .. (writefile and ", file: " .. BASE .. "jin_dump.txt" or ""))
+    end
+
     -- ===== UI =====
     local cAP = tSv:Group("Auto Play (survivor)", 1)
     apLbl = cAP:Label("Status: mati")
@@ -4612,6 +4812,12 @@ xpcall(function()
     cMW:Slider("MW_Freq", "Kecepatan ayun", 3, 16, 8, 1, function(v) X.mw.freq = v end, "Hz")
     cMW:Slider("MW_Smooth", "Kehalusan putar", 6, 30, 14, 1, function(v) X.mw.smooth = v end)
     cMW:Label("TAHAN tombol ↑↓ buat moonwalk, lepas = balik normal. Mau pindahin tombol: nyalain Mode geser, geser, matiin lagi.")
+    local cDbg = tMs:Group("Debug", 2)
+    cDbg:Button("Dump info game (copy + file)", function()
+        local ok, e = pcall(dumpInfo)
+        if not ok then notify("Dump info", "error: " .. tostring(e):sub(1, 60)) end
+    end)
+    cDbg:Label("Kalo ada fitur ga jalan: tekan pas lagi di match, lalu paste hasilnya ke chat.")
     X.mw.btn = true
     mwBtnBuild()
 
@@ -4628,7 +4834,7 @@ xpcall(function()
     cAA:Slider("AA_Count", "Jumlah serang per pemicu", 1, 3, 1, 1, function(v) X.aa.count = v end)
     cAA:Slider("AA_Delay", "Jeda antar serang", 0.05, 1, 0.1, 0.05, function(v) X.aa.delay = v end, "s")
     cAA:Slider("AA_CD", "Cooldown", 0.3, 3, 0.8, 0.1, function(v) X.aa.cd = v end, "s")
-    cAA:Dropdown("AA_Method", "Metode input", {"Auto", "mouse1click", "VirtualInput"}, "Auto", function(v) X.aa.method = v end)
+    cAA:Dropdown("AA_Method", "Metode input", {"Auto", "Tombol HP", "Tool", "mouse1click", "VirtualInput"}, "Auto", function(v) X.aa.method = v end)
 
     local cSB = tMs:Group("Speed boost", 1)
     cSB:Toggle("SB_On", "Speed Boost", false, function(v) X.sb.on = v end)
@@ -4790,5 +4996,5 @@ loadConfig()
 loading = false
 pcall(refreshDash)
 setOpen(true)
-notify("Jìn Script", "Loaded v4.0")
-warn("[jin] v4.0 loaded (ESP+moonwalk patch)")
+notify("Jìn Script", "Loaded v4.1")
+warn("[jin] v4.1 loaded (tombol HP + dump)")
