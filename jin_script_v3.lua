@@ -1213,7 +1213,7 @@ local header = new("Frame", {Size = UDim2.new(1, 0, 0, HEAD), BackgroundTranspar
 new("Frame", {Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = T.stroke, BorderSizePixel = 0}, header)
 local ttl = mkLabel(header, "JÌN SCRIPT", 12, T.text, F_BOLD)
 ttl.Position = UDim2.fromOffset(14, 0); ttl.Size = UDim2.fromOffset(78, HEAD - 1)
-local ver = mkLabel(header, "v4.1", 10, T.dim)
+local ver = mkLabel(header, "v4.2", 10, T.dim)
 ver.Position = UDim2.fromOffset(92, 1); ver.Size = UDim2.fromOffset(30, HEAD - 1)
 local closeBtn = new("TextButton", {Size = UDim2.fromOffset(24, 24), AnchorPoint = Vector2.new(1, 0.5),
     Position = UDim2.new(1, -8, 0.5, -1), BackgroundTransparency = 1, Text = "", AutoButtonColor = false}, header)
@@ -1844,7 +1844,7 @@ cSC:Dropdown("SC_Mode", "Mode", {"Instant", "Perfect", "Great", "Random"}, "Perf
 do local function parryInit()
     S.parry = {on = false, aggr = false, dist = 14, last = 0, busy = false, method = 2, hitOnly = false, circle = false, color = Color3.fromRGB(170, 0, 255), detect = false, learn = true, pre = false, hitDot = 0.55, block = 0, cdLo = 0, nl = 0, face = false, human = true, earlyK = 0.043}
     local PARRY_DEBUG = false
-    local PARRY_LOG = true
+    local PARRY_LOG = false
     local ATTACK_ANIMS = {}
     for _, id in ipairs({
         "135002183282873", "121216847022485",
@@ -1903,7 +1903,9 @@ do local function parryInit()
     local stLbl = cPar:Label("Status: OFF")
     local learned, recent, nopar, stats, idReach, idLag = {}, {}, {}, {}, {}, {}
     local PFILE = BASE .. "jin_parry.json"
-    local function saveP()
+    local pDirty = false
+    local function pWrite()
+        pDirty = false
         if not writefile then return end
         pcall(function()
             local a, n = {}, {}
@@ -1912,6 +1914,18 @@ do local function parryInit()
             writefile(PFILE, HttpService:JSONEncode({anims = a, nopar = n, stats = stats, reach = idReach, lag = idLag, btn = S.parry.btn, key = S.parry.key and S.parry.key.Name}))
         end)
     end
+    -- DITUNDA: dulu tiap parry (+0.9 dtk) nulis+encode JSON sinkron di main thread -> drop FPS tiap parry.
+    -- Sekarang cuma nandain dirty, ditulis pas lagi tenang (10 dtk tanpa parry/hit) atau pas unload.
+    local function saveP() pDirty = true end
+    S.parryFlush = function() if pDirty then pWrite() end end
+    task.spawn(function()
+        while running do
+            task.wait(4)
+            local P = S.parry
+            local nowF = os.clock()
+            if pDirty and P and nowF - (P.firedT or 0) > 10 and nowF - (P.lastHitT or 0) > 10 then pcall(pWrite) end
+        end
+    end)
     local function addLearn(id, why)
         learned[id] = true
         S.parry.nl = S.parry.nl + 1
@@ -2385,7 +2399,7 @@ do local function parryInit()
             end
             P.resT = os.clock()
         end)
-        plog("FIRE", reason, "id", id, "| sejak anim mulai", P.animT and ("%.3fs"):format(t0 - P.animT) or "-", "| ping", pcall(function() return lp:GetNetworkPing() end) and ("%.3f"):format(lp:GetNetworkPing()) or "?", "| char:", attrDump(ch))
+        if PARRY_LOG or PARRY_DEBUG then plog("FIRE", reason, "id", id, "| sejak anim mulai", P.animT and ("%.3fs"):format(t0 - P.animT) or "-", "| ping", pcall(function() return lp:GetNetworkPing() end) and ("%.3f"):format(lp:GetNetworkPing()) or "?", "| char:", attrDump(ch)) end
     end
     local SWING_PRIO = {
         [Enum.AnimationPriority.Action] = true, [Enum.AnimationPriority.Action2] = true,
@@ -3982,7 +3996,7 @@ xpcall(function()
         mw = {latch = false, held = false, rot = false, btn = true, pos = nil, move = false, yaw = nil, t = 0, swing = 28, freq = 8, smooth = 14},
         bp = {on = false, radius = 8, cd = 1.2, last = 0},
         aa = {on = false, range = 10, count = 1, delay = 0.1, cd = 0.8, last = 0, method = "Auto"},
-        ap = {on = false, active = false, btn = nil, btnWho = nil, flee = 45, goal = nil, wps = nil, wi = 2, pathAt = 0, held = nil, thread = nil, lastPos = nil, lastCheck = 0},
+        ap = {on = false, active = false, btn = nil, btnWho = nil, mode = "work", fleeUntil = 0, fleePt = nil, fleeAt = 0, fleeVec = nil, goalInst = nil, goalKind = nil, flee = 45, goal = nil, wps = nil, wi = 2, pathAt = 0, held = nil, thread = nil, lastPos = nil, lastCheck = 0},
         ch = {on = false, style = "Plus", size = 12, thick = 2, gap = 4, ox = 0, oy = 0, color = "Putih"},
     }
     S.x = X
@@ -4214,7 +4228,7 @@ xpcall(function()
     local fleeRP = RaycastParams.new()
     fleeRP.FilterType = Enum.RaycastFilterType.Exclude
     fleeRP.RespectCanCollide = true
-    local function fleeDir(ch, hrp, away)
+    local function fleeDir(ch, hrp, away, prev)
         local ex = {ch}
         for _, p in ipairs(Players:GetPlayers()) do
             if p.Character then ex[#ex + 1] = p.Character end
@@ -4224,7 +4238,7 @@ xpcall(function()
         for i = 0, 7 do
             local dir = CFrame.Angles(0, math.rad(i * 45), 0):VectorToWorldSpace(away)
             local r = workspace:Raycast(hrp.Position, dir * 30, fleeRP)
-            local score = (r and r.Distance or 30) + dir:Dot(away) * 20
+            local score = (r and r.Distance or 30) + dir:Dot(away) * 20 + (prev and dir:Dot(prev) * 10 or 0)
             if score > bestScore then best, bestScore = dir, score end
         end
         return best
@@ -4496,7 +4510,7 @@ xpcall(function()
         local playing, why = inMatch()
         if not playing then
             apRelease()
-            ap.wps, ap.goal = nil, nil
+            ap.wps, ap.goal, ap.mode, ap.goalInst, ap.fleePt = nil, nil, "work", nil, nil
             if ap.active then
                 ap.active = false
                 pcall(function() hum:MoveTo(hrp.Position) end)
@@ -4512,29 +4526,74 @@ xpcall(function()
             setLbl(apLbl, key == "hooked" and "Status: lagi digantung" or "Status: lagi jatuh")
             return
         end
+        local now = os.clock()
         local k, kd = nearestKiller(hrp.Position)
-        if k and kd <= ap.flee then
+        local outR = ap.flee * 1.5
+        -- STATE: work <-> flee dengan histeresis. Masuk flee di jarak `flee`, baru balik kerja kalo Killer udah
+        -- > flee*1.5 DAN minimal 2.5 detik. Sebelumnya batasnya 1 angka, jadi bolak-balik di garis itu.
+        if k and kd <= ap.flee and ap.mode ~= "flee" then
             apRelease()
-            ap.wps = nil
-            local away = hrp.Position - k.hrp.Position
-            away = Vector3.new(away.X, 0, away.Z)
-            if away.Magnitude < 0.1 then away = Vector3.new(1, 0, 0) end
-            hum:MoveTo(hrp.Position + fleeDir(ch, hrp, away.Unit) * 40)
-            setLbl(apLbl, "Status: menghindar dari Killer (" .. math.floor(kd) .. "m)")
-            return
+            ap.mode, ap.fleeUntil, ap.fleePt, ap.goalInst = "flee", now + 2.5, nil, nil
         end
-        local goalInst, goalKind, goalD = nil, nil, math.huge
-        for inst in pairs(found.generator) do
-            if inst.Parent then
-                local okG, prog, done = pcall(genProgress, inst)
-                if okG and not done then
-                    local pos = posOf(inst)
-                    if pos then
-                        local d = (pos - hrp.Position).Magnitude
-                        if d < goalD then goalInst, goalKind, goalD = inst, "gen", d end
+        if ap.mode == "flee" and not k then ap.mode, ap.fleePt = "work", nil end
+        if ap.mode == "flee" then
+            if kd <= outR then ap.fleeUntil = math.max(ap.fleeUntil, now + 1) end
+            if now >= ap.fleeUntil then
+                ap.mode, ap.fleePt = "work", nil
+            else
+                apRelease()
+                ap.wps = nil
+                -- titik kabur di-commit ~1.2 detik, bukan dihitung ulang tiap langkah
+                if not ap.fleePt or now - ap.fleeAt > 1.2 or (hrp.Position - ap.fleePt).Magnitude < 4 then
+                    local away = hrp.Position - k.hrp.Position
+                    away = Vector3.new(away.X, 0, away.Z)
+                    if away.Magnitude < 0.1 then away = Vector3.new(1, 0, 0) end
+                    local dir = fleeDir(ch, hrp, away.Unit, ap.fleeVec)
+                    ap.fleeVec, ap.fleePt, ap.fleeAt = dir, hrp.Position + dir * 40, now
+                end
+                hum:MoveTo(ap.fleePt)
+                setLbl(apLbl, "Status: menghindar dari Killer (" .. math.floor(kd) .. "m)")
+                return
+            end
+        end
+        -- pilih target: generator yang AMAN (jauh dari Killer), dan tetep di target yang sama sampai selesai
+        local function safe(p)
+            return not k or (p - k.hrp.Position).Magnitude > ap.flee * 1.1
+        end
+        local goalInst, goalKind, goalD
+        local sticky = ap.goalInst
+        if sticky and sticky.Parent and ap.goalKind == "gen" then
+            local okG, _, done = pcall(genProgress, sticky)
+            local sp = posOf(sticky)
+            if okG and not done and sp and safe(sp) then
+                goalInst, goalKind, goalD = sticky, "gen", (sp - hrp.Position).Magnitude
+            end
+        end
+        local anyGen = false
+        if not goalInst then
+            goalD = math.huge
+            for inst in pairs(found.generator) do
+                if inst.Parent then
+                    local okG, _, done = pcall(genProgress, inst)
+                    if okG and not done then
+                        anyGen = true
+                        local pos = posOf(inst)
+                        if pos and safe(pos) then
+                            local d = (pos - hrp.Position).Magnitude
+                            if d < goalD then goalInst, goalKind, goalD = inst, "gen", d end
+                        end
                     end
                 end
             end
+        else
+            anyGen = true
+        end
+        if not goalInst and anyGen then
+            apRelease()
+            ap.wps = nil
+            hum:MoveTo(hrp.Position)
+            setLbl(apLbl, "Status: semua generator deket Killer, nunggu")
+            return
         end
         if not goalInst then
             for inst in pairs(found.gate) do
@@ -4547,6 +4606,7 @@ xpcall(function()
                 end
             end
         end
+        ap.goalInst, ap.goalKind = goalInst, goalKind
         if not goalInst then
             apRelease()
             setLbl(apLbl, "Status: generator/gate belum ketemu")
@@ -4615,7 +4675,7 @@ xpcall(function()
             if not ap.thread then ap.thread = task.spawn(apLoop) end
         else
             apRelease()
-            ap.wps, ap.goal = nil, nil
+            ap.wps, ap.goal, ap.mode, ap.goalInst, ap.fleePt = nil, nil, "work", nil, nil
             local ch, hum, hrp = myChar()
             if hum then pcall(function() hum:MoveTo(hrp.Position) end) end
             setLbl(apLbl, "Status: mati")
@@ -4971,6 +5031,7 @@ function cleanup()
     pcall(function() if S.svRestore then S.svRestore() end end)
     pcall(function() if S.fvRestore then S.fvRestore() end end)
     pcall(function() if S.keRestore then S.keRestore() end end)
+    pcall(function() if S.parryFlush then S.parryFlush() end end)
     pcall(function() if S.xRestore then S.xRestore() end end)
     for plr in pairs(pvis) do destroyPlayerVis(plr) end
     for inst in pairs(ovis) do destroyObj(inst) end
@@ -4996,5 +5057,5 @@ loadConfig()
 loading = false
 pcall(refreshDash)
 setOpen(true)
-notify("Jìn Script", "Loaded v4.1")
-warn("[jin] v4.1 loaded (tombol HP + dump)")
+notify("Jìn Script", "Loaded v4.2")
+warn("[jin] v4.2 loaded (autoplay state + parry io)")
