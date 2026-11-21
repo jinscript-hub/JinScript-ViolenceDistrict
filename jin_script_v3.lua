@@ -421,7 +421,7 @@ local function genProgress(inst)
             genCache[inst] = nil
         elseif type(v) == "number" then
             local name = c.prog[2] or c.prog[1].Name
-            if v > 1 or name:lower():find("percent", 1, true) then v = v / 100 end
+            if c.pct or v > 1 or name:lower():find("percent", 1, true) then c.pct = true v = v / 100 end
             prog = math.clamp(v, 0, 1)
             if prog >= 0.995 then done = true end
         end
@@ -733,7 +733,7 @@ local function press()
         for _, c in ipairs(getconnections(action.MouseButton1Down)) do
             local f = c.Function
             local ok, sc = pcall(function() return getfenv(f).script end)
-            if f and ok and sc and (sc.Name == "Skillcheck_gen" or sc.Name == "Skillcheck_player") then
+            if f and ok and sc and sc.Name:lower():find("skillcheck", 1, true) then
                 pcall(f); fired = true
             end
         end
@@ -1213,7 +1213,7 @@ local header = new("Frame", {Size = UDim2.new(1, 0, 0, HEAD), BackgroundTranspar
 new("Frame", {Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = T.stroke, BorderSizePixel = 0}, header)
 local ttl = mkLabel(header, "JÌN SCRIPT", 12, T.text, F_BOLD)
 ttl.Position = UDim2.fromOffset(14, 0); ttl.Size = UDim2.fromOffset(78, HEAD - 1)
-local ver = mkLabel(header, "v4.2", 10, T.dim)
+local ver = mkLabel(header, "v4.3", 10, T.dim)
 ver.Position = UDim2.fromOffset(92, 1); ver.Size = UDim2.fromOffset(30, HEAD - 1)
 local closeBtn = new("TextButton", {Size = UDim2.fromOffset(24, 24), AnchorPoint = Vector2.new(1, 0.5),
     Position = UDim2.new(1, -8, 0.5, -1), BackgroundTransparency = 1, Text = "", AutoButtonColor = false}, header)
@@ -3996,7 +3996,7 @@ xpcall(function()
         mw = {latch = false, held = false, rot = false, btn = true, pos = nil, move = false, yaw = nil, t = 0, swing = 28, freq = 8, smooth = 14},
         bp = {on = false, radius = 8, cd = 1.2, last = 0},
         aa = {on = false, range = 10, count = 1, delay = 0.1, cd = 0.8, last = 0, method = "Auto"},
-        ap = {on = false, active = false, btn = nil, btnWho = nil, mode = "work", fleeUntil = 0, fleePt = nil, fleeAt = 0, fleeVec = nil, goalInst = nil, goalKind = nil, flee = 45, goal = nil, wps = nil, wi = 2, pathAt = 0, held = nil, thread = nil, lastPos = nil, lastCheck = 0},
+        ap = {on = false, active = false, btn = nil, btnWho = nil, mode = "work", btnT = 0, btnProg = 0, faced = nil, gateT = nil, fleeUntil = 0, fleePt = nil, fleeAt = 0, fleeVec = nil, goalInst = nil, goalKind = nil, flee = 45, goal = nil, wps = nil, wi = 2, pathAt = 0, held = nil, thread = nil, lastPos = nil, lastCheck = 0},
         ch = {on = false, style = "Plus", size = 12, thick = 2, gap = 4, ox = 0, oy = 0, color = "Putih"},
     }
     S.x = X
@@ -4067,6 +4067,40 @@ xpcall(function()
         return nil
     end
 
+    -- titik berdiri buat repair = part "GeneratorPoint*" di model generator; gate = ExitLever (dari Dump info)
+    local wpCache = setmetatable({}, {__mode = "k"})
+    local function workPoint(inst, kind, from)
+        if kind == "gen" then
+            local c = wpCache[inst]
+            if not c then
+                c = {}
+                local seen = {}
+                for _, d in ipairs(inst:GetDescendants()) do
+                    local part
+                    if d:IsA("BasePart") and d.Name:find("GeneratorPoint", 1, true) then part = d
+                    elseif d:IsA("StringValue") and d.Name == "GeneratorPoint" and d.Parent and d.Parent:IsA("BasePart") then part = d.Parent end
+                    if part and not seen[part] then seen[part] = true c[#c + 1] = part end
+                end
+                wpCache[inst] = c
+            end
+            local best, bd
+            for _, pt in ipairs(c) do
+                if pt.Parent then
+                    local d = Vector3.new(pt.Position.X - from.X, 0, pt.Position.Z - from.Z).Magnitude
+                    if not bd or d < bd then best, bd = pt, d end
+                end
+            end
+            if best then return best.Position, 4 end
+        elseif kind == "gate" then
+            local lever = inst:FindFirstChild("ExitLever")
+            if lever then
+                local ok, pv = pcall(function() return lever:GetPivot().Position end)
+                if ok then return pv, 5 end
+            end
+        end
+        return posOf(inst), 6
+    end
+
     local function pickPrompt(inst, words)
         local list = {}
         for _, d in ipairs(inst:GetDescendants()) do
@@ -4095,7 +4129,7 @@ xpcall(function()
     -- ===== Tombol HP (PlayerGui.*-mob.Controls.*) =====
     -- Game ini jalan lewat tombol mobile (skill check & parry juga lewat sini), jadi interaksi/serang
     -- dipicu dengan manggil handler tombolnya, sama teknik kayak skill check. Handler Skillcheck_* sengaja di-skip.
-    local SKIP_SC = {Skillcheck_gen = true, Skillcheck_player = true}
+    local ONLY_SURV = {SurvivorController = true} -- handler 'action' yang bener2 interaksi (gen/gate/pallet)
     local function findMobBtn(words)
         local gui = lp:FindFirstChild("PlayerGui")
         if not gui then return nil end
@@ -4118,7 +4152,7 @@ xpcall(function()
         end
         return fallback
     end
-    local function btnFire(b, which)
+    local function btnFire(b, which, only)
         local pos = b.AbsolutePosition + b.AbsoluteSize / 2
         local sigs = {Down = {"MouseButton1Down"}, Up = {"MouseButton1Up"},
             Tap = {"MouseButton1Down", "MouseButton1Up", "Activated", "MouseButton1Click"}}
@@ -4133,7 +4167,7 @@ xpcall(function()
                         local f = c.Function
                         local okS, sc = pcall(function() return getfenv(f).script end)
                         local nm = (okS and sc and sc.Name) or "?"
-                        if f and not SKIP_SC[nm] and pcall(f, pos.X, pos.Y) then
+                        if f and not nm:lower():find("skillcheck", 1, true) and (not only or only[nm]) and pcall(f, pos.X, pos.Y) then
                             n = n + 1
                             names[#names + 1] = nm
                         end
@@ -4219,6 +4253,7 @@ xpcall(function()
         if not live then mVal, mWhy = false, "belum ada match"
         elseif okS and spec then mVal, mWhy = false, "lagi spectator"
         elseif watching then mVal, mWhy = false, "lagi nonton orang lain"
+        elseif lp:GetAttribute("RoundSurvivor") == false then mVal, mWhy = false, "bukan survivor ronde ini"
         elseif myRole() ~= "survivor" then mVal, mWhy = false, "bukan Survivor"
         else mVal, mWhy = true, "" end
         return mVal, mWhy
@@ -4534,6 +4569,7 @@ xpcall(function()
         if k and kd <= ap.flee and ap.mode ~= "flee" then
             apRelease()
             ap.mode, ap.fleeUntil, ap.fleePt, ap.goalInst = "flee", now + 2.5, nil, nil
+            ap.gateT, ap.faced = nil, nil
         end
         if ap.mode == "flee" and not k then ap.mode, ap.fleePt = "work", nil end
         if ap.mode == "flee" then
@@ -4612,15 +4648,32 @@ xpcall(function()
             setLbl(apLbl, "Status: generator/gate belum ketemu")
             return
         end
-        local pos = posOf(goalInst)
-        if goalD > 6 then
+        local pos, reach = workPoint(goalInst, goalKind, hrp.Position)
+        pos = pos or posOf(goalInst)
+        local dW = Vector3.new(pos.X - hrp.Position.X, 0, pos.Z - hrp.Position.Z).Magnitude
+        if dW > reach then
             apRelease()
+            ap.faced = nil
             apGoTo(hum, hrp, pos)
             setLbl(apLbl, goalKind == "gen" and "Status: menuju generator" or "Status: menuju exit gate")
             return
         end
         ap.lastPos = nil
-        -- sudah dekat: tahan prompt interaksi selama masih valid
+        -- hadap generator sekali tiap nyampe
+        if goalKind == "gen" and ap.faced ~= goalInst then
+            ap.faced = goalInst
+            local c = posOf(goalInst)
+            if c then pcall(function() hrp.CFrame = CFrame.lookAt(hrp.Position, Vector3.new(c.X, hrp.Position.Y, c.Z)) end) end
+        end
+        -- gate: tuas ditekan, 6 detik kemudian jalan keluar
+        if goalKind == "gate" and not ap.gateT then ap.gateT = now end
+        if goalKind == "gate" and now - ap.gateT > 6 then
+            apRelease()
+            hum:MoveTo(posOf(goalInst) or pos)
+            setLbl(apLbl, "Status: jalan lewat exit gate")
+            return
+        end
+        -- ProximityPrompt kalo ada (di build ini ga ada: interaksi lewat tombol action)
         local p = ap.held
         if not (p and p.Parent and p.Enabled) then
             if p then
@@ -4637,12 +4690,23 @@ xpcall(function()
             end
         end
         if not ap.held then
-            -- ga ada ProximityPrompt -> pencet tombol action HP (Down sekali, Up pas dilepas)
-            local b = findMobBtn(goalKind == "gen" and {"action", "repair", "interact", "fix"} or {"action", "interact", "open", "exit"})
-            if b and ap.btn ~= b then
-                apBtnUp()
-                local n, who = btnFire(b, "Down")
-                if n > 0 then ap.btn, ap.btnWho = b, who end
+            -- tombol action HP -> handler SurvivorController. Ditekan sekali; ditekan lagi HANYA kalo gen ga lagi diperbaiki
+            -- (PlayersRepairingCount = 0, atau progress mandek 3 detik), biar ga ke-toggle bolak-balik.
+            local b = findMobBtn({"action"})
+            if b then
+                local need = ap.btn ~= b
+                if not need and goalKind == "gen" and now - ap.btnT > 1.5 then
+                    local cnt = tonumber(goalInst:GetAttribute("PlayersRepairingCount")) or 0
+                    local pr = select(1, genProgress(goalInst)) or 0
+                    if cnt == 0 or (now - ap.btnT > 3 and pr <= ap.btnProg + 0.0005) then need = true end
+                end
+                if need then
+                    local n, who = btnFire(b, "Down", ONLY_SURV)
+                    if n > 0 then
+                        ap.btn, ap.btnWho, ap.btnT = b, who, now
+                        ap.btnProg = select(1, genProgress(goalInst)) or 0
+                    end
+                end
             end
         elseif ap.btn then
             apBtnUp()
@@ -4650,12 +4714,9 @@ xpcall(function()
         if ap.held or ap.btn then
             local via = ap.btn and (" via tombol " .. ap.btn.Name .. " [" .. tostring(ap.btnWho) .. "]") or ""
             setLbl(apLbl, (goalKind == "gen" and "Status: memperbaiki generator" or "Status: membuka exit gate") .. via)
-        elseif goalKind == "gate" then
-            hum:MoveTo(pos)
-            setLbl(apLbl, "Status: jalan lewat exit gate")
         else
             hum:MoveTo(hrp.Position)
-            setLbl(apLbl, "Status: ga ada prompt/tombol interaksi yang kepencet di " .. goalInst.Name .. " (pake Dump info)")
+            setLbl(apLbl, "Status: tombol action ga kepencet di " .. goalInst.Name .. " (cek Dump info)")
         end
     end
 
@@ -5057,5 +5118,5 @@ loadConfig()
 loading = false
 pcall(refreshDash)
 setOpen(true)
-notify("Jìn Script", "Loaded v4.2")
-warn("[jin] v4.2 loaded (autoplay state + parry io)")
+notify("Jìn Script", "Loaded v4.3")
+warn("[jin] v4.3 loaded (autoplay via dump)")
