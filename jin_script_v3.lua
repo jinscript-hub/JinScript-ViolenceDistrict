@@ -303,8 +303,9 @@ local function makeBB(part, offsetY, h)
     local lbl = Instance.new("TextLabel")
     lbl.Size = UDim2.new(1, 0, 1, 0)
     lbl.BackgroundTransparency = 1
-    lbl.Font = Enum.Font.GothamBold
-    lbl.TextStrokeTransparency = 0.4
+    lbl.Font = Enum.Font.GothamMedium
+    lbl.TextColor3 = Color3.new(1, 1, 1)
+    lbl.TextStrokeTransparency = 0.35
     lbl.Parent = bb
     bb.Parent = espFolder
     return bb, lbl
@@ -463,6 +464,7 @@ local function palletDown(inst)
 end
 S.partOf, S.genProgress, S.palletDown = partOf, genProgress, palletDown
 local objAt, lobbyN = 0, 0
+local ESP_WHITE = Color3.new(1, 1, 1)
 function update()
     local lc = lp.Character
     local lhrp = lc and lc:FindFirstChild("HumanoidRootPart")
@@ -521,10 +523,12 @@ function update()
                 if vk then c = (vk == "lock") and vl.colLock or vl.colFov end
                 v.hl.FillColor, v.hl.OutlineColor = c, c
                 local dist = lhrp and math.floor((hrp.Position - lhrp.Position).Magnitude)
-                local tag = TAG[key]
-                local nameTxt = plr.DisplayName .. (tag and (" [" .. tag .. "]") or "") .. (vk == "lock" and " [LOCK]" or "")
-                setLabel(v.nameBB, v.nameLbl, S.names and nameTxt or "", c, ts)
-                setLabel(v.distBB, v.distLbl, (S.dist and dist) and ("%dm"):format(dist) or "", c, ts)
+                -- satu baris: Display_Name [27M], putih (warna state tetep di highlight)
+                local txt = S.names and plr.DisplayName or ""
+                if S.dist and dist then txt = (txt ~= "" and (txt .. " ") or "") .. ("[%dM]"):format(dist) end
+                if vk == "lock" then txt = txt .. " [LOCK]" end
+                setLabel(v.nameBB, v.nameLbl, txt, ESP_WHITE, ts)
+                setLabel(v.distBB, v.distLbl, "", ESP_WHITE, ts)
             else
                 destroyPlayerVis(plr)
             end
@@ -591,14 +595,17 @@ function update()
                         if o.box.FillColor ~= c then o.box.FillColor, o.box.OutlineColor = c, c end
                         cand[#cand + 1] = {o = o, d = dist or 0}
                         if o.nameBB then
-                            local txt
+                            local ds = (S.objDist and dist) and ("[%dM]"):format(math.floor(dist)) or nil
                             if isGen then
-                                txt = prog and (math.floor(prog * 100 + 0.5) .. "%") or "GEN"
+                                local txt = prog and (math.floor(prog * 100 + 0.5) .. "%") or "GEN"
+                                setLabel(o.nameBB, o.nameLbl, txt, c, ts + 4)
+                                setLabel(o.distBB, o.distLbl, ds or "", ESP_WHITE, ts)
                             else
-                                txt = S.names and CAT[cat].label or ""
+                                local nm = S.names and CAT[cat].label or ""
+                                local txt = ds and (nm ~= "" and (nm .. " " .. ds) or ds) or nm
+                                setLabel(o.nameBB, o.nameLbl, txt, ESP_WHITE, ts)
+                                setLabel(o.distBB, o.distLbl, "", ESP_WHITE, ts)
                             end
-                            setLabel(o.nameBB, o.nameLbl, txt, c, isGen and (ts + 4) or ts)
-                            setLabel(o.distBB, o.distLbl, (S.objDist and dist) and ("%dm"):format(math.floor(dist)) or "", c, ts)
                         end
                     end
                 end
@@ -1217,7 +1224,7 @@ local header = new("Frame", {Size = UDim2.new(1, 0, 0, HEAD), BackgroundTranspar
 new("Frame", {Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = T.stroke, BorderSizePixel = 0}, header)
 local ttl = mkLabel(header, "JÌN SCRIPT", 12, T.text, F_BOLD)
 ttl.Position = UDim2.fromOffset(14, 0); ttl.Size = UDim2.fromOffset(78, HEAD - 1)
-local ver = mkLabel(header, "v4.4", 10, T.dim)
+local ver = mkLabel(header, "v4.5", 10, T.dim)
 ver.Position = UDim2.fromOffset(92, 1); ver.Size = UDim2.fromOffset(30, HEAD - 1)
 local closeBtn = new("TextButton", {Size = UDim2.fromOffset(24, 24), AnchorPoint = Vector2.new(1, 0.5),
     Position = UDim2.new(1, -8, 0.5, -1), BackgroundTransparency = 1, Text = "", AutoButtonColor = false}, header)
@@ -1363,7 +1370,7 @@ local function addTab(name, iconKey, single)
         colList = {c1, c2}
     end
     local t = setmetatable({name = name, btn = btn, ic = ic, bar = bar, page = page, scroll = scroll,
-        cols = colList, nextCol = 1}, Tab)
+        cols = colList, nextCol = 1, load = {0, 0}}, Tab)
     tabList[#tabList + 1] = t
     track(btn.MouseButton1Click:Connect(function() selectTab(t) end))
     track(btn.MouseEnter:Connect(function() if not t.sel then tw(btn, 0.12, {BackgroundTransparency = 0.6}) end end))
@@ -1377,9 +1384,12 @@ local function sectionLabel(parent, text, order)
     return l
 end
 function Tab:Group(titleText, col)
-    col = col or self.nextCol
-    if #self.cols == 1 then col = 1 end
-    self.nextCol = (col == 1) and 2 or 1
+    -- grup diarahin ke sub-tab lewat self.route[judul]; kolom dipilih otomatis (yang paling sepi), argumen `col` diabaikan
+    local rt = self.route and (self.route[titleText] or self.route.default)
+    if rt then return rt:Group(titleText, col) end
+    self.load = self.load or {0, 0}
+    if #self.cols == 1 then col = 1 else col = (self.load[1] <= self.load[2]) and 1 or 2 end
+    self.load[col] = self.load[col] + 1.5
     local holder = new("Frame", {Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
         BackgroundTransparency = 1}, self.cols[col])
     vlist(holder, 6)
@@ -1391,7 +1401,7 @@ function Tab:Group(titleText, col)
     outline(card)
     pad(card, 10, 10, 10, 10)
     vlist(card, 8)
-    return setmetatable({body = card, tab = self, order = 0}, Card)
+    return setmetatable({body = card, tab = self, order = 0, col = col}, Card)
 end
 function Tab:SelectSub(sub)
     for _, o in ipairs(self.subs) do
@@ -1426,7 +1436,7 @@ function Tab:Sub(name)
     local btn = new("TextButton", {Size = UDim2.fromOffset(#name * 7 + 24, 24), BackgroundColor3 = T.sel, BackgroundTransparency = 1,
         Text = name, TextSize = 12, Font = F_BOLD, TextColor3 = T.dim, AutoButtonColor = false, LayoutOrder = #self.subs + 1}, self.strip)
     round(btn, 12)
-    local sub = setmetatable({cols = {c1, c2}, nextCol = 1, frame = frame, btn = btn, scroll = self.scroll}, Tab)
+    local sub = setmetatable({cols = {c1, c2}, nextCol = 1, load = {0, 0}, frame = frame, btn = btn, scroll = self.scroll}, Tab)
     self.subs[#self.subs + 1] = sub
     local owner = self
     track(btn.MouseButton1Click:Connect(function() owner:SelectSub(sub) end))
@@ -1436,6 +1446,8 @@ function Tab:Sub(name)
     return sub
 end
 function Card:nextOrder()
+    local t = self.tab
+    if t and t.load and self.col then t.load[self.col] = t.load[self.col] + 1 end
     self.order = self.order + 2
     return self.order
 end
@@ -1619,6 +1631,27 @@ tKill = addTab("Killer", "blade")
 local tESP = addTab("ESP", "eye")
 tMisc = addTab("Misc", "sliders")
 tSet = addTab("Settings", "gear")
+do
+    local sA, sC, sM = tSurv:Sub("Auto"), tSurv:Sub("Combat"), tSurv:Sub("Gerak")
+    tSurv.route = {
+        ["Auto skill check"] = sA, ["Auto Play (survivor)"] = sA,
+        ["Auto parry (Dagger)"] = sC, ["Silent aim (Twist of Fate)"] = sC,
+        ["Movement"] = sM, default = sA,
+    }
+    local kV, kC, kI = tKill:Sub("Veil"), tKill:Sub("Combat"), tKill:Sub("Info")
+    tKill.route = {
+        ["Silent Veil (tombak)"] = kV, ["Veil lock"] = kV,
+        ["Killer extras"] = kC, ["Auto break pallet"] = kC, ["Auto attack"] = kC,
+        ["Prediksi killer berikutnya"] = kI, default = kC,
+    }
+    local mV, mP, mF = tMisc:Sub("View"), tMisc:Sub("Performa"), tMisc:Sub("Fun")
+    tMisc.route = {
+        ["View"] = mV, ["Fullbright"] = mV, ["Crosshair custom"] = mV,
+        ["Anti lag: efek"] = mP, ["Anti lag: map"] = mP,
+        ["Fun menu"] = mF, ["Speed boost"] = mF,
+        ["Debug"] = tSet, default = mV,
+    }
+end
 do
 local homeCol = tHome.cols[1]
 local selectedUid = lp.UserId
@@ -1827,9 +1860,9 @@ do
     local cRange = sW:Group("Jarak", 2)
     cRange:Slider("ESP_MaxDist", "Jarak max objek (0 = bebas)", 0, 3000, 600, 50, function(v) S.maxDist = v end, "m")
     local cLbl = sD:Group("Label", 1)
-    cLbl:Toggle("ESP_Names", "Nama (di atas)", true, function(v) S.names = v end)
-    cLbl:Toggle("ESP_Dist", "Jarak player (di bawah)", true, function(v) S.dist = v end)
-    cLbl:Toggle("ESP_ObjDist", "Meter objek (jarak)", false, function(v) S.objDist = v end)
+    cLbl:Toggle("ESP_Names", "Nama", true, function(v) S.names = v end)
+    cLbl:Toggle("ESP_Dist", "Jarak player [27M]", true, function(v) S.dist = v end)
+    cLbl:Toggle("ESP_ObjDist", "Jarak objek [27M]", false, function(v) S.objDist = v end)
     cLbl:Label("Generator: persen selalu tampil di tengah.")
     cLbl:Slider("ESP_TextSize", "Ukuran teks", 10, 24, 13, 1, function(v) S.textSize = v end)
     local cCone = sP:Group("Area liat killer (tanah)", 2)
@@ -1889,7 +1922,13 @@ do local function parryInit()
     local NOT_SWING = {["117070354890871"] = true, ["81198376178242"] = true, ["70719237641923"] = true, ["78196404793645"] = true, ["108286715411226"] = true, ["75857500533792"] = true,
         ["77303734522729"] = true, ["101443662521580"] = true, ["127622545856523"] = true, ["129669521834246"] = true, ["79809716042968"] = true, ["87436543050891"] = true, ["84404617799721"] = true}
     local cPar = tSurv:Group("Auto parry (Dagger)", 2)
-    cPar:Toggle("PAR_On", "Auto Parry", false, function(v) S.parry.on = v end)
+    cPar:Toggle("PAR_On", "Auto Parry", false, function(v)
+        S.parry.on = v
+        if v and S.sa and S.sa.on and Reg.SA_On then
+            Reg.SA_On.set(false)
+            notify("Auto parry", "Silent aim dimatiin (item beda)")
+        end
+    end)
     S.parry.pre = false
     S.parry.aimGate, S.parry.aimMin, S.parry.closeMin = false, -0.25, 8
     S.parry.rayGate, S.parry.rayTol, S.parry.zoneManual, S.parry.rayMinD = false, 4, false, 5
@@ -3048,6 +3087,10 @@ do
 
     cSA:Toggle("SA_On", "Silent aim", false, function(v)
         S.sa.on = v
+        if v and S.parry and S.parry.on and Reg.PAR_On then
+            Reg.PAR_On.set(false)
+            notify("Silent aim", "Auto parry dimatiin (item beda)")
+        end
         saSay(v and "ON, nunggu tembakan" or "Status: OFF")
         updRing()
     end)
@@ -3696,7 +3739,7 @@ end)
 do
     -- Silent Veil: lemparan tombak Veil otomatis ngarah ke survivor (hook remote SpearThrow).
     -- Arah dikunci pas tombak dilempar (prediksi gerak + kompensasi gravitasi), bukan belok di tengah jalan.
-    S.sv = {on = false, angle = 180, range = 400, predict = true, los = true}
+    S.sv = {on = false, angle = 180, range = 400, predict = true, los = true, holdOn = true, hold = 2.5}
     local SPEAR_SPEED, DROP, SPAWN_OFF = 180, 0.5, 3
     local cSV = tKill:Group("Silent Veil (tombak)", 1)
     local svLbl = cSV:Label("Status: OFF")
@@ -3714,7 +3757,9 @@ do
     cSV:Slider("SV_Range", "Jarak max target", 50, 500, 400, 10, function(v) S.sv.range = v end, "m")
     cSV:Toggle("SV_Predict", "Prediksi gerak survivor", true, function(v) S.sv.predict = v end)
     cSV:Toggle("SV_LOS", "Utamakan yang ga ketutup", true, function(v) S.sv.los = v end)
-    cSV:Label("Dipakai pas main jadi Veil. Arah tombak dikunci pas dilempar.")
+    cSV:Toggle("SV_Hold", "Lock cuma kalo tombol lempar ditahan", true, function(v) S.sv.holdOn = v end)
+    cSV:Slider("SV_HoldT", "Tahan minimal", 0.5, 5, 2.5, 0.5, function(v) S.sv.hold = v end, "dtk")
+    cSV:Label("Dipakai pas main jadi Veil. Lemparan yang ditahan kurang dari batas = lemparan biasa.")
 
     local function alive(ch)
         local h = ch and ch:FindFirstChildOfClass("Humanoid")
@@ -3787,6 +3832,14 @@ do
         return v.Unit
     end
 
+    -- dipakai Veil lock: target yang bakal dipilih Silent Veil (biar tampilan = perilaku)
+    S.svTarget = function()
+        local cam = workspace.CurrentCamera
+        if not cam then return nil end
+        local origin = cam.CFrame.Position + cam.CFrame.LookVector * SPAWN_OFF
+        local hrp, _, dist = pickTarget(origin)
+        return hrp, dist
+    end
     local svOld
     local wrap = newcclosure or function(f) return f end
     if hookmetamethod and getnamecallmethod then
@@ -3798,6 +3851,11 @@ do
                 local args = table.pack(...)
                 pcall(function()
                     if not veilEquipped(lp.Character) then svSay("Lolos asli: tombak Veil ga kedeteksi") return end
+                    if S.sv.holdOn then
+                        local hd = S.holdDur and S.holdDur()
+                        if not hd then svSay("Lolos asli: tombol lempar ga kedeteksi (grup Veil lock > Rekam tombol)") return end
+                        if hd < S.sv.hold then svSay(("Lolos asli: ditahan %.1f dtk (min %.1f)"):format(hd, S.sv.hold)) return end
+                    end
                     local cam = workspace.CurrentCamera
                     local a1 = args[1]
                     local origin
@@ -4993,14 +5051,104 @@ xpcall(function()
     end
 end, function(e) warn("[jin] Extras gagal dipasang: " .. tostring(e)) end)
 
--- ===== Veil lock: survivor yang masuk lingkaran FOV (POV kamera) ESP-nya berubah warna + [LOCK] =====
--- Visual aja (kayak lingkaran FOV silent aim), ga ngubah arah bidik/lemparan.
+-- ===== Veil lock: ESP target ke-LOCK setelah tombol lempar tombak ditahan >= batas =====
+-- Target = survivor yang bakal dipilih Silent Veil. Lingkaran = sudut bidik Silent Veil. Visual aja (ESP + lingkaran).
 xpcall(function()
     local RSv = game:GetService("RunService")
+    local UISv = game:GetService("UserInputService")
+
+    -- ---------- pelacak tahan tombol lempar ----------
+    local H = {t0 = nil, t1 = nil, name = nil, learn = nil, learning = false}
+    S.hold = H
+    local LFILE = BASE .. "spearbtn.txt"
+    if isfile and readfile then
+        local okF, has = pcall(isfile, LFILE)
+        if okF and has then
+            local okR, t = pcall(readfile, LFILE)
+            if okR and type(t) == "string" and t ~= "" then H.learn = t end
+        end
+    end
+    -- tombol HP yang jelas bukan lempar tombak
+    local EXCL = {"survivor", "attack", "atk", "vault", "drop", "crouch", "sprint", "emote", "chat", "interact", "carry", "hook", "jump", "menu", "pause"}
+    local function candidate(id)
+        if H.learn then return id == H.learn end
+        if id:sub(1, 4) == "key:" then return true end
+        local n = id:lower()
+        for _, w in ipairs(EXCL) do
+            if n:find(w, 1, true) then return false end
+        end
+        return true
+    end
+    local function pressed(id)
+        if H.learning then
+            H.learning = false
+            H.learn = id
+            if writefile then pcall(writefile, LFILE, id) end
+            notify("Veil lock", "Tombol lempar direkam: " .. id)
+            return
+        end
+        if candidate(id) then H.t0, H.t1, H.name = os.clock(), nil, id end
+    end
+    local function released(id)
+        if H.name == id and H.t0 and not H.t1 then H.t1 = os.clock() end
+    end
+    local hooked = setmetatable({}, {__mode = "k"})
+    local function hookBtn(b)
+        if hooked[b] or not b:IsA("GuiButton") then return end
+        local g = b:FindFirstAncestorOfClass("ScreenGui")
+        if not (g and g.Name:lower():find("mob", 1, true)) then return end
+        hooked[b] = true
+        local id = "btn:" .. (b:GetFullName():gsub("^.*PlayerGui%.", ""))
+        b.InputBegan:Connect(function(i)
+            local t = i.UserInputType
+            if t == Enum.UserInputType.Touch or t == Enum.UserInputType.MouseButton1 then pressed(id) end
+        end)
+        b.InputEnded:Connect(function(i)
+            local t = i.UserInputType
+            if t == Enum.UserInputType.Touch or t == Enum.UserInputType.MouseButton1 then released(id) end
+        end)
+    end
+    local function scanMob()
+        for _, g in ipairs(pg:GetChildren()) do
+            if g:IsA("ScreenGui") and g.Name:lower():find("mob", 1, true) then
+                for _, d in ipairs(g:GetDescendants()) do hookBtn(d) end
+            end
+        end
+    end
+    scanMob()
+    track(pg.DescendantAdded:Connect(function(d) if d:IsA("GuiButton") then task.defer(hookBtn, d) end end))
+    task.spawn(function()
+        while running do task.wait(6) pcall(scanMob) end
+    end)
+    -- keyboard / gamepad: tombol ability dari atribut player (kb_ability1/2, pad_ability1/2)
+    local function keyId(i)
+        for _, a in ipairs({"kb_ability1", "kb_ability2", "pad_ability1", "pad_ability2"}) do
+            local v = lp:GetAttribute(a)
+            if type(v) == "string" and v ~= "" and (i.UserInputType.Name == v or i.KeyCode.Name == v) then return "key:" .. v end
+        end
+        return nil
+    end
+    track(UISv.InputBegan:Connect(function(i) local k = keyId(i) if k then pressed(k) end end))
+    track(UISv.InputEnded:Connect(function(i) local k = keyId(i) if k then released(k) end end))
+    -- durasi tahan (detik), nil kalo ga ada tahan yang relevan. held = masih ditahan
+    function H.dur()
+        if not H.t0 then return nil end
+        local now = os.clock()
+        if not H.t1 then
+            local d = now - H.t0
+            if d > 15 then return nil end -- event lepas ilang -> anggap basi
+            return d, true
+        end
+        if now - H.t1 < 0.7 then return H.t1 - H.t0, false end
+        return nil
+    end
+    S.holdDur = function() return (H.dur()) end
+
+    -- ---------- visual ----------
     local VL = {
-        on = false, show = true, veilOnly = false, fov = 180,
-        colLock = Color3.fromRGB(255, 45, 45), colFov = Color3.fromRGB(255, 175, 40),
-        set = {},
+        on = false, show = true, veilOnly = false,
+        colLock = Color3.fromRGB(255, 45, 45), colFov = Color3.fromRGB(255, 255, 255),
+        set = {}, tgt = nil,
     }
     S.vlock = VL
     local gui, circ, stroke
@@ -5020,30 +5168,37 @@ xpcall(function()
         local f = Instance.new("Frame")
         f.AnchorPoint = Vector2.new(0.5, 0.5)
         f.Position = UDim2.fromScale(0.5, 0.5)
-        f.Size = UDim2.fromOffset(VL.fov * 2, VL.fov * 2)
+        f.Size = UDim2.fromOffset(200, 200)
         f.BackgroundTransparency = 1
         f.BorderSizePixel = 0
         f.Visible = false
+        pcall(function() f.Interactable = false end)
         local uc = Instance.new("UICorner")
         uc.CornerRadius = UDim.new(0.5, 0)
         uc.Parent = f
         local st = Instance.new("UIStroke")
         st.Thickness = 2
-        st.Transparency = 0.15
+        st.Transparency = 0.25
         st.Color = VL.colFov
         st.Parent = f
         f.Parent = g
         gui, circ, stroke = g, f, st
     end
-
+    -- radius px dari sudut bidik Silent Veil (sudut kamera -> piksel)
+    local function circR()
+        local cam = workspace.CurrentCamera
+        if not cam then return 150 end
+        local vp = cam.ViewportSize
+        local half = math.rad(math.clamp(S.sv.angle, 10, 175) / 2)
+        local fv = math.rad(math.clamp(cam.FieldOfView, 20, 120) / 2)
+        local r = (vp.Y / 2) * math.tan(half) / math.tan(fv)
+        return math.clamp(r, 40, math.min(vp.X, vp.Y) / 2 * 0.95)
+    end
     local function paint(plr, st)
         local v = pvis[plr]
         if not (v and v.hl and v.hl.Parent) then return end
-        local c = st == "lock" and VL.colLock or (st == "fov" and VL.colFov) or v.baseCol
-        if c then
-            v.hl.FillColor, v.hl.OutlineColor = c, c
-            v.nameLbl.TextColor3, v.distLbl.TextColor3 = c, c
-        end
+        local c = (st == "lock") and VL.colLock or v.baseCol
+        if c then v.hl.FillColor, v.hl.OutlineColor = c, c end
     end
 
     local actAt, actV = 0, false
@@ -5056,9 +5211,8 @@ xpcall(function()
         return actV
     end
 
-    local vlLbl
-    local lastTxt = ""
-    local lastT = 0
+    local vlLbl, infoLbl
+    local lastTxt, lastInfo, lastT, pickT = "", "", 0, 0
     track(RSv.RenderStepped:Connect(function()
         local now = os.clock()
         if now - lastT < 0.033 then return end
@@ -5072,52 +5226,73 @@ xpcall(function()
             end
             return
         end
-        local cam = workspace.CurrentCamera
-        if not cam then return end
-        local vp = cam.ViewportSize
-        local center = Vector2.new(vp.X / 2, vp.Y / 2)
-        local newSet, best, bestD = {}, nil, math.huge
-        for plr, v in pairs(pvis) do
-            local hrp = v.char and v.char:FindFirstChild("HumanoidRootPart")
-            if hrp and roleOf(plr) ~= "killer" then
-                local p3, on = cam:WorldToViewportPoint(hrp.Position)
-                if on and p3.Z > 0 then
-                    local d = (Vector2.new(p3.X, p3.Y) - center).Magnitude
-                    if d <= VL.fov then
-                        newSet[plr] = "fov"
-                        if d < bestD then best, bestD = plr, d end
-                    end
-                end
+        local hd, held = H.dur()
+        local need = S.sv.holdOn and S.sv.hold or 0
+        local charging = held and hd ~= nil
+        local locked = (need == 0) or (charging and hd >= need)
+        local newSet = {}
+        if locked then
+            if now - pickT > 0.12 then
+                pickT = now
+                local hrp = S.svTarget and S.svTarget()
+                VL.tgt = hrp and hrp.Parent and Players:GetPlayerFromCharacter(hrp.Parent) or nil
             end
+            if VL.tgt and pvis[VL.tgt] then newSet[VL.tgt] = "lock" end
+        else
+            VL.tgt = nil
         end
-        if best then newSet[best] = "lock" end
         local old = VL.set
         VL.set = newSet
         for plr, st in pairs(newSet) do if old[plr] ~= st then paint(plr, st) end end
         for plr in pairs(old) do if not newSet[plr] then paint(plr, nil) end end
         if circ then
             circ.Visible = true
-            local c = best and VL.colLock or VL.colFov
+            local r = circR()
+            if math.abs(circ.AbsoluteSize.X / 2 - r) > 2 then circ.Size = UDim2.fromOffset(r * 2, r * 2) end
+            local c = VL.colFov
+            if locked and need > 0 then c = VL.colLock
+            elseif charging and need > 0 then c = VL.colFov:Lerp(VL.colLock, math.clamp(hd / need, 0, 1)) end
             if stroke.Color ~= c then stroke.Color = c end
         end
         if vlLbl then
-            local t = best and ("Lock: " .. best.DisplayName) or "Lock: -"
+            local t
+            if next(newSet) then
+                local nm = VL.tgt and VL.tgt.DisplayName or "?"
+                t = "LOCK: " .. nm
+            elseif charging and need > 0 then
+                t = ("Nahan: %.1f / %.1f dtk"):format(hd, need)
+            elseif locked then
+                t = "Lock: ga ada target"
+            else
+                t = "Siap: tahan tombol lempar"
+            end
             if t ~= lastTxt then lastTxt = t vlLbl.Text = t end
+        end
+        if infoLbl then
+            local t = "Tombol: " .. tostring(H.learn or H.name or "auto (belum kedeteksi)")
+            if t ~= lastInfo then lastInfo = t infoLbl.Text = t end
         end
     end))
 
+    -- ---------- UI ----------
     local cVL = tKill:Group("Veil lock", 2)
-    cVL:Toggle("VL_On", "Veil lock (ESP ke-lock + lingkaran FOV)", false, function(v) VL.on = v actAt = 0 end,
+    cVL:Toggle("VL_On", "ESP lock + lingkaran FOV", false, function(v) VL.on = v actAt = 0 end,
         {id = "VL_ColLock", default = VL.colLock, cb = function(c) VL.colLock = c end})
-    cVL:Toggle("VL_Show", "Tampilkan lingkaran FOV", true, function(v) VL.show = v circBuild() end,
+    cVL:Toggle("VL_Show", "Tampilkan lingkaran", true, function(v) VL.show = v circBuild() end,
         {id = "VL_ColFov", default = VL.colFov, cb = function(c) VL.colFov = c if stroke then stroke.Color = c end end})
     cVL:Toggle("VL_Veil", "Cuma pas lu Killer Veil", false, function(v) VL.veilOnly = v actAt = 0 end)
-    cVL:Slider("VL_Fov", "Radius FOV", 60, 450, 180, 10, function(v)
-        VL.fov = v
-        if circ then circ.Size = UDim2.fromOffset(v * 2, v * 2) end
-    end, "px")
-    vlLbl = cVL:Label("Lock: -")
-    cVL:Label("Aktif pas lu Killer. Survivor dalam lingkaran = kuning, yang paling tengah = merah [LOCK].")
+    vlLbl = cVL:Label("Siap: tahan tombol lempar")
+    infoLbl = cVL:Label("Tombol: auto (belum kedeteksi)")
+    cVL:Button("Rekam tombol lempar (tekan sekali)", function()
+        H.learning = true
+        notify("Veil lock", "Sekarang tekan tombol lempar tombak")
+    end)
+    cVL:Button("Hapus rekaman tombol", function()
+        H.learn = nil
+        if delfile then pcall(delfile, LFILE) end
+        notify("Veil lock", "Rekaman dihapus (balik auto)")
+    end)
+    cVL:Label("Lingkaran = sudut bidik Silent Veil. Lock muncul setelah tombol lempar ditahan >= batas (atur di Silent Veil).")
     circBuild()
 
     local prevRestore = S.xRestore
@@ -5258,5 +5433,5 @@ loadConfig()
 loading = false
 pcall(refreshDash)
 setOpen(true)
-notify("Jìn Script", "Loaded v4.4")
-warn("[jin] v4.4 loaded (veil lock)")
+notify("Jìn Script", "Loaded v4.5")
+warn("[jin] v4.5 loaded (ui rombak + veil hold)")
