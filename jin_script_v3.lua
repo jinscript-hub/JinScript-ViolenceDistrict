@@ -2003,6 +2003,66 @@ do local function parryInit()
         "73681849513551", "100014992013740",
     }) do ATTACK_ANIMS[id] = true end
     local EARLY_ANIMS = {["125430111937587"] = 0.048, ["127417297154354"] = 0.036}
+    -- Killer Matchup: delay bawaan (detik) + BonusDist (stud) per killer. Killer ga dikenal -> "killer" (umum).
+    local KDELAY = {killer = 0.04, abysswalker = 0.12, hidden = 0, masked = 0.05, stalker = 0, veil = 0.04, slasher = 0.05, cure = 0.03}
+    local KBONUS = {killer = 1, abysswalker = 3.5, veil = 3.2, hidden = 2.2, cure = 2, stalker = 1.8, masked = 1.5, slasher = 1.2}
+    local KPAT = {{"abysswalker", "abyss"}, {"hidden", "hidden"}, {"masked", "masked"}, {"stalker", "stalker"}, {"veil", "veil"}, {"slasher", "slasher"}, {"cure", "cure"}}
+    local kKeyC = setmetatable({}, {__mode = "k"})
+    -- nama killer dibaca dari atribut MorphedKiller / SelectedKiller (char atau player). FILL: kalau di game atributnya beda, status parry bakal nulis "(killer)" terus.
+    local function killerKey(k)
+        local now, c = os.clock(), kKeyC[k.char]
+        if c and now - c.t < 0.5 then return c.key end
+        local pl = Players:GetPlayerFromCharacter(k.char)
+        local cand = {k.char:GetAttribute("MorphedKiller"), k.char:GetAttribute("SelectedKiller"), pl and pl:GetAttribute("SelectedKiller"), pl and pl:GetAttribute("MorphedKiller")}
+        local key = "killer"
+        for i = 1, 4 do
+            local v = cand[i]
+            if type(v) == "string" then
+                local lv = v:lower()
+                for _, e in ipairs(KPAT) do
+                    if lv:find(e[2], 1, true) then key = e[1] break end
+                end
+                if key ~= "killer" then break end
+            end
+        end
+        kKeyC[k.char] = {key = key, t = now}
+        return key
+    end
+    local function kDelay(k)
+        local P = S.parry
+        local base = P.match and (KDELAY[killerKey(k)] or KDELAY.killer) or 0
+        return math.max(0, base + (P.delayOff or 0))
+    end
+    local function killerStunned(k)
+        local c = k.char
+        return c and (c:GetAttribute("IsStunned") or c:GetAttribute("Stunned")) and true or false
+    end
+    local function stunTag(k)
+        local c = k.char
+        local part = c and (c:FindFirstChild("Head") or k.hrp)
+        if not part then return end
+        local bb = Instance.new("BillboardGui")
+        bb.Size = UDim2.fromOffset(160, 30)
+        bb.StudsOffset = Vector3.new(0, 3.2, 0)
+        bb.AlwaysOnTop = true
+        bb.LightInfluence = 0
+        bb.Adornee = part
+        local lbl = Instance.new("TextLabel")
+        lbl.Size = UDim2.new(1, 0, 1, 0)
+        lbl.BackgroundTransparency = 1
+        lbl.Font = Enum.Font.GothamBold
+        lbl.Text = "STUN!"
+        lbl.TextSize = 20
+        lbl.TextColor3 = Color3.new(1, 1, 1)
+        lbl.TextStrokeTransparency = 0.35
+        lbl.Parent = bb
+        attach(bb)
+        return bb
+    end
+    local function kZone(k)
+        local P = S.parry
+        return P.dist + (P.match and (KBONUS[killerKey(k)] or KBONUS.killer) or 0)
+    end
     local NOT_SWING = {["117070354890871"] = true, ["81198376178242"] = true, ["70719237641923"] = true, ["78196404793645"] = true, ["108286715411226"] = true, ["75857500533792"] = true,
         ["77303734522729"] = true, ["101443662521580"] = true, ["127622545856523"] = true, ["129669521834246"] = true, ["79809716042968"] = true, ["87436543050891"] = true, ["84404617799721"] = true}
     local cPar = tSurv:Group("Auto parry (Dagger)", 2)
@@ -2017,6 +2077,10 @@ do local function parryInit()
     S.parry.aimGate, S.parry.aimMin, S.parry.closeMin = false, -0.25, 8
     S.parry.rayGate, S.parry.rayTol, S.parry.zoneManual, S.parry.rayMinD = false, 4, false, 5
     cPar:Slider("PAR_Zone", "Jarak zona parry", 4, 25, 14, 1, function(v) S.parry.dist = v end, "m")
+    S.parry.match, S.parry.delayOff = true, 0
+    cPar:Toggle("PAR_Match", "Killer Matchup", true, function(v) S.parry.match = v end)
+    cPar:Slider("PAR_DelayOff", "Tambah / kurang delay", -0.15, 0.2, 0, 0.01, function(v) S.parry.delayOff = v end, "dtk")
+    cPar:Label("Matchup: delay + BonusDist per killer. Delay ditambah slider, hasil akhir min 0.")
     cPar:Toggle("PAR_Bait", "Anti rege bait", true, function(v) S.parry.baitCheck = v end)
     cPar:Label("Skip parry kalau kamera killer ngebelakangi.")
     S.parry.zoneMax, S.parry.swingDot = 22, 0
@@ -2515,6 +2579,23 @@ do local function parryInit()
                 local pd = {id = id, front = front, t = os.clock()}
                 P.pending = pd
                 task.delay(0.9, function() resolvePending(pd) end)
+                if k and k.char then
+                    task.spawn(function()
+                        local tEnd = os.clock() + 1.5
+                        while running and os.clock() < tEnd do
+                            task.wait(0.05)
+                            if killerStunned(k) then
+                                P.res = "parry kena: killer " .. tostring(k.char.Name) .. " ke-stun"
+                                P.resT = os.clock()
+                                local bb = stunTag(k)
+                                local tS = os.clock()
+                                while running and killerStunned(k) and os.clock() - tS < 4 do task.wait(0.1) end
+                                if bb then pcall(bb.Destroy, bb) end
+                                break
+                            end
+                        end
+                    end)
+                end
             else
                 if since then
                     P.cdLo = math.max(P.cdLo, since + 0.25)
@@ -2527,6 +2608,17 @@ do local function parryInit()
             P.resT = os.clock()
         end)
         if PARRY_LOG or PARRY_DEBUG then plog("FIRE", reason, "id", id, "| sejak anim mulai", P.animT and ("%.3fs"):format(t0 - P.animT) or "-", "| ping", pcall(function() return lp:GetNetworkPing() end) and ("%.3f"):format(lp:GetNetworkPing()) or "?", "| char:", attrDump(ch)) end
+    end
+    local function fireDelayed(reason, k, id, dly)
+        if dly <= 0.004 then return tryFire(reason, k, id) end
+        local tq = os.clock()
+        task.delay(dly, function()
+            local P = S.parry
+            if not (running and P.on and k.hrp.Parent) then return end
+            if (P.lastHitT or 0) > tq then return end
+            if os.clock() - (P.firedT or 0) < 0.35 then return end
+            tryFire(reason, k, id)
+        end)
     end
     local SWING_PRIO = {
         [Enum.AnimationPriority.Action] = true, [Enum.AnimationPriority.Action2] = true,
@@ -2605,7 +2697,7 @@ do local function parryInit()
         local up = hrp.Position + Vector3.new(uv.X, 0, uv.Z) * tRem
         local d = Vector3.new(up.X - kp.X, 0, up.Z - kp.Z).Magnitude
         local dot = aimDot(aimOf(k), kp, up)
-        return d <= P.dist and (dot >= P.hitDot or d <= 2.5), d, dot
+        return d <= kZone(k) and (dot >= P.hitDot or d <= 2.5), d, dot
     end
     local hooked = setmetatable({}, {__mode = "k"})
     local hookedChar = setmetatable({}, {__mode = "k"})
@@ -2687,10 +2779,11 @@ do local function parryInit()
                 local needE = math.min(pingE, 0.25) + startupEst()
                 local hitInE = ((P.earlyKs and P.earlyKs[id]) or EARLY_ANIMS[id]) * d
                 local missE = P.rayGate and rayMiss(k, hrp.Position) or 0
-                local zoneE = P.dist
+                local zoneE = kZone(k)
                 if d > zoneE then whyE = ("ancang-ancang tapi killer %.0fm (> zona %.0fm)"):format(d, zoneE)
                 elseif P.rayGate and missE > P.rayTol * 1.5 and d > P.rayMinD then whyE = ("ancang-ancang tapi garis bidik meleset %.1fm (toleransi %.1f x1.5)"):format(missE, P.rayTol)
                 elseif not (chasingUs or d <= 10) then whyE = ("ancang-ancang tapi killer ga ngejar kita (%.0fm)"):format(d)
+                elseif killerStunned(k) then whyE = "ancang-ancang tapi killer lagi stun"
                 elseif nowE - (P.lastHitT or 0) < 0.3 then whyE = "ancang-ancang tapi baru abis hit"
                 elseif P.lateSkip and hitInE < needE - 0.03 then whyE = ("ancang-ancang tapi pasti telat: ancang->hit ~%.2fs < latensi parry %.2fs (dagger dihemat)"):format(hitInE, needE) end
                 plog("EARLY anim", id, ("| %.1fm | ngejar kita %s | ->"):format(d, tostring(chasingUs and true or false)), whyE and ("SKIP: " .. whyE) or "TEMBAK")
@@ -2698,7 +2791,7 @@ do local function parryInit()
                 P.lastEval = nil
                 P.early = {id = id, t = nowE, d = d, k = k}
                 if not (P.human or P.baitCheck) then
-                    tryFire("ancang-ancang", k, id)
+                    fireDelayed("ancang-ancang", k, id, kDelay(k))
                     return
                 end
                 local ping = 0
@@ -2733,8 +2826,8 @@ do local function parryInit()
             local toUs = off.Unit
             local known = ATTACK_ANIMS[id] or learned[id]
             local closing = (k.hrp.AssemblyLinearVelocity - hrp.AssemblyLinearVelocity):Dot(toUs)
-            local base = P.dist
-            local reach = P.dist
+            local base = kZone(k)
+            local reach = base
             local why
             if NOT_SWING[id] then why = "anim " .. id .. " = recovery / bukan serangan"
             elseif not (known or (P.detect and looksLikeSwing(tr))) then why = "anim " .. id .. " ga dikenal sbg serangan"
@@ -2743,6 +2836,7 @@ do local function parryInit()
             elseif not known and (k.char:GetAttribute("IsCarrying") or k.char:GetAttribute("Immobile") or k.char:GetAttribute("IsStunned")) then why = "tebakan: killer lagi bawa / ga gerak / stun"
             elseif not known and not (k.char:GetAttribute("IsChasing") and k.char:GetAttribute("ChaseTargetUserId") == lp.UserId) then
                 why = "tebakan: killer ga lagi ngejar kita"
+            elseif killerStunned(k) then why = "killer lagi stun (ga bisa nyerang)"
             elseif d > reach then why = ("killer %.0fm, di luar jarak (reach %.0fm)"):format(d, reach) P.lastSkip = {id = id, t = os.clock(), d = d}
             else
                 local ok, w = targetsUs(k, hrp)
@@ -2766,7 +2860,7 @@ do local function parryInit()
                 if not h2 then return end
                 local ok2, d2, dot2 = willHit(k, h2, HIT_T - EVAL_DELAY, id)
                 P2.lastEval = {id = id, t = os.clock(), d = d2, dot = dot2}
-                plog("EVAL anim", id, ("| d_prediksi %.1f (range %.1f) | dot %.2f (min %.2f) | jarak skrg %.1f | ->"):format(d2, P2.dist, dot2, P2.hitDot, (h2.Position - k.hrp.Position).Magnitude), (ok2 or not P2.hitOnly) and "TEMBAK" or "SKIP (ga bakal kena)")
+                plog("EVAL anim", id, ("| d_prediksi %.1f (range %.1f) | dot %.2f (min %.2f) | jarak skrg %.1f | ->"):format(d2, kZone(k), dot2, P2.hitDot, (h2.Position - k.hrp.Position).Magnitude), (ok2 or not P2.hitOnly) and "TEMBAK" or "SKIP (ga bakal kena)")
                 if P2.rayGate then
                     local offv = h2.Position - k.hrp.Position
                     local closing2 = 0
@@ -2807,7 +2901,7 @@ do local function parryInit()
                     return
                 end
                 if P2.hitOnly and not ok2 then
-                    P2.why, P2.whyT = ("ayunan diprediksi meleset (d %.1f > %.1f / dot %.2f)"):format(d2, P2.dist, dot2), os.clock()
+                    P2.why, P2.whyT = ("ayunan diprediksi meleset (d %.1f > %.1f / dot %.2f)"):format(d2, kZone(k), dot2), os.clock()
                     P2.whyK, P2.whyKT = P2.why, P2.whyT
                     return
                 end
@@ -2825,7 +2919,7 @@ do local function parryInit()
                         return
                     end
                 end
-                tryFire(reason, k, id)
+                fireDelayed(reason, k, id, kDelay(k))
             end
             if EVAL_DELAY > 0 then task.delay(EVAL_DELAY, evalFire) else evalFire() end
         end))
@@ -2941,12 +3035,12 @@ do local function parryInit()
         if not ch then render("Status: " .. hum) return end
         local ping = 0
         pcall(function() ping = lp:GetNetworkPing() end)
-        local nd = math.huge
+        local nd, nkk = math.huge, nil
         for _, k in ipairs(ks) do
             local off = hrp.Position - k.hrp.Position
             local d = off.Magnitude
             if d > 0 then
-                nd = math.min(nd, d)
+                if d < nd then nd, nkk = d, k end
                 if P.aggr and d <= P.dist * 1.6 and k.char:GetAttribute("IsChasing") and k.char:GetAttribute("ChaseTargetUserId") == lp.UserId then
                     local u = off.Unit
                     local closing = (k.hrp.AssemblyLinearVelocity - hrp.AssemblyLinearVelocity):Dot(u)
@@ -3014,7 +3108,7 @@ do local function parryInit()
                 end
             end
         end
-        render(nd < math.huge and ("Status: siap | killer terdekat %.0fm"):format(nd) or "Status: siap | ga ada killer")
+        render(nd < math.huge and ("Status: siap | killer terdekat %.0fm%s"):format(nd, (P.match and nkk) and (" (" .. killerKey(nkk) .. ")") or "") or "Status: siap | ga ada killer")
     end
     task.spawn(function()
         while running do
@@ -3049,7 +3143,7 @@ do local function parryInit()
         end
     end
     local ringKs, ringT, ringSelfK = {}, 0, false
-    -- circle is visual only: auto parry reads S.parry.dist directly and never touches this
+    -- circle is visual only: radius = zona nearest killer (dist + BonusDist), auto parry hitung sendiri lewat kZone()
     track(RS.RenderStepped:Connect(function(dt)
         pcall(function()
             local P = S.parry
@@ -3072,13 +3166,14 @@ do local function parryInit()
                     ringKs = getKillers()
                 end
                 if not ringSelfK then
-                    local nd, p0 = math.huge, hrp.Position
+                    local nd, p0, nk = math.huge, hrp.Position, nil
                     for _, k in ipairs(ringKs) do
                         if k.char ~= ch and k.hrp.Parent then
                             local d = (k.hrp.Position - p0).Magnitude
-                            if d < nd then nd = d end
+                            if d < nd then nd, nk = d, k end
                         end
                     end
+                    if nk and not P.circR then r = kZone(nk) end
                     local show = P.circShow or 8
                     ring.near = nd <= r + (ring.near and show + 4 or show)
                     ring.inZone = nd <= r
