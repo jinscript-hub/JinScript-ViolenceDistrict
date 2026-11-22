@@ -2145,10 +2145,10 @@ do local function parryInit()
     S.parry.baitCheck, S.parry.baitDot = true, 0.3
     S.parry.close, S.parry.closeR, S.parry.lateSkip = false, 4.0, false
     S.parry.circle = true
-    S.parry.circShow = 8
+    S.parry.circShow = 60
     cPar:Toggle("PAR_Circle", "Garis zona parry", true, function(v) S.parry.circle = v end,
         {id = "PAR_CircleCol", default = S.parry.color, cb = function(c) S.parry.color = c end})
-    cPar:Slider("PAR_CircleNear", "Garis muncul dari jarak", 0, 30, 8, 1, function(v) S.parry.circShow = v end, "m")
+    cPar:Slider("PAR_CircleNear", "Garis muncul dari jarak (60 = selalu)", 0, 60, 60, 1, function(v) S.parry.circShow = v end, "m")
     local stLbl = cPar:Label("Status: OFF")
     local learned, recent, nopar, stats, idReach, idLag = {}, {}, {}, {}, {}, {}
     local PFILE = BASE .. "jin_parry.json"
@@ -3205,7 +3205,7 @@ do local function parryInit()
     local ringKs, ringT, ringSelfK = {}, 0, false
     -- circle is visual only: radius = zona nearest killer (dist + BonusDist), auto parry hitung sendiri lewat kZone()
     track(RS.RenderStepped:Connect(function(dt)
-        pcall(function()
+        local okR, errR = pcall(function()
             local P = S.parry
             local ch = lp.Character
             local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
@@ -3234,10 +3234,10 @@ do local function parryInit()
                         end
                     end
                     if nk and not P.circR then r = kZone(nk) end
-                    local show = P.circShow or 8
+                    local show = P.circShow or 60
                     ring.near = nd <= r + (ring.near and show + 4 or show)
                     ring.inZone = nd <= r
-                    want = ring.near
+                    want = ring.near or show >= 60
                 end
             else
                 ring.near, ring.inZone = false, false
@@ -3274,7 +3274,7 @@ do local function parryInit()
                 for i = 1, n do act[i].Size = sz end
             end
             ring.spin = (ring.spin + dt * 0.3) % (2 * math.pi)
-            local c = hrp.Position - Vector3.new(0, hrp.Size.Y / 2 + hum.HipHeight - 0.08, 0)
+            local c = hrp.Position - Vector3.new(0, hrp.Size.Y / 2 + hum.HipHeight - 0.2, 0)
             for i = 1, n do
                 local ang = ring.spin + (i - 1) * step
                 local s, co = math.sin(ang), math.cos(ang)
@@ -3285,6 +3285,10 @@ do local function parryInit()
                 for i = 1, n do act[i].CFrame = cfs[i] end
             end
         end)
+        if not okR and not ring.warned then
+            ring.warned = true
+            warn("[jin] garis zona parry error: " .. tostring(errR))
+        end
     end))
 end parryInit() end
 do
@@ -4238,8 +4242,8 @@ end)
 do
     -- Silent Veil: lemparan tombak Veil otomatis ngarah ke survivor (hook remote SpearThrow).
     -- Arah dikunci pas tombak dilempar (prediksi gerak + kompensasi gravitasi), bukan belok di tengah jalan.
-    S.sv = {on = false, angle = 180, range = 400, predict = true, los = true, holdOn = true, hold = 2.5,
-        aggro = true, speed = 180, drop = 0.5, chargeOn = false, speedMin = 90, chargeT = 2.5, auto = true, cal = {}, gCal = nil}
+    S.sv = {on = false, angle = 70, full = false, range = 400, predict = true, los = true, holdOn = true, hold = 2.5,
+        speed = 180, drop = 0.5, chargeOn = false, speedMin = 90, chargeT = 2.5, auto = true, cal = {}, gCal = nil}
     local SPEAR_SPEED, DROP, SPAWN_OFF = 180, 0.5, 3
     local cSV = tKill:Group("Silent Veil (tombak)", 1)
     local svLbl = cSV:Label("Status: OFF")
@@ -4255,12 +4259,13 @@ do
         S.sv.on = v
         svSay(v and "ON, nunggu lemparan tombak" or "Status: OFF")
     end)
-    cSV:Toggle("SV_Aggro", "Mode agresif (lock survivor yang kelihatan di layar)", true, function(v) S.sv.aggro = v end)
+    cSV:Toggle("SV_Full", "POV = seluruh layar (tanpa lingkaran)", false, function(v) S.sv.full = v end)
+    cSV:Slider("SV_Angle", "Ukuran lingkaran POV (sudut)", 20, 170, 70, 5, function(v) S.sv.angle = v end)
     cSV:Slider("SV_Range", "Jarak max target", 50, 500, 400, 10, function(v) S.sv.range = v end, "m")
     cSV:Toggle("SV_Predict", "Prediksi gerak survivor", true, function(v) S.sv.predict = v end)
     cSV:Toggle("SV_Hold", "Lock cuma kalo tombol lempar ditahan", true, function(v) S.sv.holdOn = v end)
     cSV:Slider("SV_HoldT", "Tahan minimal", 0.5, 5, 2.5, 0.5, function(v) S.sv.hold = v end, "dtk")
-    cSV:Label("Cara pakai: nyalain Silent Veil, tahan tombol lempar tombak sampai lock merah muncul, terus lepas. Tombak otomatis ngarah ke survivor yang kelihatan di layar, ga perlu ngebidik pas. Kalau masih sering meleset, lempar beberapa kali dulu: script ngukur sendiri kecepatan tombak (liat grup Veil kalibrasi).")
+    cSV:Label("Cara pakai: nyalain Silent Veil, tahan tombol lempar tombak sampai lock merah muncul, terus lepas. Tombak otomatis ngarah ke survivor TERDEKAT yang ada di dalam lingkaran POV, ga perlu ngebidik pas. Kalau masih sering meleset, lempar beberapa kali dulu: script ngukur sendiri kecepatan tombak (liat grup Veil kalibrasi).")
     local cSV2 = tKill:Group("Veil kalibrasi (lanjutan)", 1)
     cSV2:Toggle("SV_Auto", "Kalibrasi otomatis (ukur tombak asli)", true, function(v) S.sv.auto = v end)
     svCalLbl = cSV2:Label("Kalibrasi: belum ada data. Nyalain Silent Veil, terus lempar tombak beberapa kali (lama tahan dibeda-bedain).")
@@ -4274,7 +4279,6 @@ do
     cSV2:Toggle("SV_Charge", "Kecepatan manual ikut lama tahan", false, function(v) S.sv.chargeOn = v end)
     cSV2:Slider("SV_SpeedMin", "Kecepatan manual pas baru ditahan", 30, 300, 90, 10, function(v) S.sv.speedMin = v end)
     cSV2:Slider("SV_ChargeT", "Tahan sampai kecepatan penuh", 0.5, 6, 2.5, 0.5, function(v) S.sv.chargeT = v end, "dtk")
-    cSV2:Slider("SV_Angle", "Sudut bidik (mode biasa aja)", 20, 360, 180, 10, function(v) S.sv.angle = v end)
     cSV2:Toggle("SV_LOS", "Utamakan yang ga ketutup", true, function(v) S.sv.los = v end)
     cSV2:Label("Kalibrasi otomatis nimpa angka manual kalau udah ada hasil ukur.")
 
@@ -4284,8 +4288,14 @@ do
     end
     local function veilEquipped(ch)
         if not ch then return false end
-        if ch:GetAttribute("MorphedKiller") == "Veil" or ch:GetAttribute("Veil") == true then return true end
-        if ch:GetAttribute("spearmode") == true or ch:GetAttribute("VeilSpearEquipped") == true then return true end
+        local pl = Players:GetPlayerFromCharacter(ch)
+        for _, src in ipairs({ch, pl}) do
+            for _, a in ipairs({"MorphedKiller", "SelectedKiller"}) do
+                local v = src:GetAttribute(a)
+                if type(v) == "string" and v:lower():find("veil", 1, true) then return true end
+            end
+        end
+        if ch:GetAttribute("Veil") == true or ch:GetAttribute("spearmode") == true or ch:GetAttribute("VeilSpearEquipped") == true then return true end
         return ch:FindFirstChild("Spear") ~= nil
     end
     local rayP = RaycastParams.new()
@@ -4300,7 +4310,18 @@ do
         local ok, r = pcall(function() return workspace:Raycast(origin, hrp.Position - origin, rayP) end)
         return ok and r ~= nil
     end
-    -- target = survivor yang paling pas sama arah kamera (bukan yang paling dekat), jadi lemparan ga tiba-tiba muter ke orang lain
+    -- POV = lingkaran di layar (ukuran dari S.sv.angle) atau seluruh layar kalau S.sv.full.
+    -- Target = survivor TERDEKAT (jarak asli) yang ada di dalam POV. Yang ga ketutup tembok diutamakan.
+    local function povRadius()
+        local cam = workspace.CurrentCamera
+        if not cam then return 150 end
+        local vp = cam.ViewportSize
+        local half = math.rad(math.clamp(S.sv.angle, 10, 170) / 2)
+        local fv = math.rad(math.clamp(cam.FieldOfView, 20, 120) / 2)
+        local r = (vp.Y / 2) * math.tan(half) / math.tan(fv)
+        return math.clamp(r, 40, math.min(vp.X, vp.Y) / 2 * 0.95)
+    end
+    S.svPovR = povRadius
     local function pickTarget(origin)
         local cam = workspace.CurrentCamera
         local myCh = lp.Character
@@ -4308,9 +4329,10 @@ do
         if not (cam and myHrp) then return nil end
         local isK = {}
         for _, k in ipairs(S.strictKillers and S.strictKillers() or getKillers()) do isK[k.char] = true end
-        local look = cam.CFrame.LookVector
         local center = cam.ViewportSize / 2
-        local best, bestScore, bestAng, bestDist
+        local rad = povRadius()
+        local best, bestScore, bestDist
+        local curHrp, curScore, curDist = S.sv.cur, nil, nil
         for _, p in ipairs(Players:GetPlayers()) do
             local ch = p.Character
             if p ~= lp and ch and not isK[ch] and alive(ch)
@@ -4318,30 +4340,28 @@ do
                 local hrp = ch:FindFirstChild("HumanoidRootPart")
                 if hrp then
                     local d = (hrp.Position - myHrp.Position).Magnitude
-                    local dir = hrp.Position - cam.CFrame.Position
-                    if d <= S.sv.range and dir.Magnitude > 0.1 then
-                        local ang = math.deg(math.acos(math.clamp(look:Dot(dir.Unit), -1, 1)))
-                        -- agresif: syaratnya cuma "kelihatan di layar" (sudut bidik diabaikan), yang paling dekat tengah layar dipilih
-                        local inView, score = false, 0
-                        if S.sv.aggro then
-                            local sp, onScr = cam:WorldToViewportPoint(hrp.Position)
-                            inView = onScr and sp.Z > 0
-                            score = (Vector2.new(sp.X, sp.Y) - center).Magnitude
-                        else
-                            inView = ang <= S.sv.angle / 2
-                            score = ang
-                        end
-                        if inView then
-                            score = score + ((S.sv.los and blocked(origin, hrp)) and 1e5 or 0)
-                            if not bestScore or score < bestScore then
-                                best, bestScore, bestAng, bestDist = hrp, score, ang, d
-                            end
+                    if d <= S.sv.range then
+                        local sp, onScr = cam:WorldToViewportPoint(hrp.Position)
+                        if onScr and sp.Z > 0 and (S.sv.full or (Vector2.new(sp.X, sp.Y) - center).Magnitude <= rad) then
+                            local score = d + ((S.sv.los and blocked(origin, hrp)) and 1e5 or 0)
+                            if hrp == curHrp then curScore, curDist = score, d end
+                            if not bestScore or score < bestScore then best, bestScore, bestDist = hrp, score, d end
                         end
                     end
                 end
             end
         end
-        return best, bestAng, bestDist
+        -- target lama dipertahankan kalau yang baru ga lebih dekat jauh (3 stud), biar lock ga loncat-loncat
+        if curScore and best ~= curHrp and curScore <= bestScore + 3 then
+            best, bestScore, bestDist = curHrp, curScore, curDist
+        end
+        S.sv.cur = best
+        local ang
+        if best then
+            local dv = best.Position - cam.CFrame.Position
+            if dv.Magnitude > 0.1 then ang = math.deg(math.acos(math.clamp(cam.CFrame.LookVector:Dot(dv.Unit), -1, 1))) end
+        end
+        return best, ang or 0, bestDist
     end
     -- kecepatan hasil ukur, diinterpolasi dari lama tahan (nil kalau belum ada data)
     local function calSpeed(hd)
@@ -4368,7 +4388,22 @@ do
         end
         return math.max(sp, 1)
     end
-    local ballistic = S.ballistic -- dihitung di blok pistol (rumus sama)
+    -- rumus sama kayak blok pistol; kalau blok itu gagal dimuat, pakai salinan ini biar Silent Veil ga mati diam-diam
+    local function ballisticFb(origin, pos, speed, G)
+        local d = pos - origin
+        local dh = Vector3.new(d.X, 0, d.Z)
+        local D = dh.Magnitude
+        if G < 1e-3 or D < 0.01 then
+            if d.Magnitude < 0.01 then return nil end
+            return d.Unit, math.max(0.04, d.Magnitude / speed), true
+        end
+        local v2 = speed * speed
+        local disc = v2 * v2 - G * (G * D * D + 2 * d.Y * v2)
+        local th = math.atan((v2 - math.sqrt(math.max(disc, 0))) / (G * D))
+        local dir = (dh / D) * math.cos(th) + Vector3.new(0, math.sin(th), 0)
+        return dir, math.max(0.04, D / (speed * math.cos(th))), disc >= 0
+    end
+    local function ballistic(...) return (S.ballistic or ballisticFb)(...) end
 
     -- arah lempar dengan prediksi gerak + kompensasi gravitasi. return arah, kecepatan yang dipakai, reach
     local function solve(origin, hrp, hd)
@@ -4376,30 +4411,17 @@ do
         local G = (S.sv.auto and S.sv.gCal) or workspace.Gravity * S.sv.drop
         local okP, ping = pcall(function() return lp:GetNetworkPing() end)
         ping = okP and ping * 0.5 or 0.035
-        if S.sv.aggro then
-            -- lengkungan beneran: sudut dihitung dari kecepatan + gravitasi, target diprediksi di titik jatuh (gerak horizontal aja)
-            local v = hrp.AssemblyLinearVelocity
-            local vel = S.sv.predict and Vector3.new(v.X, 0, v.Z) or Vector3.zero
-            local t = (hrp.Position - origin).Magnitude / speed
-            local dir, reach
-            for _ = 1, 6 do
-                local aim = hrp.Position + vel * (t + ping)
-                dir, t, reach = ballistic(origin, aim, speed, G)
-                if not dir then return nil end
-            end
-            return dir, speed, reach
-        end
-        local g = Vector3.new(0, -G, 0)
-        local vel = S.sv.predict and hrp.AssemblyLinearVelocity or Vector3.zero
+        -- lengkungan beneran: sudut dihitung dari kecepatan + gravitasi, target diprediksi di titik jatuh (gerak horizontal aja)
+        local v = hrp.AssemblyLinearVelocity
+        local vel = S.sv.predict and Vector3.new(v.X, 0, v.Z) or Vector3.zero
         local t = (hrp.Position - origin).Magnitude / speed
-        local aim = hrp.Position
-        for _ = 1, 5 do
-            aim = hrp.Position + vel * (t + ping)
-            t = math.max(0.04, (aim - origin).Magnitude / speed)
+        local dir, reach
+        for _ = 1, 6 do
+            local aim = hrp.Position + vel * (t + ping)
+            dir, t, reach = ballistic(origin, aim, speed, G)
+            if not dir then return nil end
         end
-        local v = ((aim - origin) - 0.5 * g * t * t) / t
-        if v.Magnitude < 0.01 then return nil end
-        return v.Unit, speed, true
+        return dir, speed, reach
     end
 
     -- dipakai Veil lock: target yang bakal dipilih Silent Veil (biar tampilan = perilaku)
@@ -4410,6 +4432,7 @@ do
         local hrp, _, dist = pickTarget(origin)
         return hrp, dist
     end
+    S.svIsVeil = function() return veilEquipped(lp.Character) end
     -- ===== Kalibrasi otomatis: ukur tombak asli sesudah dilempar (kecepatan awal + gravitasi), dicocokkan ke lama tahan =====
     local probing = false
     local function probeStart(origin, hold)
@@ -4527,7 +4550,7 @@ do
                         if hd < S.sv.hold then svSay(("Lolos asli: ditahan %.1f dtk (min %.1f)"):format(hd, S.sv.hold)) return end
                     end
                     local target, ang, dist = pickTarget(origin)
-                    if not target then svSay("Lolos asli: ga ada survivor di sudut/jarak") return end
+                    if not target then svSay("Lolos asli: ga ada survivor di dalam POV / jarak") return end
                     local dir, spd, reach = solve(origin, target, hd)
                     if not dir then svSay("Lolos asli: arah ga kehitung") return end
                     if type(a1) == "table" and typeof(a1.Origin) == "Vector3" then
@@ -4541,11 +4564,8 @@ do
                     elseif typeof(a1) == "Vector3" then
                         args[1] = dir
                     end
-                    if S.sv.aggro then
-                        svSay(("Agresif: %s (%d m, %d stud/dtk%s)"):format(tostring(target.Parent and target.Parent.Name), math.floor(dist), math.floor(spd), reach and "" or ", KEJAUHAN (sudut jangkauan maks)"))
-                    else
-                        svSay(("Diarahin ke %s (%d m, geser %d derajat)"):format(tostring(target.Parent and target.Parent.Name), math.floor(dist), math.floor(ang)))
-                    end
+                    S.sv.cur = nil
+                    svSay(("Lock %s (%d m, %d stud/dtk%s)"):format(tostring(target.Parent and target.Parent.Name), math.floor(dist), math.floor(spd), reach and "" or ", KEJAUHAN (sudut jangkauan maks)"))
                 end)
                 setnamecallmethod(method)
                 return svOld(self, table.unpack(args, 1, args.n))
@@ -5887,7 +5907,7 @@ xpcall(function()
 
     -- ---------- visual ----------
     local VL = {
-        on = false, show = true, veilOnly = false,
+        on = true, show = true, veilOnly = false,
         colLock = Color3.fromRGB(255, 45, 45), colFov = Color3.fromRGB(255, 255, 255),
         set = {}, tgt = nil,
     }
@@ -5927,13 +5947,8 @@ xpcall(function()
     end
     -- radius px dari sudut bidik Silent Veil (sudut kamera -> piksel)
     local function circR()
-        local cam = workspace.CurrentCamera
-        if not cam then return 150 end
-        local vp = cam.ViewportSize
-        local half = math.rad(math.clamp(S.sv.angle, 10, 175) / 2)
-        local fv = math.rad(math.clamp(cam.FieldOfView, 20, 120) / 2)
-        local r = (vp.Y / 2) * math.tan(half) / math.tan(fv)
-        return math.clamp(r, 40, math.min(vp.X, vp.Y) / 2 * 0.95)
+        if S.svPovR then return S.svPovR() end
+        return 150
     end
     local function paint(plr, st)
         local v = pvis[plr]
@@ -5948,7 +5963,7 @@ xpcall(function()
         if now - actAt < 0.5 then return actV end
         actAt = now
         actV = VL.on and not S.lobby and roleOf(lp) == "killer"
-            and (not VL.veilOnly or lp:GetAttribute("SelectedKiller") == "Veil")
+            and (not VL.veilOnly or (S.svIsVeil and S.svIsVeil()))
         return actV
     end
 
@@ -5981,13 +5996,14 @@ xpcall(function()
             if VL.tgt and pvis[VL.tgt] then newSet[VL.tgt] = "lock" end
         else
             VL.tgt = nil
+            S.sv.cur = nil
         end
         local old = VL.set
         VL.set = newSet
         for plr, st in pairs(newSet) do if old[plr] ~= st then paint(plr, st) end end
         for plr in pairs(old) do if not newSet[plr] then paint(plr, nil) end end
         if circ then
-            circ.Visible = not S.sv.aggro
+            circ.Visible = not S.sv.full
             local r = circR()
             if math.abs(circ.AbsoluteSize.X / 2 - r) > 2 then circ.Size = UDim2.fromOffset(r * 2, r * 2) end
             local c = VL.colFov
@@ -6017,7 +6033,7 @@ xpcall(function()
 
     -- ---------- UI ----------
     local cVL = tKill:Group("Veil lock", 2)
-    cVL:Toggle("VL_On", "ESP lock + lingkaran FOV", false, function(v) VL.on = v actAt = 0 end,
+    cVL:Toggle("VL_On", "ESP lock + lingkaran POV", true, function(v) VL.on = v actAt = 0 end,
         {id = "VL_ColLock", default = VL.colLock, cb = function(c) VL.colLock = c end})
     cVL:Toggle("VL_Show", "Tampilkan lingkaran", true, function(v) VL.show = v circBuild() end,
         {id = "VL_ColFov", default = VL.colFov, cb = function(c) VL.colFov = c if stroke then stroke.Color = c end end})
@@ -6033,7 +6049,7 @@ xpcall(function()
         if delfile then pcall(delfile, LFILE) end
         notify("Veil lock", "Rekaman dihapus (balik auto)")
     end)
-    cVL:Label("Lingkaran = sudut bidik Silent Veil. Lock muncul setelah tombol lempar ditahan >= batas (atur di Silent Veil).")
+    cVL:Label("Lingkaran = POV Silent Veil (ukuran diatur di Silent Veil). Survivor TERDEKAT di dalam lingkaran yang di-lock, setelah tombol lempar ditahan >= batas.")
     circBuild()
 
     local prevRestore = S.xRestore
