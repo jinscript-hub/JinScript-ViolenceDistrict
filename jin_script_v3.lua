@@ -4312,7 +4312,7 @@ do
     cSV:Toggle("SV_Hold", "Lock cuma kalo tombol lempar ditahan", true, function(v) SV.holdOn = v end)
     cSV:Slider("SV_HoldT", "Tahan minimal", 0.5, 5, 2.5, 0.5, function(v) SV.hold = v end, "dtk")
     svMissLbl = cSV:Label("Hasil lemparan: belum ada")
-    cSV:Label("Cara pakai: nyalain Silent Veil, tahan tombol lempar sampai lock merah muncul, lepas. Tombak diarahin ke survivor TERDEKAT di dalam lingkaran POV. Dua lemparan pertama dipakai buat ngukur tombak asli (kecepatan, gravitasi, titik muncul); makin banyak lemparan makin presisi. Hasil lemparan nunjukin seberapa jauh tombak lewat dari target.")
+    cSV:Label("Cara pakai: nyalain Silent Veil, tahan tombol lempar sampai efek di tombak muncul (itu lemparan tembus tembok), lepas. Set 'Tahan minimal' sama kayak waktu efek muncul. Pas ditahan, tembok diabaikan. Tombak diarahin ke survivor TERDEKAT di dalam lingkaran POV. Dua lemparan pertama dipakai buat ngukur tombak asli (kecepatan, gravitasi, titik muncul); makin banyak lemparan makin presisi. Hasil lemparan nunjukin seberapa jauh tombak lewat dari target.")
     local cSV2 = tKill:Group("Veil kalibrasi (lanjutan)", 1)
     cSV2:Toggle("SV_Auto", "Pakai hasil ukur tombak asli", true, function(v) SV.auto = v end)
     svCalLbl = cSV2:Label(SV.offCal and "Kalibrasi: dimuat dari file" or "Kalibrasi: belum ada data. Lempar tombak beberapa kali (lama tahan dibeda-bedain).")
@@ -4383,7 +4383,7 @@ do
         return math.clamp(r, 40, math.min(vp.X, vp.Y) / 2 * 0.95)
     end
     S.svPovR = povRadius
-    local function pickTarget(origin)
+    local function pickTarget(origin, pierce)
         local cam = workspace.CurrentCamera
         local myCh = lp.Character
         local myHrp = myCh and myCh:FindFirstChild("HumanoidRootPart")
@@ -4404,7 +4404,7 @@ do
                     if d <= SV.range then
                         local sp, onScr = cam:WorldToViewportPoint(hrp.Position)
                         if onScr and sp.Z > 0 and (SV.full or (Vector2.new(sp.X, sp.Y) - center).Magnitude <= rad) then
-                            local score = d + ((SV.los and blocked(origin, hrp)) and 1e5 or 0)
+                            local score = d + ((SV.los and not pierce and blocked(origin, hrp)) and 1e5 or 0)
                             if hrp == curHrp then curScore, curDist = score, d end
                             if not bestScore or score < bestScore then best, bestScore, bestDist = hrp, score, d end
                         end
@@ -4463,8 +4463,8 @@ do
     local function ballistic(...) return (S.ballistic or ballisticFb)(...) end
 
     -- arah lempar: prediksi gerak (horizontal; vertikal cuma kalau lagi di udara) + kompensasi gravitasi. return arah, kecepatan, reach
-    local function solve(origin, hrp, hd)
-        local speed = speedNow(hd)
+    local function solve(origin, hrp, hd, spOver)
+        local speed = (spOver and spOver > 10) and spOver or speedNow(hd)
         local G = (SV.auto and SV.gCal) or workspace.Gravity * SV.drop
         local okP, ping = pcall(function() return lp:GetNetworkPing() end)
         ping = (okP and ping * 0.5 or 0.035) + SV.leadMs / 1000
@@ -4488,7 +4488,7 @@ do
 
     -- dipakai Veil lock: target yang bakal dipilih Silent Veil (biar tampilan = perilaku)
     S.svTarget = function()
-        local hrp, dist = pickTarget(spawnOrigin())
+        local hrp, dist = pickTarget(spawnOrigin(), SV.holdOn)
         return hrp, dist
     end
     S.svIsVeil = function() return veilEquipped(lp.Character) end
@@ -4690,9 +4690,11 @@ do
                             svSay("Format remote ga dikenali (liat 'Format remote' di Veil kalibrasi), lemparan lolos asli")
                             return
                         end
-                        local tg, dist = pickTarget(origin)
+                        local tg, dist = pickTarget(origin, SV.holdOn and hd and hd >= SV.hold)
                         if not tg then svSay("Lolos asli: ga ada survivor di dalam POV / jarak") return end
-                        local dir, spd, reach = solve(origin, tg, hd)
+                        local spOver
+                        if isTbl and typeof(a1.Velocity) == "Vector3" then spOver = a1.Velocity.Magnitude end
+                        local dir, spd, reach = solve(origin, tg, hd, spOver)
                         if not dir then svSay("Lolos asli: arah ga kehitung") return end
                         if isTbl then
                             -- jaga panjang Direction asli (kalau game ngirim bukan vektor satuan)
