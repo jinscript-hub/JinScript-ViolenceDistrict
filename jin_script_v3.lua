@@ -12,7 +12,7 @@ local LINKS = {
     Discord  = "",
     -- folder aset di GitHub (raw), akhiran "/". Contoh: "https://raw.githubusercontent.com/USER/REPO/BRANCH/assets/"
     -- aset yang belum ada di folder executor diunduh dari sini (nama file = ICON_FILE / SHEET_FILE / SOCIAL_FILE di atas)
-    AssetBase = "",
+    AssetBase = "https://raw.githubusercontent.com/jinscript-hub/JinScript-ViolenceDistrict/main/assets/",
 }
 if getgenv().JinHub then pcall(getgenv().JinHub.Unload) end
 if getgenv().VDHub then pcall(getgenv().VDHub.Unload) end
