@@ -10,6 +10,9 @@ local LINKS = {
     TikTok   = "",
     WhatsApp = "",
     Discord  = "",
+    -- folder aset di GitHub (raw), akhiran "/". Contoh: "https://raw.githubusercontent.com/USER/REPO/BRANCH/assets/"
+    -- aset yang belum ada di folder executor diunduh dari sini (nama file = ICON_FILE / SHEET_FILE / SOCIAL_FILE di atas)
+    AssetBase = "",
 }
 if getgenv().JinHub then pcall(getgenv().JinHub.Unload) end
 if getgenv().VDHub then pcall(getgenv().VDHub.Unload) end
@@ -90,6 +93,13 @@ local function assetOf(id, file)
     if id ~= "" then return id end
     if not getcustomasset then return nil end
     local p = findFile(file)
+    if not p and LINKS.AssetBase ~= "" and writefile then
+        local okG, data = pcall(function() return game:HttpGet(LINKS.AssetBase .. file) end)
+        if okG and type(data) == "string" and #data > 100 and data:sub(2, 4) == "PNG" then
+            pcall(writefile, BASE .. file, data)
+            p = findFile(file)
+        end
+    end
     if not p then return nil end
     local ok, a = pcall(getcustomasset, p)
     if ok and a and a ~= "" then return a end
@@ -660,7 +670,7 @@ function update()
     objAt = now
     local plCount = 0
     for _ in pairs(pvis) do plCount = plCount + 1 end
-    local hlBudget = math.max(0, 30 - plCount)
+    local hlBudget = math.max(0, math.min(S.hlMax or 8, 30 - plCount))
     local cand = {}
     for cat, set in pairs(found) do
         local isGen = cat == "generator"
@@ -922,16 +932,22 @@ function fbSave()
         OutdoorAmbient = Lighting.OutdoorAmbient, atm = atm, Density = atm and atm.Density, Haze = atm and atm.Haze,
     }
 end
+local fbAtm
+local FB_AMB = Color3.fromRGB(190, 190, 190)
 function fbApply()
-    Lighting.Brightness = S.fb.bright
-    Lighting.ClockTime = 14
-    Lighting.FogStart = 0
-    Lighting.FogEnd = 1e6
-    Lighting.GlobalShadows = false
-    Lighting.Ambient = Color3.fromRGB(190, 190, 190)
-    Lighting.OutdoorAmbient = Color3.fromRGB(190, 190, 190)
-    local atm = Lighting:FindFirstChildOfClass("Atmosphere")
-    if atm then atm.Density = 0 atm.Haze = 0 end
+    local L = Lighting
+    if L.Brightness ~= S.fb.bright then L.Brightness = S.fb.bright end
+    if L.ClockTime ~= 14 then L.ClockTime = 14 end
+    if L.FogStart ~= 0 then L.FogStart = 0 end
+    if L.FogEnd ~= 1e6 then L.FogEnd = 1e6 end
+    if L.GlobalShadows then L.GlobalShadows = false end
+    if L.Ambient ~= FB_AMB then L.Ambient = FB_AMB end
+    if L.OutdoorAmbient ~= FB_AMB then L.OutdoorAmbient = FB_AMB end
+    if not (fbAtm and fbAtm.Parent) then fbAtm = L:FindFirstChildOfClass("Atmosphere") end
+    if fbAtm then
+        if fbAtm.Density ~= 0 then fbAtm.Density = 0 end
+        if fbAtm.Haze ~= 0 then fbAtm.Haze = 0 end
+    end
 end
 function fbRestore()
     local o = fbOrig
@@ -1989,6 +2005,8 @@ do
     cLbl:Toggle("ESP_Outline", "Outline teks (matiin kalau berat)", true, function(v) S.outline = v if S.espRestyle then S.espRestyle() end end)
     local cPerf = sD:Group("Performa ESP", 2)
     cPerf:Slider("ESP_Rate", "Refresh ESP (naikin kalau lag)", 100, 1000, 250, 50, function(v) S.espMs = v end, "ms")
+    cPerf:Slider("ESP_HLMax", "Maks highlight objek (turunin kalau lag)", 0, 27, 8, 1, function(v) S.hlMax = v end)
+    cPerf:Label("Highlight = siluet tembus tembok. Berat di GPU HP. Objek di luar batas tetap dapat teks nama/jarak.")
     local cCone = sP:Group("Area liat killer (tanah)", 2)
     cCone:Toggle("Cone_On", "Aktif", true, function(v) S.cone.on = v end)
     cCone:Slider("Cone_Angle", "Sudut area killer", 40, 180, 100, 5, function(v) S.cone.angle = v end)
@@ -6122,7 +6140,7 @@ track(RS.RenderStepped:Connect(function(dt)
     local c = workspace.CurrentCamera
     if c and S.fov.on then
         if not S.fov.orig then S.fov.orig = c.FieldOfView end
-        c.FieldOfView = S.fov.val
+        if c.FieldOfView ~= S.fov.val then c.FieldOfView = S.fov.val end
     end
     if c and S.ar.on then
         local cf = c.CFrame
@@ -6134,7 +6152,7 @@ track(RS.RenderStepped:Connect(function(dt)
         end
     end
     if S.fb.on then fbApply() end
-    if S.al.shadows or S.fb.on then Lighting.GlobalShadows = false end
+    if (S.al.shadows or S.fb.on) and Lighting.GlobalShadows then Lighting.GlobalShadows = false end
 end))
 track(UIS.InputBegan:Connect(function(i, gp)
     if gp then return end
