@@ -14,7 +14,47 @@ local LINKS = {
 if getgenv().JinHub then pcall(getgenv().JinHub.Unload) end
 if getgenv().VDHub then pcall(getgenv().VDHub.Unload) end
 local Players = game:GetService("Players")
-local RS = game:GetService("RunService")
+local RS = (function()
+    local real = game:GetService("RunService")
+    local prof = {on = false, d = {}}
+    prof.add = function(nm, t0)
+        local dt = (os.clock() - t0) * 1000
+        local r = prof.d[nm]
+        if not r then r = {n = 0, sum = 0, max = 0} prof.d[nm] = r end
+        r.n, r.sum = r.n + 1, r.sum + dt
+        if dt > r.max then r.max = dt end
+    end
+    local function wrapSig(sig)
+        return setmetatable({
+            Connect = function(_, f)
+                local nm = "L?"
+                pcall(function()
+                    nm = "L" .. tostring((debug.info and debug.info(f, "l")) or (debug.getinfo and debug.getinfo(f).linedefined) or "?")
+                end)
+                return sig:Connect(function(...)
+                    if not prof.on then return f(...) end
+                    local t0 = os.clock()
+                    f(...)
+                    prof.add(nm, t0)
+                end)
+            end,
+        }, {__index = function(_, k)
+            local v = sig[k]
+            if type(v) == "function" then return function(_, ...) return v(sig, ...) end end
+            return v
+        end})
+    end
+    return setmetatable({
+        prof = prof,
+        Heartbeat = wrapSig(real.Heartbeat),
+        RenderStepped = wrapSig(real.RenderStepped),
+        Stepped = wrapSig(real.Stepped),
+    }, {__index = function(_, k)
+        local v = real[k]
+        if type(v) == "function" then return function(_, ...) return v(real, ...) end end
+        return v
+    end})
+end)()
 local UIS = game:GetService("UserInputService")
 local TS = game:GetService("TweenService")
 local HttpService = game:GetService("HttpService")
@@ -3112,7 +3152,9 @@ do local function parryInit()
     end
     task.spawn(function()
         while running do
+            local t0 = RS.prof.on and os.clock()
             pcall(parryTick)
+            if t0 then RS.prof.add("parryTick", t0) end
             task.wait(0.05)
         end
     end)
@@ -3528,16 +3570,22 @@ do
         if aimLbl then aimLbl.Text = "Tombol aim: belum direkam (tracer pakai tebakan)" end
     end
     -- belum direkam: tebak dari atribut karakter yang namanya ada "aim" (true), atau aimDirection baru aja dipanggil game
+    local aimAttrT, aimAttrV = 0, false
     local function isAiming()
         if S.sa.aimMode == "Selalu" then return true end
         if aimLearn then return aimDown[aimLearn] == true end
-        local ch = lp.Character
-        if ch then
-            for k, v in pairs(ch:GetAttributes()) do
-                if v == true and k:lower():find("aim", 1, true) then return true end
+        local now = os.clock()
+        if now - aimAttrT > 0.15 then
+            aimAttrT, aimAttrV = now, false
+            local ch = lp.Character
+            if ch then
+                for k, v in pairs(ch:GetAttributes()) do
+                    if v == true and k:lower():find("aim", 1, true) then aimAttrV = true break end
+                end
             end
         end
-        return os.clock() - (S.sa.lastCall or 0) < 0.35
+        if aimAttrV then return true end
+        return now - (S.sa.lastCall or 0) < 0.35
     end
 
     -- Tracer: garis dari moncong pistol ke killer. Ijo = ga ketutup (siap tembak), merah = ketutup tembok/objek.
@@ -4068,7 +4116,13 @@ do
         end
         if AL2.fpsChanged and setfpscap then pcall(setfpscap, AL2.fpsOrig or 60) AL2.fpsChanged = false end
     end
-    track(workspace.DescendantAdded:Connect(function(i) if anyOn() then pcall(applyOne, i) end end))
+    track(workspace.DescendantAdded:Connect(function(i)
+        if anyOn() then
+            local t0 = RS.prof.on and os.clock()
+            pcall(applyOne, i)
+            if t0 then RS.prof.add("AntiLag applyOne", t0) end
+        end
+    end))
     track(Lighting.DescendantAdded:Connect(function(i) if flags.sky then pcall(applyOne, i) end end))
     local function onChar(c)
         charSet[c] = true
@@ -5649,6 +5703,25 @@ xpcall(function()
         if not ok then notify("Dump info", "error: " .. tostring(e):sub(1, 60)) end
     end)
     cDbg:Label("Kalo ada fitur ga jalan: tekan pas lagi di match, lalu paste hasilnya ke chat.")
+    local profLbl = cDbg:Label("Profiler: mati. Tekan tombol di atas, main (kejar/parry) 10-20 dtk, terus liat angkanya.")
+    cDbg:Button("Profiler FPS: nyalain / matiin", function()
+        local pr = RS.prof
+        pr.on = not pr.on
+        pr.d = {}
+        profLbl.Text = pr.on and "Profiler: nyala, ngumpulin data..." or "Profiler: mati"
+    end)
+    RS.prof.report = function()
+        local pr, rows = RS.prof, {}
+        for nm, r in pairs(pr.d) do rows[#rows + 1] = {nm = nm, sum = r.sum, max = r.max, n = r.n} end
+        pr.d = {}
+        table.sort(rows, function(a, b) return a.sum > b.sum end)
+        local out = {}
+        for i = 1, math.min(#rows, 8) do
+            local r = rows[i]
+            out[i] = ("%s: %.1f ms/dtk, puncak %.1f ms, %dx"):format(r.nm, r.sum, r.max, r.n)
+        end
+        profLbl.Text = #out > 0 and ("Profiler (ms per detik, makin gede makin berat)\n" .. table.concat(out, "\n")) or "Profiler: belum ada data"
+    end
     X.mw.btn = true
     mwBtnBuild()
 
@@ -5702,7 +5775,7 @@ end, function(e) warn("[jin] Extras gagal dipasang: " .. tostring(e)) end)
 -- ===== Veil lock: ESP target ke-LOCK setelah tombol lempar tombak ditahan >= batas =====
 -- Target = survivor yang bakal dipilih Silent Veil. Lingkaran = sudut bidik Silent Veil. Visual aja (ESP + lingkaran).
 xpcall(function()
-    local RSv = game:GetService("RunService")
+    local RSv = RS
     local UISv = game:GetService("UserInputService")
 
     -- ---------- pelacak tahan tombol lempar ----------
@@ -5976,10 +6049,25 @@ task.spawn(function()
         if idx % 400 == 0 then task.wait() end
     end
 end)
-track(workspace.DescendantAdded:Connect(function(i)
-    pcall(classify, i)
-    if FX[i.ClassName] and S.al.particles then task.defer(pcall, fxKill, i) end
-end))
+do
+    local q, qh, qt = {}, 1, 0
+    track(workspace.DescendantAdded:Connect(function(i)
+        qt = qt + 1
+        q[qt] = i
+        if FX[i.ClassName] and S.al.particles then task.defer(pcall, fxKill, i) end
+    end))
+    track(RS.Heartbeat:Connect(function()
+        if qh > qt then return end
+        local t0 = os.clock()
+        while qh <= qt and os.clock() - t0 < 0.002 do -- jatah 2 ms per frame
+            local i = q[qh]
+            q[qh] = nil
+            qh = qh + 1
+            if i.Parent then pcall(classify, i) end
+        end
+        if qh > qt then q, qh, qt = {}, 1, 0 end
+    end))
+end
 track(Players.PlayerRemoving:Connect(destroyPlayerVis))
 do
     -- vignette overlay: hidden by default, no menu entry (matches any GuiObject/ScreenGui named *vignet*)
@@ -6005,7 +6093,9 @@ local fpsAcc, fpsN = 0, 0
 task.spawn(function()
     local warned = false
     while running do
+        local t0 = RS.prof.on and os.clock()
         local ok, err = pcall(update)
+        if t0 then RS.prof.add("ESP update", t0) end
         if not ok and not warned then warned = true warn("[jin] esp error: " .. tostring(err)) end
         task.wait((S.espMs or 250) / 1000)
     end
@@ -6021,6 +6111,7 @@ task.spawn(function()
         fpsAcc, fpsN = 0, 0
         if isOpen then pcall(refreshDash) end
         if isOpen and S.predUpdate then pcall(S.predUpdate) end
+        if RS.prof.on and RS.prof.report then pcall(RS.prof.report) end
         task.wait(1)
     end
 end)
