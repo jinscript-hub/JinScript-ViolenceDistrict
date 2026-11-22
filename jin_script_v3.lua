@@ -4245,7 +4245,7 @@ do
     -- Fisika tombak (kecepatan per lama tahan, gravitasi, titik muncul tombak) DIUKUR dari tombak asli lalu disimpan ke file.
     -- ASUMSI (belum dicek di game): argumen Vector3 / field Direction di remote = arah lempar, bukan titik tujuan.
     S.sv = {on = false, angle = 70, full = false, range = 400, predict = true, los = true, holdOn = true, hold = 2.5,
-        speed = 180, drop = 0.5, chargeOn = false, speedMin = 90, chargeT = 2.5, auto = true, leadMs = 0,
+        speed = 180, drop = 0.5, chargeOn = false, speedMin = 90, chargeT = 2.5, auto = true, leadMs = 0, kElev = 0, kMan = 0,
         cal = {}, gCal = nil, offCal = nil, cur = nil}
     local SV = S.sv
     local CALFILE = BASE .. "veil_cal.json"
@@ -4265,7 +4265,7 @@ do
         local rows = {}
         for _, c in ipairs(SV.cal) do rows[#rows + 1] = {hold = c.hold, speed = c.speed} end
         local o = SV.offCal
-        pcall(writefile, CALFILE, HttpService:JSONEncode({cal = rows, g = SV.gCal, off = o and {o.X, o.Y, o.Z} or nil}))
+        pcall(writefile, CALFILE, HttpService:JSONEncode({cal = rows, g = SV.gCal, k = SV.kElev, off = o and {o.X, o.Y, o.Z} or nil}))
     end
     local function calLoad()
         if not (isfile and readfile) then return end
@@ -4283,6 +4283,7 @@ do
             end
         end
         if type(d.g) == "number" then SV.gCal = d.g gList = {d.g} end
+        if type(d.k) == "number" then SV.kElev = math.clamp(d.k, -0.002, 0.002) end
         local o = d.off
         if type(o) == "table" and type(o[1]) == "number" and type(o[2]) == "number" and type(o[3]) == "number" then
             SV.offCal = Vector3.new(o[1], o[2], o[3])
@@ -4318,10 +4319,12 @@ do
     svCalLbl = cSV2:Label(SV.offCal and "Kalibrasi: dimuat dari file" or "Kalibrasi: belum ada data. Lempar tombak beberapa kali (lama tahan dibeda-bedain).")
     cSV2:Button("Reset hasil ukur", function()
         SV.cal, SV.gCal, SV.offCal, gList = {}, nil, nil, {}
+        SV.kElev = 0
         if delfile then pcall(delfile, CALFILE) end
         svCalLbl.Text = "Kalibrasi: direset"
     end)
     svArgLbl = cSV2:Label("Format remote: belum ada lemparan")
+    cSV2:Slider("SV_Elev", "Koreksi tinggi manual (stud @100 jarak)", -30, 30, 0, 1, function(v) SV.kMan = v / 1e4 end)
     cSV2:Slider("SV_Lead", "Koreksi lead (+ = tembak lebih ke depan)", -150, 250, 0, 10, function(v) SV.leadMs = v end, "ms")
     cSV2:Slider("SV_Speed", "Kecepatan tombak manual (stud/dtk)", 60, 600, 180, 10, function(v) SV.speed = v end)
     cSV2:Slider("SV_Drop", "Gravitasi tombak manual (x gravity)", 0.1, 2, 0.5, 0.1, function(v) SV.drop = v end)
@@ -4480,6 +4483,8 @@ do
             if air then
                 aim = aim + Vector3.new(0, math.clamp(v.Y * tt - 0.5 * workspace.Gravity * tt * tt, -12, 12), 0)
             end
+            local dh = Vector3.new(hrp.Position.X - origin.X, 0, hrp.Position.Z - origin.Z).Magnitude
+            aim = aim + Vector3.new(0, math.clamp((SV.kElev + SV.kMan) * dh * dh, -80, 80), 0) -- koreksi tinggi jarak jauh (dipelajari)
             dir, t, reach = ballistic(origin, aim, speed, G)
             if not dir then return nil end
         end
@@ -4528,6 +4533,7 @@ do
         if probing or not running then return end
         probing = true
         local cands, seen, t0 = {}, {}, os.clock()
+        local D0 = (tgt and tgt.Parent) and Vector3.new(tgt.Position.X - origin.X, 0, tgt.Position.Z - origin.Z).Magnitude or nil
         local function sample(c)
             if c.part.Parent then
                 c.s[#c.s + 1] = {t = os.clock(), p = c.part.Position, tp = (tgt and tgt.Parent) and tgt.Position or nil}
@@ -4579,8 +4585,14 @@ do
             for i = 1, n do
                 ts[i], xs[i], ys[i], zs[i] = sm[i].t - tb, sm[i].p.X, sm[i].p.Y, sm[i].p.Z
             end
-            local vx, vz = fitLin(ts, xs), fitLin(ts, zs)
-            local _, vy, cq = fitQuad(ts, ys)
+            -- fit cuma dari 0,7 dtk pertama (kecepatan awal), sisanya buat ngecek jatuhnya
+            local nf = n
+            for i = 1, n do if ts[i] > 0.7 then nf = i - 1 break end end
+            if nf < 6 then nf = n end
+            local function head(v) local o = {} for i = 1, nf do o[i] = v[i] end return o end
+            local tf = head(ts)
+            local vx, vz = fitLin(tf, head(xs)), fitLin(tf, head(zs))
+            local _, vy, cq = fitQuad(tf, head(ys))
             if not vy then pendingCal = "Kalibrasi: fit gagal" return end
             local vh = math.sqrt(vx * vx + vz * vz)
             local speed, g = math.sqrt(vh * vh + vy * vy), -2 * cq
@@ -4623,12 +4635,29 @@ do
                     local right = fwd:Cross(Vector3.yAxis)
                     pendingMiss = (bestD < 3.5 and "KENA / hampir kena" or "MELESET") ..
                         (" %.1f stud | atas %+.1f | kanan %+.1f | lewat %+.1f (+ = tombak di atas/kanan/lewat target)"):format(bestD, dv.Y, dv:Dot(right), dv:Dot(fwd))
+                    if D0 and D0 > 40 then
+                        local bj, bg = nil, math.huge
+                        for i = 1, n do
+                            local gap = math.abs(Vector3.new(sm[i].p.X - origin.X, 0, sm[i].p.Z - origin.Z).Magnitude - D0)
+                            if gap < bg then bg, bj = gap, i end
+                        end
+                        if bj and bg <= 15 and sm[bj].tp then
+                            local e = sm[bj].p.Y - sm[bj].tp.Y
+                            if math.abs(e) < 60 then
+                                SV.kElev = math.clamp(SV.kElev - 0.6 * e / (D0 * D0), -0.002, 0.002)
+                                calSave()
+                                pendingMiss = pendingMiss .. (' | di jarak target tombak %s %.1f stud, koreksi tinggi dipelajari'):format(e > 0 and 'kelewat atas' or 'kurang tinggi', math.abs(e))
+                            end
+                        elseif bj then
+                            pendingMiss = pendingMiss .. (' | tombak cuma nyampe %d dari %d stud'):format(math.floor(Vector3.new(sm[n].p.X - origin.X, 0, sm[n].p.Z - origin.Z).Magnitude), math.floor(D0))
+                        end
+                    end
                 end
             end
         end
         c2 = RS.Heartbeat:Connect(function()
             local now = os.clock()
-            if not running or now - t0 > 1.2 then finish() return end
+            if not running or now - t0 > 3 then finish() return end
             for _, c in ipairs(cands) do sample(c) end
         end)
     end
