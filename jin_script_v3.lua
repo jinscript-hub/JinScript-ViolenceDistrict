@@ -6237,6 +6237,191 @@ xpcall(function()
     end
 end, function(e) warn("[jin] Veil lock gagal dipasang: " .. tostring(e)) end)
 
+-- ===== Tambahan dari HANX HUB: Utilitas, Skill check extra, Auto drop pallet =====
+-- Nama remote/atribut diambil dari hanxhub (hasil decode): Remotes.Pallet.PalletDropEvent, atribut skillcheckspeed.
+do
+    local TeleportService = game:GetService("TeleportService")
+    local VirtualUser = game:GetService("VirtualUser")
+    local function myHrp()
+        local ch = lp.Character
+        return ch and ch:FindFirstChild("HumanoidRootPart")
+    end
+    -- tSurv ada di scope lokal lain, ambil lewat daftar tab
+    local tSurv
+    for _, t in ipairs(S.tabList) do
+        if t.name == "Survivor" then tSurv = t break end
+    end
+    if not tSurv then error("tab Survivor ga ketemu") end
+
+    -- ===== Utilitas: Anti AFK, rejoin, jam =====
+    tMisc.route["Utilitas"] = tMisc.route["Fun menu"]
+    local afkConn
+    local function setAfk(v)
+        if afkConn then afkConn:Disconnect() afkConn = nil end
+        if v then
+            afkConn = lp.Idled:Connect(function()
+                pcall(function() VirtualUser:CaptureController() VirtualUser:ClickButton2(Vector2.new()) end)
+            end)
+        end
+    end
+    local tod = {on = false, val = 12, orig = nil, conn = nil}
+    local function todStop()
+        if tod.conn then tod.conn:Disconnect() tod.conn = nil end
+        if tod.orig then pcall(function() Lighting.ClockTime = tod.orig end) tod.orig = nil end
+    end
+    local cUT = tMisc:Group("Utilitas", 2)
+    cUT:Toggle("AFK_On", "Anti AFK", true, setAfk)
+    setAfk(true)
+    cUT:Toggle("TOD_On", "Custom jam (fullbright OFF dulu)", false, function(v)
+        tod.on = v
+        todStop()
+        if v then
+            tod.orig = Lighting.ClockTime
+            -- listener cuma nyala pas fitur aktif, bukan polling tiap frame
+            tod.conn = Lighting:GetPropertyChangedSignal("ClockTime"):Connect(function()
+                if tod.on and not S.fb.on and Lighting.ClockTime ~= tod.val then Lighting.ClockTime = tod.val end
+            end)
+            if not S.fb.on then Lighting.ClockTime = tod.val end
+        end
+    end)
+    cUT:Slider("TOD_Val", "Jam", 0, 24, 12, 1, function(v)
+        tod.val = v
+        if tod.on and not S.fb.on then Lighting.ClockTime = v end
+    end)
+    cUT:Button("Rejoin server", function()
+        pcall(function() TeleportService:Teleport(game.PlaceId, lp) end)
+    end)
+
+    -- ===== Skill check extra: kecepatan + sembunyiin UI =====
+    tSurv.route["Skill check tambahan"] = tSurv.route["Auto skill check"]
+    local scx = {hide = false, spd = false, val = 1, ch = nil, orig = nil}
+    local function scRestoreSpeed()
+        if scx.ch and scx.orig then
+            local ch, o = scx.ch, scx.orig
+            pcall(function()
+                ch:SetAttribute("skillcheckspeed", o.lower)
+                ch:SetAttribute("SkillCheckSpeed", o.upper)
+            end)
+        end
+        scx.ch, scx.orig = nil, nil
+    end
+    local function setHideUi(hide)
+        for _, n in ipairs({"SkillCheckPromptGui", "SkillCheckPromptGui-con"}) do
+            local g = pg:FindFirstChild(n)
+            -- cuma ScreenGui: Check.Visible tetap true, jadi auto skill check tetap jalan
+            if g and g:IsA("ScreenGui") then g.Enabled = not hide end
+        end
+    end
+    local cSX = tSurv:Group("Skill check tambahan", 1)
+    cSX:Toggle("SCX_Hide", "Sembunyiin UI skill check", false, function(v) scx.hide = v setHideUi(v) end)
+    cSX:Toggle("SCX_Spd", "Atur kecepatan jarum", false, function(v)
+        scx.spd = v
+        if not v then scRestoreSpeed() end
+    end)
+    cSX:Slider("SCX_Val", "Kecepatan jarum", 0.1, 3, 1, 0.1, function(v) scx.val = v end, "x")
+    cSX:Label("Kecepatan diset lewat atribut karakter (skillcheckspeed). Kalau ga ngaruh di versi game sekarang, matiin aja.")
+    task.spawn(function()
+        while running do
+            if scx.hide or scx.spd then
+                if scx.hide then pcall(setHideUi, true) end
+                if scx.spd then
+                    pcall(function()
+                        local ch = lp.Character
+                        if not ch then return end
+                        if scx.ch ~= ch then
+                            scRestoreSpeed()
+                            scx.ch = ch
+                            scx.orig = {lower = ch:GetAttribute("skillcheckspeed"), upper = ch:GetAttribute("SkillCheckSpeed")}
+                        end
+                        local v = math.clamp(scx.val, 0.1, 3)
+                        if ch:GetAttribute("skillcheckspeed") ~= v then ch:SetAttribute("skillcheckspeed", v) end
+                        if ch:GetAttribute("SkillCheckSpeed") ~= v then ch:SetAttribute("SkillCheckSpeed", v) end
+                    end)
+                end
+                task.wait(0.5)
+            else
+                task.wait(1.5) -- dua-duanya mati: jarang ngecek
+            end
+        end
+    end)
+
+    -- ===== Auto drop pallet (survivor) =====
+    -- Pakai daftar `found.pallet` + deteksi jatuh (S.palletDown) bawaan script, ga scan map sendiri.
+    tSurv.route["Auto drop pallet"] = tSurv.route["Auto parry (Dagger)"]
+    local dp = {on = false, radius = 15, cd = 1.5, last = 0, used = setmetatable({}, {__mode = "k"})}
+    local function killerNear()
+        for _, k in ipairs(getKillers()) do
+            if k.char ~= lp.Character then
+                local hum = k.char:FindFirstChildOfClass("Humanoid")
+                if hum and hum.Health > 0 then return k.hrp end
+            end
+        end
+    end
+    local function killerClosing(kh, me)
+        local d = me.Position - kh.Position
+        local flat = Vector3.new(d.X, 0, d.Z)
+        if flat.Magnitude > math.max(12, dp.radius + 5) then return false end
+        if flat.Magnitude < 0.1 then return true end
+        local u = flat.Unit
+        local v = kh.AssemblyLinearVelocity
+        local vf = Vector3.new(v.X, 0, v.Z)
+        local look = kh.CFrame.LookVector
+        local lf = Vector3.new(look.X, 0, look.Z)
+        local facing = lf.Magnitude > 0.1 and lf.Unit:Dot(u) or -1
+        return vf:Dot(u) >= 1.5 or (vf.Magnitude >= 2.5 and facing >= 0.65)
+    end
+    local cDP = tSurv:Group("Auto drop pallet", 2)
+    cDP:Toggle("DP_On", "Auto drop pallet", false, function(v) dp.on = v end)
+    cDP:Slider("DP_Radius", "Radius pallet", 8, 30, 15, 1, function(v) dp.radius = v end, "m")
+    cDP:Slider("DP_CD", "Cooldown", 0.5, 4, 1.5, 0.1, function(v) dp.cd = v end, "s")
+    cDP:Label("Jatuhin pallet pas killer nyamperin & pallet deket lu.")
+    task.spawn(function()
+        while running do
+            if not dp.on then
+                task.wait(0.5)
+            else
+            task.wait(0.1)
+            pcall(function()
+                if os.clock() - dp.last < dp.cd or roleOf(lp) == "killer" then return end
+                local me = myHrp()
+                local kh = me and killerNear()
+                if not kh or not killerClosing(kh, me) then return end
+                local best, bestPart, bd
+                local rad = math.max(5, dp.radius)
+                for inst in pairs(found.pallet) do
+                    if inst.Parent and not dp.used[inst] then
+                        local part = S.partOf(inst)
+                        if part then
+                            local d = (me.Position - part.Position).Magnitude
+                            -- cek murah dulu (jarak), baru deteksi jatuh yang lebih mahal
+                            if d <= rad and (not bd or d < bd) and (kh.Position - part.Position).Magnitude <= math.max(8, dp.radius * 0.8) then
+                                local okD, down = pcall(S.palletDown, inst)
+                                if okD and not down then best, bestPart, bd = inst, part, d end
+                            end
+                        end
+                    end
+                end
+                if not best then return end
+                local rem = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
+                rem = rem and rem:FindFirstChild("Pallet")
+                rem = rem and rem:FindFirstChild("PalletDropEvent")
+                if not (rem and rem:IsA("RemoteEvent")) then return end
+                local hit = best:FindFirstChild("Hitbox", true) or best:FindFirstChild("hitbox", true) or bestPart
+                dp.used[best] = true
+                task.delay(6, function() dp.used[best] = nil end) -- pallet bisa dipakai lagi kalau ternyata ga jatuh
+                if pcall(function() rem:FireServer(hit) end) then dp.last = os.clock() else dp.used[best] = nil end
+            end)
+            end
+        end
+    end)
+
+    S.x2Restore = function()
+        pcall(setAfk, false)
+        pcall(scRestoreSpeed)
+        pcall(setHideUi, false)
+        pcall(todStop)
+    end
+end
 local cleanup
 local cUI = tSet:Group("Tampilan", 1)
 cUI:Dropdown("UI_Size", "Ukuran", {"Kecil", "Sedang", "Besar", "Jumbo"}, "Sedang", function(v) curSize = v applyLayout() end)
@@ -6367,6 +6552,7 @@ function cleanup()
     pcall(function() if S.keRestore then S.keRestore() end end)
     pcall(function() if S.parryFlush then S.parryFlush() end end)
     pcall(function() if S.xRestore then S.xRestore() end end)
+    pcall(function() if S.x2Restore then S.x2Restore() end end)
     for plr in pairs(pvis) do destroyPlayerVis(plr) end
     for inst in pairs(ovis) do destroyObj(inst) end
     pcall(function() espFolder:Destroy() end)
@@ -6391,5 +6577,5 @@ loadConfig()
 loading = false
 pcall(refreshDash)
 setOpen(true)
-notify("Jìn Script", "Loaded v4.8")
-warn("[jin] v4.8 loaded (esp anti lag)")
+notify("Jìn Script", "Loaded v4.9")
+warn("[jin] v4.9 loaded (+utilitas, skill check extra, auto drop pallet)")
