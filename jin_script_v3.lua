@@ -4246,10 +4246,12 @@ do
     -- yang kejangkau, hitung lengkungan (rendah, kalau ketutup tembok coba lob tinggi). Kalau EmpoweredSpear aktif (efek muncul) tembok diabaikan.
     -- ASUMSI (belum dites): server nerima Direction yang beda dari arah kamera, dan ViewDelay target boleh dipakai.
     -- Kalau ditolak, "Hasil lemparan" nulis DITOLAK.
-    S.sv = {on = false, angle = 70, range = 600, cur = nil}
+    S.sv = {on = false, angle = 70, range = 600, cur = nil, shift = false}
     local SV = S.sv
     local SPEED_MAX, GRAV, SPAWN, MAXLIFE = 165, 98.1, 3, 4
     local chargeTs, lastSeq, lastTarget = nil, nil, nil
+    local SHIFT_STEPS = {8, 16, 24, 32, 40} -- stud, maks 40
+    local shiftBlocked, lastShifted = false, false
 
     local cSV = tKill:Group("Silent Veil (tombak)", 1)
     local svLbl = cSV:Label("Status: OFF")
@@ -4267,6 +4269,10 @@ do
         svSay(v and "ON, nunggu lemparan tombak" or "Status: OFF")
     end)
     cSV:Slider("SV_Angle", "Ukuran lingkaran POV", 20, 170, 70, 5, function(v) SV.angle = v end)
+    cSV:Toggle("SV_Shift", "Perpanjang jangkauan (geser titik lempar, berisiko)", false, function(v)
+        SV.shift = v
+        if v then shiftBlocked = false end
+    end)
     cSV:Label("Cara pakai: nyalain Silent Veil, tahan tombol lempar (lock merah muncul di survivor terdekat di dalam lingkaran), lepas. Tombak otomatis dilengkungin sesuai jarak dan gerak survivor. Tahan sampai efek di tombak muncul (sekitar 2 dtk) kalau mau tembus tembok. Hasil lemparan nunjukin kena, kena tembok, atau kadaluarsa dan seberapa jauh dari target.")
 
     local function alive(ch)
@@ -4297,6 +4303,40 @@ do
         return math.clamp(r, 40, math.min(vp.X, vp.Y) / 2 * 0.95)
     end
     S.svPovR = povRadius
+
+    -- riwayat posisi survivor (0,6 dtk terakhir). Kecepatan pemain lain dari posisi, bukan dari AssemblyLinearVelocity
+    -- (yang sering 0 / telat buat karakter orang lain), jadi prediksi jarak jauh ga ngaco.
+    local hist = setmetatable({}, {__mode = "k"})
+    track(RS.Heartbeat:Connect(function()
+        if not SV.on then return end
+        local now = os.clock()
+        for _, p in ipairs(Players:GetPlayers()) do
+            local ch = p.Character
+            local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+            if p ~= lp and hrp then
+                local h = hist[hrp]
+                if not h then h = {} hist[hrp] = h end
+                h[#h + 1] = {now, hrp.Position}
+                while #h > 0 and now - h[1][1] > 0.6 do table.remove(h, 1) end
+            end
+        end
+    end))
+    local function velOf(hrp)
+        local h = hist[hrp]
+        local api = hrp.AssemblyLinearVelocity
+        if not h or #h < 4 then return api end
+        local now = os.clock()
+        local last, first = h[#h], nil
+        for i = #h, 1, -1 do
+            if now - h[i][1] >= 0.3 then first = h[i] break end
+        end
+        first = first or h[1]
+        local dt = last[1] - first[1]
+        if dt < 0.1 then return api end
+        local v = (last[2] - first[2]) / dt
+        if v.Magnitude > 45 then v = v.Unit * 45 end -- buang lonjakan (teleport / animasi vault)
+        return v
+    end
 
     -- aturan dinding sama kayak SpearWorld.ignore di game: karakter, tanaman, dan part transparan (>= 0.05) ga nyetop tombak
     local function ignoreWorld(p)
@@ -4359,7 +4399,7 @@ do
     end
     -- rencana lempar ke satu survivor: prediksi gerak selama tombak terbang, coba lengkung rendah lalu tinggi
     local function planFor(camO, hrp, speed, pierce)
-        local v = hrp.AssemblyLinearVelocity
+        local v = velOf(hrp)
         local vel = Vector3.new(v.X, 0, v.Z)
         local hum = hrp.Parent and hrp.Parent:FindFirstChildOfClass("Humanoid")
         local air = hum and hum.FloorMaterial == Enum.Material.Air
@@ -4457,12 +4497,25 @@ do
         local speed = chargeSec and math.clamp(chargeSec * SPEED_MAX, 1, SPEED_MAX) or SPEED_MAX
         local list = candidates()
         if #list == 0 then svSay("Lolos asli: ga ada survivor di dalam POV / jarak") return end
-        local chosen, cdir, ct, carc
+        local chosen, cdir, ct, carc, usedO
         local failWhy, failC, failR
         for _, c in ipairs(list) do
-            local dir, t, arc = planFor(a1.Origin, c.hrp, speed, pierce)
+            local org = a1.Origin
+            local dir, t, arc = planFor(org, c.hrp, speed, pierce)
+            -- kejauhan: geser titik lempar ke arah target (kecil dulu, maks 40 stud). BERISIKO: server bisa nolak / nandain.
+            if not dir and t == "jauh" and SV.shift and not shiftBlocked then
+                local flat = Vector3.new(c.hrp.Position.X - org.X, 0, c.hrp.Position.Z - org.Z)
+                if flat.Magnitude > 1 then
+                    local hd = flat.Unit
+                    for _, sh in ipairs(SHIFT_STEPS) do
+                        local o2 = a1.Origin + hd * sh
+                        local d2, t2, a2 = planFor(o2, c.hrp, speed, pierce)
+                        if d2 then dir, t, arc, org = d2, t2, a2, o2 break end
+                    end
+                end
+            end
             if dir then
-                chosen, cdir, ct, carc = c, dir, t, arc
+                chosen, cdir, ct, carc, usedO = c, dir, t, arc, org
                 break
             elseif not failC then
                 failWhy, failC, failR = t, c, arc
@@ -4474,7 +4527,7 @@ do
             local nm = pl and pl.DisplayName or "?"
             local txt
             if failWhy == "jauh" then
-                txt = ("kejauhan, %d stud (maks sekitar %d di ketinggian itu)"):format(math.floor(c.d), math.floor(failR or 0))
+                txt = ("kejauhan, %d stud (maks sekitar %d di ketinggian itu, kurang ~%d)"):format(math.floor(c.d), math.floor(failR or 0), math.max(math.ceil(c.d - (failR or 0)), 1))
             elseif failWhy == "lama" then
                 txt = ("kelamaan terbang, %d stud (batas 4 dtk)"):format(math.floor(c.d))
             else
@@ -4484,6 +4537,14 @@ do
             return
         end
         a1.Direction = cdir
+        local shiftTxt = ""
+        lastShifted = false
+        local sd = (usedO - a1.Origin).Magnitude
+        if sd > 0.5 then
+            a1.Origin = usedO
+            lastShifted = true
+            shiftTxt = (", titik lempar digeser %d stud"):format(math.floor(sd + 0.5))
+        end
         -- kompensasi lag kayak game (viewDelay): seberapa lama posisi target di layar ketinggalan
         local vdTxt = ""
         local ra = chosen.hrp.Parent and chosen.hrp.Parent:GetAttribute("VeilRenderedAt")
@@ -4494,6 +4555,7 @@ do
                 vdTxt = (", lag %d ms"):format(math.floor(vd * 1000))
             end
         end
+        vdTxt = vdTxt .. shiftTxt
         SV.cur = nil
         lastTarget = chosen.hrp
         lastSeq = a1.Sequence
@@ -4541,7 +4603,12 @@ do
         track(re.OnClientEvent:Connect(function(kind, data)
             if type(data) ~= "table" or not lastSeq or data.Sequence ~= lastSeq then return end
             if kind == "reject" then
-                svResult("Hasil lemparan: DITOLAK server (arah beda dari kamera?)")
+                if lastShifted then
+                    shiftBlocked = true
+                    svResult("Hasil lemparan: DITOLAK server setelah titik lempar digeser. Geser dimatikan otomatis (nyalain lagi lewat toggle).")
+                else
+                    svResult("Hasil lemparan: DITOLAK server (arah beda dari kamera?)")
+                end
             elseif kind == "stop" and data.Source == lp.Character then
                 local why = data.Reason
                 local txt = why == "hit" and "KENA survivor" or why == "wall" and "kena TEMBOK" or why == "expired" and "kadaluarsa" or tostring(why)
