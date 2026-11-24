@@ -4253,7 +4253,7 @@ do
 
     local cSV = tKill:Group("Silent Veil (tombak)", 1)
     local svLbl = cSV:Label("Status: OFF")
-    local svRes
+    local svRes = cSV:Label("Hasil lemparan: belum ada")
     local pendingTxt, pendingRes
     local function svSay(t) pendingTxt = t end
     local function svResult(t) pendingRes = t end
@@ -4267,7 +4267,6 @@ do
         svSay(v and "ON, nunggu lemparan tombak" or "Status: OFF")
     end)
     cSV:Slider("SV_Angle", "Ukuran lingkaran POV", 20, 170, 70, 5, function(v) SV.angle = v end)
-    svRes = cSV:Label("Hasil lemparan: belum ada")
     cSV:Label("Cara pakai: nyalain Silent Veil, tahan tombol lempar (lock merah muncul di survivor terdekat di dalam lingkaran), lepas. Tombak otomatis dilengkungin sesuai jarak dan gerak survivor. Tahan sampai efek di tombak muncul (sekitar 2 dtk) kalau mau tembus tembok. Hasil lemparan nunjukin kena, kena tembok, atau kadaluarsa dan seberapa jauh dari target.")
 
     local function alive(ch)
@@ -4364,6 +4363,7 @@ do
         local vel = Vector3.new(v.X, 0, v.Z)
         local hum = hrp.Parent and hrp.Parent:FindFirstChildOfClass("Humanoid")
         local air = hum and hum.FloorMaterial == Enum.Material.Air
+        local why, maxR = "jauh", nil
         for arcIdx = 1, 2 do
             local dir = (hrp.Position - camO).Unit
             local t, sol = 0, nil
@@ -4374,18 +4374,28 @@ do
                     aim = aim + Vector3.new(0, math.clamp(v.Y * t - 0.5 * workspace.Gravity * t * t, -12, 12), 0)
                 end
                 local a = arcs(origin, aim, speed)
-                if not a then sol = nil break end
+                if not a then
+                    sol = nil
+                    local h = aim.Y - origin.Y
+                    maxR = (speed * speed / GRAV) * math.sqrt(math.max(1 - 2 * GRAV * h / (speed * speed), 0))
+                    break
+                end
                 sol = a[arcIdx]
                 dir, t = sol.dir, sol.t
             end
-            if sol and t <= MAXLIFE - 0.05 then
-                local origin = camO + sol.dir * SPAWN
-                if pierce or pathClear(origin, sol.dir * speed, t) then
-                    return sol.dir, t, arcIdx
+            if sol then
+                if t > MAXLIFE - 0.05 then
+                    if why ~= "tembok" then why = "lama" end
+                else
+                    local origin = camO + sol.dir * SPAWN
+                    if pierce or pathClear(origin, sol.dir * speed, t) then
+                        return sol.dir, t, arcIdx
+                    end
+                    why = "tembok"
                 end
             end
         end
-        return nil
+        return nil, why, maxR
     end
 
     -- survivor di dalam POV, urut dari yang terdekat
@@ -4448,12 +4458,29 @@ do
         local list = candidates()
         if #list == 0 then svSay("Lolos asli: ga ada survivor di dalam POV / jarak") return end
         local chosen, cdir, ct, carc
+        local failWhy, failC, failR
         for _, c in ipairs(list) do
             local dir, t, arc = planFor(a1.Origin, c.hrp, speed, pierce)
-            if dir then chosen, cdir, ct, carc = c, dir, t, arc break end
+            if dir then
+                chosen, cdir, ct, carc = c, dir, t, arc
+                break
+            elseif not failC then
+                failWhy, failC, failR = t, c, arc
+            end
         end
         if not chosen then
-            svSay(("Lolos asli: ga ada yang kejangkau / ga ketutup (kecepatan %d stud/dtk)"):format(math.floor(speed)))
+            local c = failC
+            local pl = c and c.hrp.Parent and Players:GetPlayerFromCharacter(c.hrp.Parent)
+            local nm = pl and pl.DisplayName or "?"
+            local txt
+            if failWhy == "jauh" then
+                txt = ("kejauhan, %d stud (maks sekitar %d di ketinggian itu)"):format(math.floor(c.d), math.floor(failR or 0))
+            elseif failWhy == "lama" then
+                txt = ("kelamaan terbang, %d stud (batas 4 dtk)"):format(math.floor(c.d))
+            else
+                txt = ("ketutup tembok, %d stud (lengkung rendah dan tinggi sama-sama nabrak)"):format(math.floor(c.d))
+            end
+            svSay(("Lolos asli: %s %s [kec %d]"):format(nm, txt, math.floor(speed)))
             return
         end
         a1.Direction = cdir
@@ -4471,7 +4498,10 @@ do
         lastTarget = chosen.hrp
         lastSeq = a1.Sequence
         svSay(("Lock %s (%d stud, terbang %.1f dtk, kec %d%s%s%s)"):format(
-            tostring(chosen.hrp.Parent and chosen.hrp.Parent.Name), math.floor(chosen.d), ct, math.floor(speed),
+            (function()
+                local pl = chosen.hrp.Parent and Players:GetPlayerFromCharacter(chosen.hrp.Parent)
+                return pl and pl.DisplayName or "?"
+            end)(), math.floor(chosen.d), ct, math.floor(speed),
             pierce and ", tembus tembok" or "", carc == 2 and ", lob tinggi" or "", vdTxt))
     end
 
