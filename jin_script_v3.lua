@@ -4240,99 +4240,35 @@ cAM:Button("Matiin semua anti lag", function()
     notify("Anti lag", "Semua mati")
 end)
 do
-    -- Silent Veil v2 (hook remote SpearThrow): arah dikunci SEKALI pas tombak dilempar.
-    -- Target = survivor TERDEKAT di dalam POV (lingkaran / layar penuh), yang ga ketutup tembok diutamakan.
-    -- Fisika tombak (kecepatan per lama tahan, gravitasi, titik muncul tombak) DIUKUR dari tombak asli lalu disimpan ke file.
-    -- ASUMSI (belum dicek di game): argumen Vector3 / field Direction di remote = arah lempar, bukan titik tujuan.
-    S.sv = {on = false, angle = 70, full = false, range = 400, predict = true, los = true, holdOn = true, hold = 2.5,
-        speed = 180, drop = 0.5, chargeOn = false, speedMin = 90, chargeT = 2.5, auto = true, leadMs = 0, kElev = 0, kMan = 0,
-        cal = {}, gCal = nil, offCal = nil, cur = nil}
+    -- Silent Veil v5: pakai fisika ASLI tombak Veil (dibaca dari SpearMath hasil dump, bukan hasil ukur/tebakan):
+    --   kecepatan = clamp(lama charge * 165, 1, 165) stud/dtk, gravitasi 98.1, tombak muncul di Origin + arah * 3, umur maks 4 dtk.
+    -- Server yang menggerakkan tombak, jadi yang bisa diatur cuma arah awal (dan ViewDelay). Pilih survivor TERDEKAT di dalam POV
+    -- yang kejangkau, hitung lengkungan (rendah, kalau ketutup tembok coba lob tinggi). Kalau EmpoweredSpear aktif (efek muncul) tembok diabaikan.
+    -- ASUMSI (belum dites): server nerima Direction yang beda dari arah kamera, dan ViewDelay target boleh dipakai.
+    -- Kalau ditolak, "Hasil lemparan" nulis DITOLAK.
+    S.sv = {on = false, angle = 70, range = 600, cur = nil}
     local SV = S.sv
-    local CALFILE = BASE .. "veil_cal.json"
-    local FALLBACK_FWD = 2
-    local gList = {}
-
-    local function median(t)
-        local c = {}
-        for i, v in ipairs(t) do c[i] = v end
-        table.sort(c)
-        local n = #c
-        if n == 0 then return nil end
-        return n % 2 == 1 and c[(n + 1) / 2] or (c[n / 2] + c[n / 2 + 1]) / 2
-    end
-    local function calSave()
-        if not writefile then return end
-        local rows = {}
-        for _, c in ipairs(SV.cal) do rows[#rows + 1] = {hold = c.hold, speed = c.speed} end
-        local o = SV.offCal
-        pcall(writefile, CALFILE, HttpService:JSONEncode({cal = rows, g = SV.gCal, k = SV.kElev, off = o and {o.X, o.Y, o.Z} or nil}))
-    end
-    local function calLoad()
-        if not (isfile and readfile) then return end
-        local okF, has = pcall(isfile, CALFILE)
-        if not (okF and has) then return end
-        local okR, txt = pcall(readfile, CALFILE)
-        if not okR then return end
-        local okJ, d = pcall(function() return HttpService:JSONDecode(txt) end)
-        if not (okJ and type(d) == "table") then return end
-        if type(d.cal) == "table" then
-            for _, c in ipairs(d.cal) do
-                if type(c) == "table" and type(c.hold) == "number" and type(c.speed) == "number" then
-                    SV.cal[#SV.cal + 1] = {hold = c.hold, speed = c.speed}
-                end
-            end
-        end
-        if type(d.g) == "number" then SV.gCal = d.g gList = {d.g} end
-        if type(d.k) == "number" then SV.kElev = math.clamp(d.k, -0.002, 0.002) end
-        local o = d.off
-        if type(o) == "table" and type(o[1]) == "number" and type(o[2]) == "number" and type(o[3]) == "number" then
-            SV.offCal = Vector3.new(o[1], o[2], o[3])
-        end
-    end
-    calLoad()
+    local SPEED_MAX, GRAV, SPAWN, MAXLIFE = 165, 98.1, 3, 4
+    local chargeTs, lastSeq, lastTarget = nil, nil, nil
 
     local cSV = tKill:Group("Silent Veil (tombak)", 1)
     local svLbl = cSV:Label("Status: OFF")
-    local pendingTxt, pendingArgs, svArgLbl, pendingCal, svCalLbl, pendingMiss, svMissLbl
+    local svRes
+    local pendingTxt, pendingRes
     local function svSay(t) pendingTxt = t end
+    local function svResult(t) pendingRes = t end
     -- GUI cuma disentuh dari thread ini (hook jalan di thread game)
     track(RS.Heartbeat:Connect(function()
         if pendingTxt then svLbl.Text = pendingTxt pendingTxt = nil end
-        if pendingArgs and svArgLbl then svArgLbl.Text = pendingArgs pendingArgs = nil end
-        if pendingCal and svCalLbl then svCalLbl.Text = pendingCal pendingCal = nil end
-        if pendingMiss and svMissLbl then svMissLbl.Text = pendingMiss pendingMiss = nil end
+        if pendingRes and svRes then svRes.Text = pendingRes pendingRes = nil end
     end))
     cSV:Toggle("SV_On", "Silent Veil", false, function(v)
         SV.on = v
         svSay(v and "ON, nunggu lemparan tombak" or "Status: OFF")
     end)
-    cSV:Toggle("SV_Full", "POV = seluruh layar (tanpa lingkaran)", false, function(v) SV.full = v end)
-    cSV:Slider("SV_Angle", "Ukuran lingkaran POV (sudut)", 20, 170, 70, 5, function(v) SV.angle = v end)
-    cSV:Slider("SV_Range", "Jarak max target", 50, 500, 400, 10, function(v) SV.range = v end, "m")
-    cSV:Toggle("SV_Predict", "Prediksi gerak survivor", true, function(v) SV.predict = v end)
-    cSV:Toggle("SV_Hold", "Lock cuma kalo tombol lempar ditahan", true, function(v) SV.holdOn = v end)
-    cSV:Slider("SV_HoldT", "Tahan minimal", 0.5, 5, 2.5, 0.5, function(v) SV.hold = v end, "dtk")
-    svMissLbl = cSV:Label("Hasil lemparan: belum ada")
-    cSV:Label("Cara pakai: nyalain Silent Veil, tahan tombol lempar sampai efek di tombak muncul (itu lemparan tembus tembok), lepas. Set 'Tahan minimal' sama kayak waktu efek muncul. Pas ditahan, tembok diabaikan. Tombak diarahin ke survivor TERDEKAT di dalam lingkaran POV. Dua lemparan pertama dipakai buat ngukur tombak asli (kecepatan, gravitasi, titik muncul); makin banyak lemparan makin presisi. Hasil lemparan nunjukin seberapa jauh tombak lewat dari target.")
-    local cSV2 = tKill:Group("Veil kalibrasi (lanjutan)", 1)
-    cSV2:Toggle("SV_Auto", "Pakai hasil ukur tombak asli", true, function(v) SV.auto = v end)
-    svCalLbl = cSV2:Label(SV.offCal and "Kalibrasi: dimuat dari file" or "Kalibrasi: belum ada data. Lempar tombak beberapa kali (lama tahan dibeda-bedain).")
-    cSV2:Button("Reset hasil ukur", function()
-        SV.cal, SV.gCal, SV.offCal, gList = {}, nil, nil, {}
-        SV.kElev = 0
-        if delfile then pcall(delfile, CALFILE) end
-        svCalLbl.Text = "Kalibrasi: direset"
-    end)
-    svArgLbl = cSV2:Label("Format remote: belum ada lemparan")
-    cSV2:Slider("SV_Elev", "Koreksi tinggi manual (stud @100 jarak)", -30, 30, 0, 1, function(v) SV.kMan = v / 1e4 end)
-    cSV2:Slider("SV_Lead", "Koreksi lead (+ = tembak lebih ke depan)", -150, 250, 0, 10, function(v) SV.leadMs = v end, "ms")
-    cSV2:Slider("SV_Speed", "Kecepatan tombak manual (stud/dtk)", 60, 600, 180, 10, function(v) SV.speed = v end)
-    cSV2:Slider("SV_Drop", "Gravitasi tombak manual (x gravity)", 0.1, 2, 0.5, 0.1, function(v) SV.drop = v end)
-    cSV2:Toggle("SV_Charge", "Kecepatan manual ikut lama tahan", false, function(v) SV.chargeOn = v end)
-    cSV2:Slider("SV_SpeedMin", "Kecepatan manual pas baru ditahan", 30, 300, 90, 10, function(v) SV.speedMin = v end)
-    cSV2:Slider("SV_ChargeT", "Tahan sampai kecepatan penuh", 0.5, 6, 2.5, 0.5, function(v) SV.chargeT = v end, "dtk")
-    cSV2:Toggle("SV_LOS", "Utamakan yang ga ketutup", true, function(v) SV.los = v end)
-    cSV2:Label("Hasil ukur nimpa angka manual kalau udah ada.")
+    cSV:Slider("SV_Angle", "Ukuran lingkaran POV", 20, 170, 70, 5, function(v) SV.angle = v end)
+    svRes = cSV:Label("Hasil lemparan: belum ada")
+    cSV:Label("Cara pakai: nyalain Silent Veil, tahan tombol lempar (lock merah muncul di survivor terdekat di dalam lingkaran), lepas. Tombak otomatis dilengkungin sesuai jarak dan gerak survivor. Tahan sampai efek di tombak muncul (sekitar 2 dtk) kalau mau tembus tembok. Hasil lemparan nunjukin kena, kena tembok, atau kadaluarsa dan seberapa jauh dari target.")
 
     local function alive(ch)
         local h = ch and ch:FindFirstChildOfClass("Humanoid")
@@ -4350,32 +4286,8 @@ do
         if ch:GetAttribute("Veil") == true or ch:GetAttribute("spearmode") == true or ch:GetAttribute("VeilSpearEquipped") == true then return true end
         return ch:FindFirstChild("Spear") ~= nil
     end
-    local rayP = RaycastParams.new()
-    rayP.FilterType = Enum.RaycastFilterType.Exclude
-    -- true kalau ada tembok/objek (bukan karakter) di antara origin dan target
-    local function blocked(origin, hrp)
-        local ex = {}
-        for _, p in ipairs(Players:GetPlayers()) do
-            if p.Character then ex[#ex + 1] = p.Character end
-        end
-        rayP.FilterDescendantsInstances = ex
-        local ok, r = pcall(function() return workspace:Raycast(origin, hrp.Position - origin, rayP) end)
-        return ok and r ~= nil
-    end
-    -- titik muncul tombak: Origin dari remote (diurus di hook) > hasil ukur (relatif ke HRP) > kepala + sedikit ke depan kamera
-    local function spawnOrigin()
-        local ch = lp.Character
-        local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
-        if SV.auto and SV.offCal and hrp then return hrp.CFrame:PointToWorldSpace(SV.offCal) end
-        local head = ch and ch:FindFirstChild("Head")
-        local cam = workspace.CurrentCamera
-        local base = (head and head.Position) or (hrp and hrp.Position) or (cam and cam.CFrame.Position)
-        if not base then return nil end
-        return base + (cam and cam.CFrame.LookVector * FALLBACK_FWD or Vector3.zero)
-    end
 
-    -- POV = lingkaran di layar (ukuran dari SV.angle) atau seluruh layar kalau SV.full.
-    -- Target = survivor TERDEKAT (jarak asli) yang ada di dalam POV. Yang ga ketutup tembok diutamakan.
+    -- POV = lingkaran di layar (ukuran dari SV.angle); radius dihitung dari sudut kamera
     local function povRadius()
         local cam = workspace.CurrentCamera
         if not cam then return 150 end
@@ -4386,17 +4298,105 @@ do
         return math.clamp(r, 40, math.min(vp.X, vp.Y) / 2 * 0.95)
     end
     S.svPovR = povRadius
-    local function pickTarget(origin, pierce)
+
+    -- aturan dinding sama kayak SpearWorld.ignore di game: karakter, tanaman, dan part transparan (>= 0.05) ga nyetop tombak
+    local function ignoreWorld(p)
+        if p == workspace.Terrain then return false end
+        local a = p
+        while a and a ~= workspace do
+            if a:IsA("Model") and a:FindFirstChildOfClass("Humanoid") then return true end
+            a = a.Parent
+        end
+        if p.Name == "Plant" then return true end
+        if p.Transparency >= 0.05 then return not p:HasTag("TrueInvis") end
+        return false
+    end
+    local rayP = RaycastParams.new()
+    rayP.FilterType = Enum.RaycastFilterType.Exclude
+    -- true kalau lintasan tombak (parabola) ga nabrak dinding sampai waktu tEnd
+    local function pathClear(spawn, v0, tEnd)
+        local ex = {}
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p.Character then ex[#ex + 1] = p.Character end
+        end
+        local prev = spawn
+        local steps = math.max(math.ceil(tEnd / 0.1), 1)
+        for i = 1, steps do
+            local t = math.min(i * 0.1, tEnd)
+            local pt = spawn + v0 * t + Vector3.new(0, -0.5 * GRAV * t * t, 0)
+            local d = pt - prev
+            if d.Magnitude > 1e-3 then
+                for _ = 1, 8 do
+                    rayP.FilterDescendantsInstances = ex
+                    local r = workspace:Raycast(prev, d, rayP)
+                    if not r then break end
+                    if not ignoreWorld(r.Instance) then return false end
+                    ex[#ex + 1] = r.Instance
+                end
+            end
+            prev = pt
+        end
+        return true
+    end
+
+    -- dua sudut lempar (rendah dan tinggi) supaya tombak nyampe ke aim dari origin dengan kecepatan v
+    local function arcs(origin, aim, v)
+        local d = aim - origin
+        local dh = Vector3.new(d.X, 0, d.Z)
+        local D = dh.Magnitude
+        if D < 0.5 then return nil end
+        local hdir = dh / D
+        local v2 = v * v
+        local disc = v2 * v2 - GRAV * (GRAV * D * D + 2 * d.Y * v2)
+        if disc < 0 then return nil end
+        local s = math.sqrt(disc)
+        local out = {}
+        for i, sign in ipairs({-1, 1}) do
+            local th = math.atan((v2 + sign * s) / (GRAV * D))
+            local c = math.cos(th)
+            out[i] = {dir = hdir * c + Vector3.new(0, math.sin(th), 0), t = D / (v * c)}
+        end
+        return out
+    end
+    -- rencana lempar ke satu survivor: prediksi gerak selama tombak terbang, coba lengkung rendah lalu tinggi
+    local function planFor(camO, hrp, speed, pierce)
+        local v = hrp.AssemblyLinearVelocity
+        local vel = Vector3.new(v.X, 0, v.Z)
+        local hum = hrp.Parent and hrp.Parent:FindFirstChildOfClass("Humanoid")
+        local air = hum and hum.FloorMaterial == Enum.Material.Air
+        for arcIdx = 1, 2 do
+            local dir = (hrp.Position - camO).Unit
+            local t, sol = 0, nil
+            for _ = 1, 6 do
+                local origin = camO + dir * SPAWN
+                local aim = hrp.Position + vel * t
+                if air then
+                    aim = aim + Vector3.new(0, math.clamp(v.Y * t - 0.5 * workspace.Gravity * t * t, -12, 12), 0)
+                end
+                local a = arcs(origin, aim, speed)
+                if not a then sol = nil break end
+                sol = a[arcIdx]
+                dir, t = sol.dir, sol.t
+            end
+            if sol and t <= MAXLIFE - 0.05 then
+                local origin = camO + sol.dir * SPAWN
+                if pierce or pathClear(origin, sol.dir * speed, t) then
+                    return sol.dir, t, arcIdx
+                end
+            end
+        end
+        return nil
+    end
+
+    -- survivor di dalam POV, urut dari yang terdekat
+    local function candidates()
         local cam = workspace.CurrentCamera
-        local myCh = lp.Character
-        local myHrp = myCh and myCh:FindFirstChild("HumanoidRootPart")
-        if not (cam and myHrp and origin) then return nil end
+        local myHrp = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+        if not (cam and myHrp) then return {} end
         local isK = {}
         for _, k in ipairs(S.strictKillers and S.strictKillers() or getKillers()) do isK[k.char] = true end
-        local center = cam.ViewportSize / 2
-        local rad = povRadius()
-        local best, bestScore, bestDist
-        local curHrp, curScore, curDist = SV.cur, nil, nil
+        local center, rad = cam.ViewportSize / 2, povRadius()
+        local list = {}
         for _, p in ipairs(Players:GetPlayers()) do
             local ch = p.Character
             if p ~= lp and ch and not isK[ch] and alive(ch)
@@ -4406,260 +4406,73 @@ do
                     local d = (hrp.Position - myHrp.Position).Magnitude
                     if d <= SV.range then
                         local sp, onScr = cam:WorldToViewportPoint(hrp.Position)
-                        if onScr and sp.Z > 0 and (SV.full or (Vector2.new(sp.X, sp.Y) - center).Magnitude <= rad) then
-                            local score = d + ((SV.los and not pierce and blocked(origin, hrp)) and 1e5 or 0)
-                            if hrp == curHrp then curScore, curDist = score, d end
-                            if not bestScore or score < bestScore then best, bestScore, bestDist = hrp, score, d end
+                        if onScr and sp.Z > 0 and (Vector2.new(sp.X, sp.Y) - center).Magnitude <= rad then
+                            list[#list + 1] = {hrp = hrp, d = d}
                         end
                     end
                 end
             end
         end
-        -- target lama dipertahankan kalau yang baru ga lebih dekat jauh (3 stud), biar lock ga loncat-loncat
-        if curScore and best ~= curHrp and curScore <= bestScore + 3 then
-            best, bestScore, bestDist = curHrp, curScore, curDist
-        end
-        SV.cur = best
-        return best, bestDist
+        table.sort(list, function(a, b) return a.d < b.d end)
+        return list
     end
 
-    -- kecepatan hasil ukur, diinterpolasi dari lama tahan (nil kalau belum ada data)
-    local function calSpeed(hd)
-        local cal = SV.cal
-        if #cal == 0 then return nil end
-        hd = hd or SV.hold
-        local lo, hi
-        for _, c in ipairs(cal) do
-            if c.hold <= hd and (not lo or c.hold > lo.hold) then lo = c end
-            if c.hold >= hd and (not hi or c.hold < hi.hold) then hi = c end
-        end
-        if lo and hi and hi.hold > lo.hold then
-            return lo.speed + (hi.speed - lo.speed) * (hd - lo.hold) / (hi.hold - lo.hold)
-        end
-        local c = lo or hi
-        return c and c.speed
-    end
-    local function speedNow(hd)
-        local cs = SV.auto and calSpeed(hd)
-        if cs then return math.max(cs, 1) end
-        local sp = SV.speed
-        if SV.chargeOn and hd then
-            sp = SV.speedMin + (SV.speed - SV.speedMin) * math.clamp(hd / math.max(SV.chargeT, 0.1), 0, 1)
-        end
-        return math.max(sp, 1)
-    end
-    -- rumus sama kayak blok pistol; kalau blok itu gagal dimuat, pakai salinan ini biar Silent Veil ga mati diam-diam
-    local function ballisticFb(origin, pos, speed, G)
-        local d = pos - origin
-        local dh = Vector3.new(d.X, 0, d.Z)
-        local D = dh.Magnitude
-        if G < 1e-3 or D < 0.01 then
-            if d.Magnitude < 0.01 then return nil end
-            return d.Unit, math.max(0.04, d.Magnitude / speed), true
-        end
-        local v2 = speed * speed
-        local disc = v2 * v2 - G * (G * D * D + 2 * d.Y * v2)
-        local th = math.atan((v2 - math.sqrt(math.max(disc, 0))) / (G * D))
-        local dir = (dh / D) * math.cos(th) + Vector3.new(0, math.sin(th), 0)
-        return dir, math.max(0.04, D / (speed * math.cos(th))), disc >= 0
-    end
-    local function ballistic(...) return (S.ballistic or ballisticFb)(...) end
-
-    -- arah lempar: prediksi gerak (horizontal; vertikal cuma kalau lagi di udara) + kompensasi gravitasi. return arah, kecepatan, reach
-    local function solve(origin, hrp, hd, spOver)
-        local speed = (spOver and spOver > 10) and spOver or speedNow(hd)
-        local G = (SV.auto and SV.gCal) or workspace.Gravity * SV.drop
-        local okP, ping = pcall(function() return lp:GetNetworkPing() end)
-        ping = (okP and ping * 0.5 or 0.035) + SV.leadMs / 1000
-        local v = hrp.AssemblyLinearVelocity
-        local vel = SV.predict and Vector3.new(v.X, 0, v.Z) or Vector3.zero
-        local hum = hrp.Parent and hrp.Parent:FindFirstChildOfClass("Humanoid")
-        local air = SV.predict and hum and hum.FloorMaterial == Enum.Material.Air
-        local t = (hrp.Position - origin).Magnitude / speed
-        local dir, reach
-        for _ = 1, 6 do
-            local tt = math.max(t + ping, 0)
-            local aim = hrp.Position + vel * tt
-            if air then
-                aim = aim + Vector3.new(0, math.clamp(v.Y * tt - 0.5 * workspace.Gravity * tt * tt, -12, 12), 0)
-            end
-            local dh = Vector3.new(hrp.Position.X - origin.X, 0, hrp.Position.Z - origin.Z).Magnitude
-            aim = aim + Vector3.new(0, math.clamp((SV.kElev + SV.kMan) * dh * dh, -80, 80), 0) -- koreksi tinggi jarak jauh (dipelajari)
-            dir, t, reach = ballistic(origin, aim, speed, G)
-            if not dir then return nil end
-        end
-        return dir, speed, reach
-    end
-
-    -- dipakai Veil lock: target yang bakal dipilih Silent Veil (biar tampilan = perilaku)
+    -- dipakai Veil lock (tampilan): survivor terdekat di POV; target lama dipertahankan kalau yang baru ga lebih dekat jauh (3 stud)
     S.svTarget = function()
-        local hrp, dist = pickTarget(spawnOrigin(), SV.holdOn)
-        return hrp, dist
+        local list = candidates()
+        local best = list[1]
+        if best and SV.cur then
+            for _, c in ipairs(list) do
+                if c.hrp == SV.cur and c.d <= best.d + 3 then best = c break end
+            end
+        end
+        SV.cur = best and best.hrp or nil
+        if best then return best.hrp, best.d end
+        return nil
     end
     S.svIsVeil = function() return veilEquipped(lp.Character) end
 
-    -- ===== Ukur tombak asli: sampel posisi tiap frame, fit lurus (horizontal) + parabola (vertikal) =====
-    local function fitLin(ts, vs)
-        local n, tm, vm = #ts, 0, 0
-        for i = 1, n do tm, vm = tm + ts[i], vm + vs[i] end
-        tm, vm = tm / n, vm / n
-        local num, den = 0, 0
-        for i = 1, n do
-            num = num + (ts[i] - tm) * (vs[i] - vm)
-            den = den + (ts[i] - tm) ^ 2
+    local function handleThrow(args)
+        local ch = lp.Character
+        local a1 = args[1]
+        if not (ch and type(a1) == "table" and typeof(a1.Direction) == "Vector3" and typeof(a1.Origin) == "Vector3") then
+            svSay("Format remote ga dikenali, lemparan lolos asli")
+            return
         end
-        return den > 1e-9 and num / den or 0
-    end
-    local function det3(a, b, c, d, e, f, g, h, i)
-        return a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g)
-    end
-    local function fitQuad(ts, ys)
-        local n, s1, s2, s3, s4, y0, y1, y2 = #ts, 0, 0, 0, 0, 0, 0, 0
-        for i = 1, n do
-            local t, y = ts[i], ys[i]
-            local t2 = t * t
-            s1, s2, s3, s4 = s1 + t, s2 + t2, s3 + t2 * t, s4 + t2 * t2
-            y0, y1, y2 = y0 + y, y1 + t * y, y2 + t2 * y
+        if not veilEquipped(ch) then svSay("Lolos asli: tombak Veil ga kedeteksi") return end
+        local e = ch:GetAttribute("EmpoweredSpear")
+        local pierce = e ~= nil and e ~= false and e ~= 0
+        local chargeSec
+        if chargeTs and type(a1.ReleasedAt) == "number" then chargeSec = a1.ReleasedAt - chargeTs end
+        local speed = chargeSec and math.clamp(chargeSec * SPEED_MAX, 1, SPEED_MAX) or SPEED_MAX
+        local list = candidates()
+        if #list == 0 then svSay("Lolos asli: ga ada survivor di dalam POV / jarak") return end
+        local chosen, cdir, ct, carc
+        for _, c in ipairs(list) do
+            local dir, t, arc = planFor(a1.Origin, c.hrp, speed, pierce)
+            if dir then chosen, cdir, ct, carc = c, dir, t, arc break end
         end
-        local D = det3(n, s1, s2, s1, s2, s3, s2, s3, s4)
-        if math.abs(D) < 1e-9 then return nil end
-        local a = det3(y0, s1, s2, y1, s2, s3, y2, s3, s4) / D
-        local b = det3(n, y0, s2, s1, y1, s3, s2, y2, s4) / D
-        local c = det3(n, s1, y0, s1, s2, y1, s2, s3, y2) / D
-        return a, b, c
-    end
-    local probing = false
-    local function probeStart(origin, hold, tgt, cfT)
-        if probing or not running then return end
-        probing = true
-        local cands, seen, t0 = {}, {}, os.clock()
-        local D0 = (tgt and tgt.Parent) and Vector3.new(tgt.Position.X - origin.X, 0, tgt.Position.Z - origin.Z).Magnitude or nil
-        local function sample(c)
-            if c.part.Parent then
-                c.s[#c.s + 1] = {t = os.clock(), p = c.part.Position, tp = (tgt and tgt.Parent) and tgt.Position or nil}
+        if not chosen then
+            svSay(("Lolos asli: ga ada yang kejangkau / ga ketutup (kecepatan %d stud/dtk)"):format(math.floor(speed)))
+            return
+        end
+        a1.Direction = cdir
+        -- kompensasi lag kayak game (viewDelay): seberapa lama posisi target di layar ketinggalan
+        local vdTxt = ""
+        local ra = chosen.hrp.Parent and chosen.hrp.Parent:GetAttribute("VeilRenderedAt")
+        if type(ra) == "number" and ra == ra then
+            local vd = workspace:GetServerTimeNow() - ra
+            if vd > 0 and vd < 0.35 then
+                a1.ViewDelay = vd
+                vdTxt = (", lag %d ms"):format(math.floor(vd * 1000))
             end
         end
-        local function addCand(i, fromAdd)
-            if #cands >= 8 or seen[i] or not i:IsA("BasePart") or i.Anchored then return end
-            local ch = i:FindFirstAncestorOfClass("Model")
-            if ch and Players:GetPlayerFromCharacter(ch) then return end
-            if (i.Position - origin).Magnitude > 35 then return end
-            seen[i] = true
-            local c = {part = i, s = {}, fromAdd = fromAdd}
-            cands[#cands + 1] = c
-            sample(c)
-        end
-        pcall(function()
-            for _, i in ipairs(workspace:GetPartBoundsInRadius(origin, 30)) do addCand(i, false) end
-        end)
-        local c1 = workspace.DescendantAdded:Connect(function(i)
-            if os.clock() - t0 < 0.6 then pcall(addCand, i, true) end
-        end)
-        local c2
-        local function finish()
-            c1:Disconnect()
-            c2:Disconnect()
-            probing = false
-            local best, bestLen
-            for _, c in ipairs(cands) do
-                local n = #c.s
-                if n >= 6 then
-                    local len = (c.s[n].p - c.s[1].p).Magnitude
-                    if len > 15 and (not bestLen or len > bestLen) then best, bestLen = c, len end
-                end
-            end
-            if not best then
-                local names = {}
-                for i = 1, math.min(#cands, 3) do names[i] = cands[i].part.Name end
-                pendingCal = ("Kalibrasi: tombak ga kedetek (%d kandidat%s)"):format(#cands, #names > 0 and (": " .. table.concat(names, ",")) or "")
-                return
-            end
-            local sm, n = best.s, #best.s
-            -- buang sampel sesudah tombak berhenti (nancep / kena)
-            for i = 3, n do
-                if (sm[i].p - sm[i - 1].p).Magnitude < 0.05 and (sm[i - 1].p - sm[i - 2].p).Magnitude < 0.05 then n = i - 2 break end
-            end
-            if n < 6 or sm[n].t - sm[1].t < 0.15 then pendingCal = "Kalibrasi: sampel terlalu pendek" return end
-            local ts, xs, ys, zs = {}, {}, {}, {}
-            local tb = sm[1].t
-            for i = 1, n do
-                ts[i], xs[i], ys[i], zs[i] = sm[i].t - tb, sm[i].p.X, sm[i].p.Y, sm[i].p.Z
-            end
-            -- fit cuma dari 0,7 dtk pertama (kecepatan awal), sisanya buat ngecek jatuhnya
-            local nf = n
-            for i = 1, n do if ts[i] > 0.7 then nf = i - 1 break end end
-            if nf < 6 then nf = n end
-            local function head(v) local o = {} for i = 1, nf do o[i] = v[i] end return o end
-            local tf = head(ts)
-            local vx, vz = fitLin(tf, head(xs)), fitLin(tf, head(zs))
-            local _, vy, cq = fitQuad(tf, head(ys))
-            if not vy then pendingCal = "Kalibrasi: fit gagal" return end
-            local vh = math.sqrt(vx * vx + vz * vz)
-            local speed, g = math.sqrt(vh * vh + vy * vy), -2 * cq
-            if speed < 30 or speed > 1500 then pendingCal = ("Kalibrasi: hasil ga masuk akal (%d stud/dtk)"):format(math.floor(speed)) return end
-            if g < 0 or g > workspace.Gravity * 3 then g = nil end
-            if g then
-                gList[#gList + 1] = g
-                if #gList > 12 then table.remove(gList, 1) end
-                SV.gCal = median(gList)
-            end
-            if hold then
-                local cal = SV.cal
-                cal[#cal + 1] = {hold = hold, speed = speed}
-                if #cal > 12 then table.remove(cal, 1) end
-            end
-            -- titik muncul tombak relatif ke HRP (cuma dari tombak yang baru muncul pas lempar)
-            if best.fromAdd and cfT then
-                local off = cfT:PointToObjectSpace(sm[1].p)
-                if off.Magnitude < 15 then SV.offCal = SV.offCal and SV.offCal:Lerp(off, 0.35) or off end
-            end
-            calSave()
-            local o = SV.offCal
-            pendingCal = ("Terukur: tahan %s -> %d stud/dtk, gravitasi %s, titik muncul %s (%d data)%s"):format(
-                hold and ("%.1f dtk"):format(hold) or "?", math.floor(speed), g and tostring(math.floor(g)) or "?",
-                o and ("(%.1f, %.1f, %.1f)"):format(o.X, o.Y, o.Z) or "?", #SV.cal,
-                hold and "" or " [tombol lempar belum direkam, kecepatan ga disimpen]")
-            -- seberapa jauh tombak lewat dari target (buat ngecek presisi)
-            if tgt then
-                local bestD, bi = math.huge, nil
-                for i = 1, n do
-                    if sm[i].tp then
-                        local d = (sm[i].p - sm[i].tp).Magnitude
-                        if d < bestD then bestD, bi = d, i end
-                    end
-                end
-                if bi then
-                    local dv = sm[bi].p - sm[bi].tp
-                    local fwd = Vector3.new(vx, 0, vz)
-                    fwd = fwd.Magnitude > 0.01 and fwd.Unit or Vector3.zAxis
-                    local right = fwd:Cross(Vector3.yAxis)
-                    pendingMiss = (bestD < 3.5 and "KENA / hampir kena" or "MELESET") ..
-                        (" %.1f stud | atas %+.1f | kanan %+.1f | lewat %+.1f (+ = tombak di atas/kanan/lewat target)"):format(bestD, dv.Y, dv:Dot(right), dv:Dot(fwd))
-                    if D0 and D0 > 40 then
-                        local bj, bg = nil, math.huge
-                        for i = 1, n do
-                            local gap = math.abs(Vector3.new(sm[i].p.X - origin.X, 0, sm[i].p.Z - origin.Z).Magnitude - D0)
-                            if gap < bg then bg, bj = gap, i end
-                        end
-                        if bj and bg <= 15 and sm[bj].tp then
-                            local e = sm[bj].p.Y - sm[bj].tp.Y
-                            if math.abs(e) < 60 then
-                                SV.kElev = math.clamp(SV.kElev - 0.6 * e / (D0 * D0), -0.002, 0.002)
-                                calSave()
-                                pendingMiss = pendingMiss .. (' | di jarak target tombak %s %.1f stud, koreksi tinggi dipelajari'):format(e > 0 and 'kelewat atas' or 'kurang tinggi', math.abs(e))
-                            end
-                        elseif bj then
-                            pendingMiss = pendingMiss .. (' | tombak cuma nyampe %d dari %d stud'):format(math.floor(Vector3.new(sm[n].p.X - origin.X, 0, sm[n].p.Z - origin.Z).Magnitude), math.floor(D0))
-                        end
-                    end
-                end
-            end
-        end
-        c2 = RS.Heartbeat:Connect(function()
-            local now = os.clock()
-            if not running or now - t0 > 3 then finish() return end
-            for _, c in ipairs(cands) do sample(c) end
-        end)
+        SV.cur = nil
+        lastTarget = chosen.hrp
+        lastSeq = a1.Sequence
+        svSay(("Lock %s (%d stud, terbang %.1f dtk, kec %d%s%s%s)"):format(
+            tostring(chosen.hrp.Parent and chosen.hrp.Parent.Name), math.floor(chosen.d), ct, math.floor(speed),
+            pierce and ", tembus tembok" or "", carc == 2 and ", lob tinggi" or "", vdTxt))
     end
 
     local svOld
@@ -4667,90 +4480,48 @@ do
     if hookmetamethod and getnamecallmethod then
         svOld = hookmetamethod(game, "__namecall", wrap(function(self, ...)
             local method = getnamecallmethod()
-            if running and SV.on and (method == "FireServer" or method == "fireServer")
-                and typeof(self) == "Instance" and self.Name:lower() == "spearthrow"
-                and not (checkcaller and checkcaller()) then
-                local args = table.pack(...)
-                pcall(function()
-                    local ch = lp.Character
-                    if not veilEquipped(ch) then svSay("Lolos asli: tombak Veil ga kedeteksi") return end
-                    local hrpC = ch and ch:FindFirstChild("HumanoidRootPart")
-                    local cfT = hrpC and hrpC.CFrame
-                    local hd = S.holdDur and S.holdDur()
-                    local a1 = args[1]
-                    local isTbl = type(a1) == "table" and typeof(a1.Origin) == "Vector3"
-                    local isVec2 = typeof(a1) == "Vector3" and typeof(args[2]) == "Vector3"
-                    local origin
-                    if isTbl then origin = a1.Origin
-                    elseif isVec2 then origin = a1
-                    else origin = spawnOrigin() end
-                    if not origin then return end
-                    do -- bentuk argumen remote + nilainya, ditampilin di menu buat dicek
-                        local function show(v)
-                            local tv = typeof(v)
-                            if tv == "number" then return ("%.2f"):format(v) end
-                            if tv == "Vector3" then return ("V3|%.2f|"):format(v.Magnitude) end
-                            if tv == "boolean" or tv == "string" then return tostring(v) end
-                            return tv
-                        end
-                        local shape = {}
-                        for i = 1, args.n do
-                            local v = args[i]
-                            if type(v) == "table" then
-                                local parts = {}
-                                for k, x in pairs(v) do
-                                    parts[#parts + 1] = tostring(k) .. "=" .. show(x)
-                                    if #parts >= 8 then break end
-                                end
-                                shape[i] = "{" .. table.concat(parts, ", ") .. "}"
-                            else
-                                shape[i] = show(v)
-                            end
-                        end
-                        pendingArgs = "Format remote: " .. table.concat(shape, ", ")
-                    end
-                    local target
-                    local function redirect()
-                        if SV.holdOn then
-                            if not hd then svSay("Lolos asli: tombol lempar ga kedeteksi (grup Veil lock > Rekam tombol)") return end
-                            if hd < SV.hold then svSay(("Lolos asli: ditahan %.1f dtk (min %.1f)"):format(hd, SV.hold)) return end
-                        end
-                        if not (isTbl or isVec2 or typeof(a1) == "Vector3") then
-                            svSay("Format remote ga dikenali (liat 'Format remote' di Veil kalibrasi), lemparan lolos asli")
-                            return
-                        end
-                        local tg, dist = pickTarget(origin, SV.holdOn and hd and hd >= SV.hold)
-                        if not tg then svSay("Lolos asli: ga ada survivor di dalam POV / jarak") return end
-                        local spOver
-                        if isTbl and typeof(a1.Velocity) == "Vector3" then spOver = a1.Velocity.Magnitude end
-                        local dir, spd, reach = solve(origin, tg, hd, spOver)
-                        if not dir then svSay("Lolos asli: arah ga kehitung") return end
-                        if isTbl then
-                            -- jaga panjang Direction asli (kalau game ngirim bukan vektor satuan)
-                            local om = typeof(a1.Direction) == "Vector3" and a1.Direction.Magnitude or 1
-                            if om < 0.01 then om = 1 end
-                            a1.Direction = dir * om
-                            if a1.Velocity ~= nil then a1.Velocity = dir * spd end
-                        elseif isVec2 then
-                            args[2] = dir
-                        else
-                            args[1] = dir
-                        end
-                        SV.cur = nil
-                        svSay(("Lock %s (%d m, %d stud/dtk%s)"):format(tostring(tg.Parent and tg.Parent.Name), math.floor(dist), math.floor(spd), reach and "" or ", KEJAUHAN (sudut jangkauan maks)"))
-                        target = tg
-                    end
-                    redirect()
-                    probeStart(origin, hd, target, cfT)
-                end)
-                setnamecallmethod(method)
-                return svOld(self, table.unpack(args, 1, args.n))
+            if running and (method == "FireServer" or method == "fireServer")
+                and typeof(self) == "Instance" and not (checkcaller and checkcaller()) then
+                local nm = self.Name:lower()
+                if nm == "spearstate" then
+                    local a, _, c = ...
+                    if a == "charge" and type(c) == "number" then chargeTs = c end
+                    setnamecallmethod(method)
+                    return svOld(self, ...)
+                elseif nm == "spearthrow" and SV.on then
+                    local args = table.pack(...)
+                    pcall(handleThrow, args)
+                    setnamecallmethod(method)
+                    return svOld(self, table.unpack(args, 1, args.n))
+                end
             end
             return svOld(self, ...)
         end))
     else
         svSay("hookmetamethod ga ada di executor ini")
     end
+
+    -- hasil lemparan dari server (event stop / reject) buat ngecek presisi
+    task.spawn(function()
+        local ok, re = pcall(function()
+            local rs = game:GetService("ReplicatedStorage")
+            return rs:WaitForChild("Remotes", 15):WaitForChild("Killers", 15):WaitForChild("Veil", 15):WaitForChild("SpearState", 15)
+        end)
+        if not (ok and re) then return end
+        track(re.OnClientEvent:Connect(function(kind, data)
+            if type(data) ~= "table" or not lastSeq or data.Sequence ~= lastSeq then return end
+            if kind == "reject" then
+                svResult("Hasil lemparan: DITOLAK server (arah beda dari kamera?)")
+            elseif kind == "stop" and data.Source == lp.Character then
+                local why = data.Reason
+                local txt = why == "hit" and "KENA survivor" or why == "wall" and "kena TEMBOK" or why == "expired" and "kadaluarsa" or tostring(why)
+                if why ~= "hit" and typeof(data.Position) == "Vector3" and lastTarget and lastTarget.Parent then
+                    txt = txt .. (", %d stud dari target"):format(math.floor((data.Position - lastTarget.Position).Magnitude))
+                end
+                svResult(("Hasil lemparan #%s: %s"):format(tostring(data.Sequence), txt))
+            end
+        end))
+    end)
     -- sengaja ga re-hook: hook udah pass-through pas running == false (re-hook bisa numpuk layer / rekursi di beberapa executor)
     S.svRestore = function() end
 end
@@ -6158,12 +5929,12 @@ xpcall(function()
             end
             return
         end
-        local hd, held = H.dur()
-        local need = S.sv.holdOn and S.sv.hold or 0
-        local charging = held and hd ~= nil
-        local locked = (need == 0) or (charging and hd >= need)
+        local ch = lp.Character
+        local charging = ch and ch:GetAttribute("VeilSpearCharging") and true or false
+        local ev = ch and ch:GetAttribute("EmpoweredSpear")
+        local empowered = ev ~= nil and ev ~= false and ev ~= 0
         local newSet = {}
-        if locked then
+        if charging then
             if now - pickT > 0.12 then
                 pickT = now
                 local hrp = S.svTarget and S.svTarget()
@@ -6179,53 +5950,30 @@ xpcall(function()
         for plr, st in pairs(newSet) do if old[plr] ~= st then paint(plr, st) end end
         for plr in pairs(old) do if not newSet[plr] then paint(plr, nil) end end
         if circ then
-            circ.Visible = not S.sv.full
+            circ.Visible = true
             local r = circR()
             if math.abs(circ.AbsoluteSize.X / 2 - r) > 2 then circ.Size = UDim2.fromOffset(r * 2, r * 2) end
             local c = VL.colFov
-            if locked and need > 0 then c = VL.colLock
-            elseif charging and need > 0 then c = VL.colFov:Lerp(VL.colLock, math.clamp(hd / need, 0, 1)) end
+            if charging then c = empowered and VL.colLock or VL.colFov:Lerp(VL.colLock, 0.5) end
             if stroke.Color ~= c then stroke.Color = c end
         end
         if vlLbl then
             local t
-            if next(newSet) then
-                local nm = VL.tgt and VL.tgt.DisplayName or "?"
-                t = "LOCK: " .. nm
-            elseif charging and need > 0 then
-                t = ("Nahan: %.1f / %.1f dtk"):format(hd, need)
-            elseif locked then
-                t = "Lock: ga ada target"
+            if charging and VL.tgt then
+                t = (empowered and "LOCK (tembus tembok): " or "LOCK: ") .. tostring(VL.tgt.DisplayName)
+            elseif charging then
+                t = empowered and "Siap, tapi ga ada target di POV" or "Nahan... ga ada target di POV"
             else
                 t = "Siap: tahan tombol lempar"
             end
             if t ~= lastTxt then lastTxt = t vlLbl.Text = t end
         end
-        if infoLbl then
-            local t = "Tombol: " .. tostring(H.learn or H.name or "auto (belum kedeteksi)")
-            if t ~= lastInfo then lastInfo = t infoLbl.Text = t end
-        end
     end))
 
     -- ---------- UI ----------
     local cVL = tKill:Group("Veil lock", 2)
-    cVL:Toggle("VL_On", "ESP lock + lingkaran POV", true, function(v) VL.on = v actAt = 0 end,
-        {id = "VL_ColLock", default = VL.colLock, cb = function(c) VL.colLock = c end})
-    cVL:Toggle("VL_Show", "Tampilkan lingkaran", true, function(v) VL.show = v circBuild() end,
-        {id = "VL_ColFov", default = VL.colFov, cb = function(c) VL.colFov = c if stroke then stroke.Color = c end end})
-    cVL:Toggle("VL_Veil", "Cuma pas lu Killer Veil", false, function(v) VL.veilOnly = v actAt = 0 end)
     vlLbl = cVL:Label("Siap: tahan tombol lempar")
-    infoLbl = cVL:Label("Tombol: auto (belum kedeteksi)")
-    cVL:Button("Rekam tombol lempar (tekan sekali)", function()
-        H.learning = true
-        notify("Veil lock", "Sekarang tekan tombol lempar tombak")
-    end)
-    cVL:Button("Hapus rekaman tombol", function()
-        H.learn = nil
-        if delfile then pcall(delfile, LFILE) end
-        notify("Veil lock", "Rekaman dihapus (balik auto)")
-    end)
-    cVL:Label("Lingkaran = POV Silent Veil (ukuran diatur di Silent Veil). Survivor TERDEKAT di dalam lingkaran yang di-lock, setelah tombol lempar ditahan >= batas.")
+    cVL:Label("Lingkaran = POV Silent Veil. Pas tombol lempar ditahan, survivor TERDEKAT di dalam lingkaran di-lock (merah). Efek tombak muncul = lemparan tembus tembok.")
     circBuild()
 
     local prevRestore = S.xRestore
@@ -6237,191 +5985,6 @@ xpcall(function()
     end
 end, function(e) warn("[jin] Veil lock gagal dipasang: " .. tostring(e)) end)
 
--- ===== Tambahan dari HANX HUB: Utilitas, Skill check extra, Auto drop pallet =====
--- Nama remote/atribut diambil dari hanxhub (hasil decode): Remotes.Pallet.PalletDropEvent, atribut skillcheckspeed.
-do
-    local TeleportService = game:GetService("TeleportService")
-    local VirtualUser = game:GetService("VirtualUser")
-    local function myHrp()
-        local ch = lp.Character
-        return ch and ch:FindFirstChild("HumanoidRootPart")
-    end
-    -- tSurv ada di scope lokal lain, ambil lewat daftar tab
-    local tSurv
-    for _, t in ipairs(S.tabList) do
-        if t.name == "Survivor" then tSurv = t break end
-    end
-    if not tSurv then error("tab Survivor ga ketemu") end
-
-    -- ===== Utilitas: Anti AFK, rejoin, jam =====
-    tMisc.route["Utilitas"] = tMisc.route["Fun menu"]
-    local afkConn
-    local function setAfk(v)
-        if afkConn then afkConn:Disconnect() afkConn = nil end
-        if v then
-            afkConn = lp.Idled:Connect(function()
-                pcall(function() VirtualUser:CaptureController() VirtualUser:ClickButton2(Vector2.new()) end)
-            end)
-        end
-    end
-    local tod = {on = false, val = 12, orig = nil, conn = nil}
-    local function todStop()
-        if tod.conn then tod.conn:Disconnect() tod.conn = nil end
-        if tod.orig then pcall(function() Lighting.ClockTime = tod.orig end) tod.orig = nil end
-    end
-    local cUT = tMisc:Group("Utilitas", 2)
-    cUT:Toggle("AFK_On", "Anti AFK", true, setAfk)
-    setAfk(true)
-    cUT:Toggle("TOD_On", "Custom jam (fullbright OFF dulu)", false, function(v)
-        tod.on = v
-        todStop()
-        if v then
-            tod.orig = Lighting.ClockTime
-            -- listener cuma nyala pas fitur aktif, bukan polling tiap frame
-            tod.conn = Lighting:GetPropertyChangedSignal("ClockTime"):Connect(function()
-                if tod.on and not S.fb.on and Lighting.ClockTime ~= tod.val then Lighting.ClockTime = tod.val end
-            end)
-            if not S.fb.on then Lighting.ClockTime = tod.val end
-        end
-    end)
-    cUT:Slider("TOD_Val", "Jam", 0, 24, 12, 1, function(v)
-        tod.val = v
-        if tod.on and not S.fb.on then Lighting.ClockTime = v end
-    end)
-    cUT:Button("Rejoin server", function()
-        pcall(function() TeleportService:Teleport(game.PlaceId, lp) end)
-    end)
-
-    -- ===== Skill check extra: kecepatan + sembunyiin UI =====
-    tSurv.route["Skill check tambahan"] = tSurv.route["Auto skill check"]
-    local scx = {hide = false, spd = false, val = 1, ch = nil, orig = nil}
-    local function scRestoreSpeed()
-        if scx.ch and scx.orig then
-            local ch, o = scx.ch, scx.orig
-            pcall(function()
-                ch:SetAttribute("skillcheckspeed", o.lower)
-                ch:SetAttribute("SkillCheckSpeed", o.upper)
-            end)
-        end
-        scx.ch, scx.orig = nil, nil
-    end
-    local function setHideUi(hide)
-        for _, n in ipairs({"SkillCheckPromptGui", "SkillCheckPromptGui-con"}) do
-            local g = pg:FindFirstChild(n)
-            -- cuma ScreenGui: Check.Visible tetap true, jadi auto skill check tetap jalan
-            if g and g:IsA("ScreenGui") then g.Enabled = not hide end
-        end
-    end
-    local cSX = tSurv:Group("Skill check tambahan", 1)
-    cSX:Toggle("SCX_Hide", "Sembunyiin UI skill check", false, function(v) scx.hide = v setHideUi(v) end)
-    cSX:Toggle("SCX_Spd", "Atur kecepatan jarum", false, function(v)
-        scx.spd = v
-        if not v then scRestoreSpeed() end
-    end)
-    cSX:Slider("SCX_Val", "Kecepatan jarum", 0.1, 3, 1, 0.1, function(v) scx.val = v end, "x")
-    cSX:Label("Kecepatan diset lewat atribut karakter (skillcheckspeed). Kalau ga ngaruh di versi game sekarang, matiin aja.")
-    task.spawn(function()
-        while running do
-            if scx.hide or scx.spd then
-                if scx.hide then pcall(setHideUi, true) end
-                if scx.spd then
-                    pcall(function()
-                        local ch = lp.Character
-                        if not ch then return end
-                        if scx.ch ~= ch then
-                            scRestoreSpeed()
-                            scx.ch = ch
-                            scx.orig = {lower = ch:GetAttribute("skillcheckspeed"), upper = ch:GetAttribute("SkillCheckSpeed")}
-                        end
-                        local v = math.clamp(scx.val, 0.1, 3)
-                        if ch:GetAttribute("skillcheckspeed") ~= v then ch:SetAttribute("skillcheckspeed", v) end
-                        if ch:GetAttribute("SkillCheckSpeed") ~= v then ch:SetAttribute("SkillCheckSpeed", v) end
-                    end)
-                end
-                task.wait(0.5)
-            else
-                task.wait(1.5) -- dua-duanya mati: jarang ngecek
-            end
-        end
-    end)
-
-    -- ===== Auto drop pallet (survivor) =====
-    -- Pakai daftar `found.pallet` + deteksi jatuh (S.palletDown) bawaan script, ga scan map sendiri.
-    tSurv.route["Auto drop pallet"] = tSurv.route["Auto parry (Dagger)"]
-    local dp = {on = false, radius = 15, cd = 1.5, last = 0, used = setmetatable({}, {__mode = "k"})}
-    local function killerNear()
-        for _, k in ipairs(getKillers()) do
-            if k.char ~= lp.Character then
-                local hum = k.char:FindFirstChildOfClass("Humanoid")
-                if hum and hum.Health > 0 then return k.hrp end
-            end
-        end
-    end
-    local function killerClosing(kh, me)
-        local d = me.Position - kh.Position
-        local flat = Vector3.new(d.X, 0, d.Z)
-        if flat.Magnitude > math.max(12, dp.radius + 5) then return false end
-        if flat.Magnitude < 0.1 then return true end
-        local u = flat.Unit
-        local v = kh.AssemblyLinearVelocity
-        local vf = Vector3.new(v.X, 0, v.Z)
-        local look = kh.CFrame.LookVector
-        local lf = Vector3.new(look.X, 0, look.Z)
-        local facing = lf.Magnitude > 0.1 and lf.Unit:Dot(u) or -1
-        return vf:Dot(u) >= 1.5 or (vf.Magnitude >= 2.5 and facing >= 0.65)
-    end
-    local cDP = tSurv:Group("Auto drop pallet", 2)
-    cDP:Toggle("DP_On", "Auto drop pallet", false, function(v) dp.on = v end)
-    cDP:Slider("DP_Radius", "Radius pallet", 8, 30, 15, 1, function(v) dp.radius = v end, "m")
-    cDP:Slider("DP_CD", "Cooldown", 0.5, 4, 1.5, 0.1, function(v) dp.cd = v end, "s")
-    cDP:Label("Jatuhin pallet pas killer nyamperin & pallet deket lu.")
-    task.spawn(function()
-        while running do
-            if not dp.on then
-                task.wait(0.5)
-            else
-            task.wait(0.1)
-            pcall(function()
-                if os.clock() - dp.last < dp.cd or roleOf(lp) == "killer" then return end
-                local me = myHrp()
-                local kh = me and killerNear()
-                if not kh or not killerClosing(kh, me) then return end
-                local best, bestPart, bd
-                local rad = math.max(5, dp.radius)
-                for inst in pairs(found.pallet) do
-                    if inst.Parent and not dp.used[inst] then
-                        local part = S.partOf(inst)
-                        if part then
-                            local d = (me.Position - part.Position).Magnitude
-                            -- cek murah dulu (jarak), baru deteksi jatuh yang lebih mahal
-                            if d <= rad and (not bd or d < bd) and (kh.Position - part.Position).Magnitude <= math.max(8, dp.radius * 0.8) then
-                                local okD, down = pcall(S.palletDown, inst)
-                                if okD and not down then best, bestPart, bd = inst, part, d end
-                            end
-                        end
-                    end
-                end
-                if not best then return end
-                local rem = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
-                rem = rem and rem:FindFirstChild("Pallet")
-                rem = rem and rem:FindFirstChild("PalletDropEvent")
-                if not (rem and rem:IsA("RemoteEvent")) then return end
-                local hit = best:FindFirstChild("Hitbox", true) or best:FindFirstChild("hitbox", true) or bestPart
-                dp.used[best] = true
-                task.delay(6, function() dp.used[best] = nil end) -- pallet bisa dipakai lagi kalau ternyata ga jatuh
-                if pcall(function() rem:FireServer(hit) end) then dp.last = os.clock() else dp.used[best] = nil end
-            end)
-            end
-        end
-    end)
-
-    S.x2Restore = function()
-        pcall(setAfk, false)
-        pcall(scRestoreSpeed)
-        pcall(setHideUi, false)
-        pcall(todStop)
-    end
-end
 local cleanup
 local cUI = tSet:Group("Tampilan", 1)
 cUI:Dropdown("UI_Size", "Ukuran", {"Kecil", "Sedang", "Besar", "Jumbo"}, "Sedang", function(v) curSize = v applyLayout() end)
@@ -6552,7 +6115,6 @@ function cleanup()
     pcall(function() if S.keRestore then S.keRestore() end end)
     pcall(function() if S.parryFlush then S.parryFlush() end end)
     pcall(function() if S.xRestore then S.xRestore() end end)
-    pcall(function() if S.x2Restore then S.x2Restore() end end)
     for plr in pairs(pvis) do destroyPlayerVis(plr) end
     for inst in pairs(ovis) do destroyObj(inst) end
     pcall(function() espFolder:Destroy() end)
@@ -6577,5 +6139,5 @@ loadConfig()
 loading = false
 pcall(refreshDash)
 setOpen(true)
-notify("Jìn Script", "Loaded v4.9")
-warn("[jin] v4.9 loaded (+utilitas, skill check extra, auto drop pallet)")
+notify("Jìn Script", "Loaded v4.8")
+warn("[jin] v4.8 loaded (esp anti lag)")
