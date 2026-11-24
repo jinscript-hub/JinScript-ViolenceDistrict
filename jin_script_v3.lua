@@ -4317,25 +4317,34 @@ do
                 local h = hist[hrp]
                 if not h then h = {} hist[hrp] = h end
                 h[#h + 1] = {now, hrp.Position}
-                while #h > 0 and now - h[1][1] > 0.6 do table.remove(h, 1) end
+                while #h > 0 and now - h[1][1] > 0.35 do table.remove(h, 1) end
             end
         end
     end))
+    -- kecepatan dipecah 2: "now" dari sampel pendek (~0.12 dtk, cepat tanggap kalau survivor belok),
+    -- "avg" dari ~0.3 dtk (lebih stabil). Dipakai bareng: belokan ke-detect cepat, noise ga kebawa semua.
     local function velOf(hrp)
         local h = hist[hrp]
         local api = hrp.AssemblyLinearVelocity
-        if not h or #h < 4 then return api end
+        if not h or #h < 4 then return api, api end
         local now = os.clock()
-        local last, first = h[#h], nil
-        for i = #h, 1, -1 do
-            if now - h[i][1] >= 0.3 then first = h[i] break end
+        local last = h[#h]
+        local function since(sec)
+            for i = #h, 1, -1 do
+                if now - h[i][1] >= sec then return h[i] end
+            end
+            return h[1]
         end
-        first = first or h[1]
-        local dt = last[1] - first[1]
-        if dt < 0.1 then return api end
-        local v = (last[2] - first[2]) / dt
-        if v.Magnitude > 45 then v = v.Unit * 45 end -- buang lonjakan (teleport / animasi vault)
-        return v
+        local function calc(p)
+            local dt = last[1] - p[1]
+            if dt < 0.05 then return nil end
+            local v = (last[2] - p[2]) / dt
+            if v.Magnitude > 45 then v = v.Unit * 45 end -- buang lonjakan (teleport / animasi vault)
+            return v
+        end
+        local vNow = calc(since(0.12)) or api
+        local vAvg = calc(since(0.3)) or vNow
+        return vNow, vAvg
     end
 
     -- aturan dinding sama kayak SpearWorld.ignore di game: karakter, tanaman, dan part transparan (>= 0.05) ga nyetop tombak
@@ -4398,9 +4407,17 @@ do
         return out
     end
     -- rencana lempar ke satu survivor: prediksi gerak selama tombak terbang, coba lengkung rendah lalu tinggi
+    local function selfLag()
+        local okP, ping = pcall(function() return lp:GetNetworkPing() end)
+        return okP and math.clamp(ping * 0.5, 0, 0.2) or 0.05
+    end
     local function planFor(camO, hrp, speed, pierce)
-        local v = velOf(hrp)
-        local vel = Vector3.new(v.X, 0, v.Z)
+        local lag = selfLag()
+        local vN, vA = velOf(hrp)
+        local v = vN
+        -- lambat laun makin percaya kecepatan rata-rata buat lemparan yang terbang lama (lebih stabil dari getaran sesaat)
+        local blend = math.clamp((hrp.Position - camO).Magnitude / 300, 0, 0.5)
+        local vel = Vector3.new(v.X, 0, v.Z):Lerp(Vector3.new(vA.X, 0, vA.Z), blend)
         local hum = hrp.Parent and hrp.Parent:FindFirstChildOfClass("Humanoid")
         local air = hum and hum.FloorMaterial == Enum.Material.Air
         local why, maxR = "jauh", nil
@@ -4409,9 +4426,10 @@ do
             local t, sol = 0, nil
             for _ = 1, 6 do
                 local origin = camO + dir * SPAWN
-                local aim = hrp.Position + vel * t
+                local tt = t + lag -- posisi target yang kita lihat udah telat ~lag dtk dari waktu server
+                local aim = hrp.Position + vel * tt
                 if air then
-                    aim = aim + Vector3.new(0, math.clamp(v.Y * t - 0.5 * workspace.Gravity * t * t, -12, 12), 0)
+                    aim = aim + Vector3.new(0, math.clamp(v.Y * tt - 0.5 * workspace.Gravity * tt * tt, -12, 12), 0)
                 end
                 local a = arcs(origin, aim, speed)
                 if not a then
