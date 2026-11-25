@@ -1072,6 +1072,11 @@ local featIndex, sideHeads = {}, {}
 local function indexFeature(card, label, row) featIndex[#featIndex + 1] = {label = label, card = card, row = row} end
 local navOrder = 0
 local function nextNav() navOrder = navOrder + 1 return navOrder end
+local function styleHead(e, open)
+    e.l.Visible = open
+    e.h.Visible = open or not e.first
+    e.h.Size = UDim2.new(1, -12, 0, open and (e.first and 14 or 17) or 7)
+end
 local function new(class, props, parent)
     local o = Instance.new(class)
     for k, v in pairs(props) do
@@ -1479,6 +1484,8 @@ local vdiv = new("Frame", {Size = UDim2.new(0, 1, 1, -28), Position = UDim2.new(
     BackgroundTransparency = 0.86, BorderSizePixel = 0}, side)
 new("UIGradient", {Rotation = 90, Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 1),
     NumberSequenceKeypoint.new(0.2, 0), NumberSequenceKeypoint.new(0.8, 0), NumberSequenceKeypoint.new(1, 1)})}, vdiv)
+local dragZone = new("Frame", {Size = UDim2.new(1, 0, 0, HEAD), BackgroundTransparency = 1, Active = true}, side)
+draggable(dragZone, main)
 -- logo tetap di kiri atas (x tetap, ga geser ke tengah pas sidebar dibuka)
 if ICON then
     new("ImageLabel", {Size = UDim2.fromOffset(26, 26), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromOffset(SB_MIN / 2, HEAD / 2),
@@ -1489,8 +1496,9 @@ else
 end
 content = new("Frame", {Size = UDim2.new(1, -SB - 1, 1, 0), Position = UDim2.new(0, SB + 1, 0, 0), BackgroundTransparency = 1}, main)
 local sideScroll = new("ScrollingFrame", {Size = UDim2.new(1, 0, 1, -(HEAD + 2)), Position = UDim2.fromOffset(0, HEAD + 2),
-    BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 0, AutomaticCanvasSize = Enum.AutomaticSize.Y,
-    CanvasSize = UDim2.new(), ScrollingDirection = Enum.ScrollingDirection.Y}, side)
+    BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 2, ScrollBarImageTransparency = 0.5,
+    AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = UDim2.new(), ScrollingDirection = Enum.ScrollingDirection.Y,
+    ElasticBehavior = Enum.ElasticBehavior.Always, ScrollingEnabled = true}, side)
 new("UIListLayout", {Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder,
     HorizontalAlignment = Enum.HorizontalAlignment.Center}, sideScroll)
 pad(sideScroll, 0, 2, 0, 8)
@@ -1510,34 +1518,13 @@ pUser.Position = UDim2.fromOffset(40, 17); pUser.Size = UDim2.new(1, -46, 0, 13)
 pUser.TextTruncate = Enum.TextTruncate.AtEnd; pUser.TextTransparency = 1
 sideLabels[#sideLabels + 1] = pName
 sideLabels[#sideLabels + 1] = pUser
--- search bar (nyari fitur)
-local srch = new("Frame", {Size = UDim2.new(1, -12, 0, 26), BackgroundColor3 = T.btn, BackgroundTransparency = 0.4,
-    BorderSizePixel = 0, LayoutOrder = 2}, sideScroll)
-round(srch, 11)
-outline(srch, T.stroke, 1)
-do
-    local mg = new("Frame", {Size = UDim2.fromOffset(16, 16), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromOffset(20, 13),
-        BackgroundTransparency = 1}, srch)
-    local ringF = new("Frame", {Size = UDim2.fromOffset(9, 9), Position = UDim2.fromOffset(1, 1), BackgroundTransparency = 1}, mg)
-    round(ringF, 5)
-    outline(ringF, T.dim, 1.5)
-    new("Frame", {Size = UDim2.fromOffset(5, 1.6), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromOffset(12.5, 12.5),
-        Rotation = 45, BackgroundColor3 = T.dim, BorderSizePixel = 0}, mg)
-end
-local sbox = new("TextBox", {Size = UDim2.new(1, -40, 1, 0), Position = UDim2.fromOffset(34, 0), BackgroundTransparency = 1,
-    Text = "", PlaceholderText = "Cari fitur...", PlaceholderColor3 = T.dim, TextColor3 = T.text, Font = F_MED, TextSize = 12,
-    TextXAlignment = LEFT, ClearTextOnFocus = false, Visible = false}, srch)
-local sHit = new("TextButton", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = "", ZIndex = 3}, srch)
-local sres = new("Frame", {Size = UDim2.new(1, -12, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
-    Visible = false, LayoutOrder = 3}, sideScroll)
-new("UIListLayout", {Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder}, sres)
-tabHolder = new("Frame", {Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, LayoutOrder = 4}, sideScroll)
+tabHolder = new("Frame", {Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, LayoutOrder = 2}, sideScroll)
 new("UIListLayout", {Padding = UDim.new(0, 1), SortOrder = Enum.SortOrder.LayoutOrder,
     HorizontalAlignment = Enum.HorizontalAlignment.Center}, tabHolder)
 -- tombol panah collapse: nempel di garis pemisah, sejajar logo (kayak referensi)
 local collapseBtn = new("TextButton", {Size = UDim2.fromOffset(20, 20), AnchorPoint = Vector2.new(0.5, 0.5),
     Position = UDim2.new(0, SB, 0, HEAD / 2), BackgroundColor3 = T.btn, BorderSizePixel = 0, Text = "",
-    AutoButtonColor = false, ZIndex = 6}, main)
+    AutoButtonColor = false}, main)
 round(collapseBtn, 10)
 outline(collapseBtn, T.stroke)
 local collapseIc = mkIcon(collapseBtn, "down", T.dim, 10)
@@ -1551,85 +1538,14 @@ function setSidebar(open)
     tw(content, 0.3, {Size = UDim2.new(1, -SB - 1, 1, 0), Position = UDim2.new(0, SB + 1, 0, 0)}, info)
     tw(collapseBtn, 0.3, {Position = UDim2.new(0, SB, 0, HEAD / 2)}, info)
     collapseIc.box.Rotation = open and 90 or -90
-    sbox.Visible = open
-    sHit.Visible = not open
-    for _, h in ipairs(sideHeads) do
-        h.TextXAlignment = open and LEFT or CENTER
-        h.TextSize = open and 9 or 8
-        h.Position = UDim2.fromOffset(open and 8 or 0, h.Position.Y.Offset)
-    end
+    for _, e in ipairs(sideHeads) do styleHead(e, open) end
     for _, lb in ipairs(sideLabels) do tw(lb, open and 0.26 or 0.14, {TextTransparency = open and 0 or 1}) end
     for _, o in ipairs(tabList) do
         tw(o.ic.box, 0.3, {Position = open and UDim2.new(0, 14, 0.5, 0) or UDim2.new(0, 11, 0.5, 0)}, Enum.EasingStyle.Quint)
     end
 end
 track(collapseBtn.MouseButton1Click:Connect(function() setSidebar(not sideOpen) end))
-track(sHit.MouseButton1Click:Connect(function()
-    setSidebar(true)
-    task.delay(0.3, function() if running and sideOpen then pcall(function() sbox:CaptureFocus() end) end end)
-end))
--- ===== pencarian fitur =====
-local function clearRes()
-    for _, c in ipairs(sres:GetChildren()) do
-        if c:IsA("GuiObject") then c:Destroy() end
-    end
-end
-local function goToFeature(it)
-    local tabObj = it.card.tab
-    local top = tabObj.parentTab or tabObj
-    sbox.Text = ""
-    selectTab(top)
-    if tabObj.parentTab then top:SelectSub(tabObj) end
-    task.delay(0.35, function()
-        if not (running and it.row and it.row.Parent and top.scroll and top.scroll.Parent) then return end
-        local sc = top.scroll
-        local y = (it.row.AbsolutePosition.Y - sc.AbsolutePosition.Y) / math.max(uiScale.Scale, 0.01) + sc.CanvasPosition.Y - 8
-        sc.CanvasPosition = Vector2.new(0, math.max(0, y))
-        local fl = new("Frame", {Size = UDim2.new(1, 8, 1, 6), Position = UDim2.fromOffset(-4, -3), BackgroundColor3 = WHITE,
-            BackgroundTransparency = 0.8, BorderSizePixel = 0, ZIndex = 6}, it.row)
-        fl.BackgroundColor3 = T.text
-        round(fl, 8)
-        tw(fl, 0.9, {BackgroundTransparency = 1})
-        task.delay(1, function() pcall(function() fl:Destroy() end) end)
-    end)
-end
-local function refreshSearch()
-    local q = (sbox.Text:lower():gsub("^%s+", ""):gsub("%s+$", ""))
-    clearRes()
-    if q == "" then
-        sres.Visible = false
-        tabHolder.Visible = true
-        return
-    end
-    tabHolder.Visible = false
-    sres.Visible = true
-    local n = 0
-    for _, it in ipairs(featIndex) do
-        if n >= 8 then break end
-        local tabObj = it.card.tab
-        local top = tabObj.parentTab or tabObj
-        local sub = tabObj.parentTab and tabObj or nil
-        local hay = (it.label .. " " .. (it.card.title or "") .. " " .. top.name .. " " .. (sub and sub.name or "")):lower()
-        if hay:find(q, 1, true) then
-            n = n + 1
-            local b = new("TextButton", {Size = UDim2.new(1, 0, 0, 34), BackgroundColor3 = T.sel, BackgroundTransparency = 0.5,
-                BorderSizePixel = 0, Text = "", AutoButtonColor = false, LayoutOrder = n}, sres)
-            round(b, 9)
-            local l1 = mkLabel(b, it.label, 11, T.text, F_BOLD)
-            l1.Position = UDim2.fromOffset(8, 3); l1.Size = UDim2.new(1, -12, 0, 15)
-            l1.TextTruncate = Enum.TextTruncate.AtEnd
-            local l2 = mkLabel(b, top.name .. (sub and (" > " .. sub.name) or ""), 9, T.dim, F_MED)
-            l2.Position = UDim2.fromOffset(8, 18); l2.Size = UDim2.new(1, -12, 0, 13)
-            l2.TextTruncate = Enum.TextTruncate.AtEnd
-            track(b.MouseButton1Click:Connect(function() goToFeature(it) end))
-        end
-    end
-    if n == 0 then
-        local e = mkLabel(sres, "Ga ketemu", 11, T.dim, F_MED, CENTER)
-        e.Size = UDim2.new(1, 0, 0, 24)
-    end
-end
-track(sbox:GetPropertyChangedSignal("Text"):Connect(refreshSearch))
+
 local header = new("Frame", {Size = UDim2.new(1, 0, 0, HEAD), BackgroundTransparency = 1, Active = true}, content)
 new("Frame", {Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = T.stroke, BackgroundTransparency = 0.5, BorderSizePixel = 0}, header)
 local hl = new("Frame", {Size = UDim2.new(1, -150, 1, -1), Position = UDim2.fromOffset(PADL, 0), BackgroundTransparency = 1}, header)
@@ -1669,7 +1585,7 @@ for idx, nameKey in ipairs(SOC_ORDER) do
         b = new("ImageButton", {Size = UDim2.fromOffset(SOC_W, SOC_H), Position = UDim2.fromOffset((idx - 1) * SOC_STEP, 3),
             BackgroundTransparency = 1, Image = SOCIAL, ImageRectOffset = Vector2.new(r[1], r[2]),
             ImageRectSize = Vector2.new(r[3], r[4]), ScaleType = Enum.ScaleType.Fit,
-            ImageTransparency = hasLink and 0.15 or 0.6, AutoButtonColor = false}, socRow)
+            ImageColor3 = T.text, ImageTransparency = hasLink and 0.15 or 0.6, AutoButtonColor = false}, socRow)
         if hasLink then
             track(b.MouseEnter:Connect(function() tw(b, 0.1, {ImageTransparency = 0}) end))
             track(b.MouseLeave:Connect(function() tw(b, 0.12, {ImageTransparency = 0.15}) end))
@@ -1837,9 +1753,9 @@ function Tab:SelectSub(sub)
         local sel = (o == sub)
         o.sel = sel
         if sel and not o.frame.Visible then
-            o.frame.Position = UDim2.fromOffset(0, 10)
+            o.frame.Position = UDim2.fromOffset(PADL, 10)
             o.frame.Visible = true
-            tw(o.frame, 0.28, {Position = UDim2.new()}, Enum.EasingStyle.Quint)
+            tw(o.frame, 0.28, {Position = UDim2.fromOffset(PADL, 0)}, Enum.EasingStyle.Quint)
         elseif not sel then
             o.frame.Visible = false
         end
@@ -2073,10 +1989,12 @@ local function sideHeader(text, first)
         new("Frame", {Size = UDim2.new(1, -4, 0, 1), Position = UDim2.fromOffset(2, 1), BackgroundColor3 = T.stroke,
             BackgroundTransparency = 0.4, BorderSizePixel = 0}, h)
     end
-    local l = mkLabel(h, string.upper(text), 8, T.dim, F_BOLD, CENTER)
+    local l = mkLabel(h, string.upper(text), 9, T.dim, F_BOLD, LEFT)
     l.Size = UDim2.new(1, -8, 0, 12)
-    l.Position = UDim2.fromOffset(0, first and 1 or 4)
-    sideHeads[#sideHeads + 1] = l
+    l.Position = UDim2.fromOffset(8, first and 1 or 4)
+    local e = {h = h, l = l, first = first}
+    sideHeads[#sideHeads + 1] = e
+    styleHead(e, sideOpen)
     return h
 end
 sideHeader("Menu", true)
