@@ -2309,7 +2309,7 @@ do local function parryInit()
     local KBONUS = {killer = 1, abysswalker = 3.5, veil = 3.2, hidden = 2.2, cure = 2, stalker = 1.8, masked = 1.5, slasher = 1.2}
     local KPAT = {{"abysswalker", "abyss"}, {"hidden", "hidden"}, {"masked", "masked"}, {"stalker", "stalker"}, {"veil", "veil"}, {"slasher", "slasher"}, {"cure", "cure"}}
     local kKeyC = setmetatable({}, {__mode = "k"})
-    -- nama killer dibaca dari atribut MorphedKiller / SelectedKiller (char atau player). FILL: kalau di game atributnya beda, status parry bakal nulis "(killer)" terus.
+    -- nama killer dibaca dari atribut MorphedKiller / SelectedKiller (char atau player). Terverifikasi scan 2026-11-25 (Veil: char.MorphedKiller + player.SelectedKiller). Killer lain belum dicek; kalau beda, status parry nulis "(killer)".
     local function killerKey(k)
         local now, c = os.clock(), kKeyC[k.char]
         if c and now - c.t < 0.5 then return c.key end
@@ -3867,10 +3867,23 @@ do
     local aimAttrT, aimAttrV = 0, false
     local function isAiming()
         if S.sa.aimMode == "Selalu" then return true end
+        local ah = S.aimHold
+        if ah then
+            local ch = lp.Character
+            return ah.on and ch ~= nil and ch:FindFirstChild("Twist of Fate") ~= nil
+        end
         if aimLearn then return aimDown[aimLearn] == true end
         local now = os.clock()
         if now - aimAttrT > 0.15 then
             aimAttrT, aimAttrV = now, false
+            -- HP: tombol Survivor-mob.Controls.Gui-mob.cancelaim (hidden normal) muncul pas lagi aim. Dari scan tombol HP; belum dikonfirmasi pas megang TOF
+            pcall(function()
+                local g = pg:FindFirstChild("Survivor-mob")
+                local gm = g and g:FindFirstChild("Controls")
+                gm = gm and gm:FindFirstChild("Gui-mob")
+                local ca = gm and gm:FindFirstChild("cancelaim")
+                if g and g.Enabled and gm.Visible and ca and ca.Visible then aimAttrV = true end
+            end)
             local ch = lp.Character
             if ch then
                 for k, v in pairs(ch:GetAttributes()) do
@@ -4002,7 +4015,7 @@ end
 xpcall(function()
     -- ===== Fast Vault (diadaptasi dari HANX) =====
     -- Hook SurvivorAnimationsController: skip cek arah & animasi vault, lalu kirim remote fastvault.
-    -- Nama modul & remote dari build lain, BELUM diverifikasi di build sekarang.
+    -- Modul SurvivorAnimationsController (2 fungsi yang di-hook) dan remote Window.fastvault TERVERIFIKASI ada lewat scan 2026-11-25. Efek ke server (ada _validateFastVault + VaultCommit/VaultReject) belum dites.
     local FV = {on = false, perfect = false, hooked = false, mod = nil, remote = nil, wrapF = nil, wrapV = nil, origF = nil, origV = nil}
     S.fv = FV
     -- tSurv bisa nil di sebagian executor (limit local/upvalue), jadi cari ulang lewat tabList
@@ -4067,7 +4080,7 @@ xpcall(function()
                     pcall(function() self.humanoidRootPart.CFrame = part.CFrame * CFrame.new(0, 2, -1) end)
                 end
                 if self.VaultCompleteEvent then
-                    pcall(function() self.VaultCompleteEvent:FireServer(part, true, arg, self.character) end)
+                    pcall(function() self.VaultCompleteEvent:FireServer(part, false, arg, self.character) end) -- arg ke-2 asli = false (8/8 di log spy)
                 end
                 self.isVaulting = false
                 if self.humanoid then
@@ -4092,13 +4105,25 @@ xpcall(function()
         mod._onVaultAnimation = FV.wrapV
         FV.hooked = true
         fvLbl.Text = rem and "Status: siap" or "Status: siap, tapi remote fastvault ga ketemu"
+        -- server punya jalur Commit/Reject buat vault (Remotes.Window.VaultReject). Hitung penolakan pas Fast Vault nyala biar user tau kalau server nolak
+        pcall(function()
+            local rej = rs.Remotes.Window:FindFirstChild("VaultReject")
+            if not rej then return end
+            FV.rej, FV.rejT = 0, 0
+            track(rej.OnClientEvent:Connect(function()
+                if not (FV.on or FV.perfect) then return end
+                local now = os.clock()
+                if now - FV.rejT > 10 then FV.rej = 0 end
+                FV.rejT, FV.rej = now, FV.rej + 1
+                if FV.rej == 3 then
+                    notify("Fast Vault", "Server nolak vault 3x dalam 10 detik (kemungkinan kena validasi server)")
+                    fvLbl.Text = "Status: siap, tapi server nolak vault"
+                end
+            end))
+        end)
 
-        while running do
-            task.wait(0.5)
-            if (FV.on or FV.perfect) and FV.remote then
-                pcall(function() FV.remote:FireServer(lp) end)
-            end
-        end
+        -- dulu: fastvault dikirim tiap 0.5 dtk selama fitur nyala. Log spy: game aslinya cuma ngirim fastvault(player) 1x di tengah vault mode "fast",
+        -- ga pernah pakai timer. Spam di luar alur itu dibuang; modul yang di-hook bikin game sendiri yang ngirim pas vault.
     end)
 
     S.fvRestore = function()
@@ -4846,6 +4871,11 @@ do
                     if a == "charge" and type(c) == "number" then chargeTs = c end
                     setnamecallmethod(method)
                     return svOld(self, ...)
+                elseif nm == "aimhold" then
+                    local _, on = ...
+                    S.aimHold = {on = on == true, t = os.clock()} -- Twist of Fate: AimHold(gun, true/false) pas mulai/selesai aim (dari log spy)
+                    setnamecallmethod(method)
+                    return svOld(self, ...)
                 elseif nm == "spearthrow" and SV.on then
                     local args = table.pack(...)
                     pcall(handleThrow, args)
@@ -4930,7 +4960,7 @@ end
 
 xpcall(function()
     -- ===== Killer Extras (diadaptasi dari HANX) =====
-    -- Nama remote StartStalking & animasi counter parry dari build lain, BELUM diverifikasi di build sekarang.
+    -- Remote StartStalking ada & anim counter parry kebaca (scan 2026-11-25). Argumen asli StartStalking dan efek counter parry ke server belum diverifikasi.
     local KE = {
         stalk = false, stalkRange = 150, stalkLast = 0,
         cp = false, cpDist = 15, cpThread = nil, cpTrack = nil,
@@ -6017,10 +6047,13 @@ xpcall(function()
         end
     end
     -- tombol HP yang jelas bukan lempar tombak
-    local EXCL = {"survivor", "attack", "atk", "vault", "drop", "crouch", "sprint", "emote", "chat", "interact", "carry", "hook", "jump", "menu", "pause"}
+    local EXCL = {"survivor", "attack", "atk", "action", "vault", "drop", "crouch", "sprint", "emote", "chat", "interact", "carry", "hook", "jump", "menu", "pause"}
     local function candidate(id)
         if H.learn then return id == H.learn end
         if id:sub(1, 4) == "key:" then return true end
+        -- HP: tombol ability killer = Controls.move1 / move2 (dari scan tombol HP pas jadi Slasher; Veil belum discan)
+        local leaf = (id:match("[^%.]+$") or id):lower()
+        if leaf:find("^move%d") or leaf:find("abil", 1, true) then return true end
         local n = id:lower()
         for _, w in ipairs(EXCL) do
             if n:find(w, 1, true) then return false end
