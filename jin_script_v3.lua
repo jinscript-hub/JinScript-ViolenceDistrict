@@ -992,7 +992,7 @@ local function particlesRestore()
     for i in pairs(fxOff) do if i.Parent then pcall(function() i.Enabled = true end) end end
     fxOff = {}
 end
-local postSweep, postRestore, setQuality, Reg, CFG_FILE, loading, dirty, loadConfig, gui, HEAD, PADL, PADR, curSize, curRatio, isOpen, setOpen, applyLayout, tabHolder, content, selectTab, tHome, tKill, tMisc, tSet, curFps, refreshDash
+local postSweep, postRestore, setQuality, Reg, CFG_FILE, loading, dirty, loadConfig, gui, HEAD, PADL, PADR, curSize, curRatio, isOpen, setOpen, applyLayout, tabHolder, content, selectTab, tHome, tKill, tMisc, tSet, curFps, refreshDash, tabList, setSidebar, applyTheme, sideOpen, sideLabels
 do
 local POST = {BloomEffect = 1, BlurEffect = 1, ColorCorrectionEffect = 1, DepthOfFieldEffect = 1, SunRaysEffect = 1}
 local postOff = {}
@@ -1039,15 +1039,47 @@ local PALETTE = {
     Color3.fromRGB(255, 235, 0), Color3.fromRGB(170, 80, 255), Color3.fromRGB(255, 140, 0), Color3.fromRGB(255, 105, 180),
 }
 local LEFT, RIGHT, CENTER = Enum.TextXAlignment.Left, Enum.TextXAlignment.Right, Enum.TextXAlignment.Center
+-- ===== Tema (gelap/terang) + aksen custom =====
+-- CANDKEYS sengaja ga termasuk acc0/acc1 (itu warna literal putih buat track toggle, dipake di mana2 termasuk
+-- bukan konteks tema, kalo ikut disapu bakal salah kena).
+local CANDKEYS = {"text", "dim", "stroke", "off", "btn", "bg0", "bg1", "side0", "side1", "card0", "card1", "sel"}
+local DARK_T = {}
+for _, k in ipairs(CANDKEYS) do DARK_T[k] = T[k] end
+local LIGHT_T = {
+    text = Color3.fromRGB(24, 24, 26), dim = Color3.fromRGB(120, 120, 128), stroke = Color3.fromRGB(205, 205, 212),
+    off = Color3.fromRGB(210, 210, 216), btn = Color3.fromRGB(230, 230, 236),
+    bg0 = Color3.fromRGB(248, 248, 250), bg1 = Color3.fromRGB(255, 255, 255),
+    side0 = Color3.fromRGB(255, 255, 255), side1 = Color3.fromRGB(240, 240, 244),
+    card0 = Color3.fromRGB(255, 255, 255), card1 = Color3.fromRGB(246, 246, 250),
+    sel = Color3.fromRGB(222, 222, 228),
+}
+local themeReg, gradReg = {}, {}
+local curThemeMode = "dark"
 local function new(class, props, parent)
     local o = Instance.new(class)
-    for k, v in pairs(props) do o[k] = v end
+    for k, v in pairs(props) do
+        o[k] = v
+        if typeof(v) == "Color3" then
+            for _, tk in ipairs(CANDKEYS) do
+                if v == T[tk] then themeReg[#themeReg + 1] = {o, k, tk} break end
+            end
+        end
+    end
     if parent then o.Parent = parent end
     return o
 end
 local function round(o, r) return new("UICorner", {CornerRadius = UDim.new(0, r or 8)}, o) end
 local function outline(o, c, th) return new("UIStroke", {Color = c or T.stroke, Thickness = th or 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border}, o) end
-local function grad(o, c0, c1, rot) return new("UIGradient", {Color = ColorSequence.new(c0, c1), Rotation = rot or 0}, o) end
+local function grad(o, c0, c1, rot)
+    local g = new("UIGradient", {Color = ColorSequence.new(c0, c1), Rotation = rot or 0}, o)
+    local k0, k1
+    for _, tk in ipairs(CANDKEYS) do
+        if c0 == T[tk] then k0 = tk end
+        if c1 == T[tk] then k1 = tk end
+    end
+    if k0 or k1 then gradReg[#gradReg + 1] = {g = g, k0 = k0, k1 = k1, c0 = c0, c1 = c1} end
+    return g
+end
 local function panel(o) o.BackgroundColor3 = WHITE grad(o, T.card0, T.card1, 90) return o end
 local function pad(o, l, t, r, b)
     return new("UIPadding", {PaddingLeft = UDim.new(0, l), PaddingTop = UDim.new(0, t), PaddingRight = UDim.new(0, r), PaddingBottom = UDim.new(0, b)}, o)
@@ -1249,6 +1281,29 @@ local function mkIcon(parent, name, color, px)
     end
     return icon
 end
+S.ui = {theme = "dark", accentOn = false, accent = Color3.fromRGB(255, 60, 60)}
+local ACCENT_DEFAULT = S.ui.accent
+function applyTheme(mode, skipTween)
+    local nt = (mode == "light") and LIGHT_T or DARK_T
+    curThemeMode = mode
+    S.ui.theme = mode
+    for _, k in ipairs(CANDKEYS) do T[k] = nt[k] end
+    for _, e in ipairs(themeReg) do
+        local o, k, tk = e[1], e[2], e[3]
+        if o.Parent then
+            if skipTween then pcall(function() o[k] = nt[tk] end) else pcall(function() tw(o, 0.22, {[k] = nt[tk]}) end) end
+        end
+    end
+    for _, e in ipairs(gradReg) do
+        if e.g.Parent then
+            local c0 = e.k0 and nt[e.k0] or e.c0
+            local c1 = e.k1 and nt[e.k1] or e.c1
+            if skipTween then pcall(function() e.g.Color = ColorSequence.new(c0, c1) end)
+            else pcall(function() tw(e.g, 0.22, {Color = ColorSequence.new(c0, c1)}) end) end
+        end
+    end
+    if selectTab and S.selTab then selectTab(S.selTab) end
+end
 Reg = {}
 CFG_FILE = "jin_config.json"
 loading, dirty = true, false
@@ -1286,7 +1341,9 @@ attach(gui)
 local ICON = loadLogo()
 local cam = workspace.CurrentCamera
 local vp = cam and cam.ViewportSize or Vector2.new(844, 390)
-local SB = 52
+local SB_MIN, SB_MAX = 52, 176
+local SB = SB_MIN
+sideOpen = false
 HEAD = 40
 PADL, PADR = 14, 14
 local SIZES = {Kecil = 0.7, Sedang = 0.85, Besar = 1.0, Jumbo = 1.15}
@@ -1327,7 +1384,7 @@ end
 pcall(function()
     track(workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(applyLayout))
 end)
-local side = new("Frame", {Size = UDim2.new(0, SB, 1, 0), BackgroundColor3 = WHITE, BorderSizePixel = 0}, main)
+local side = new("Frame", {Size = UDim2.new(0, SB, 1, 0), BackgroundColor3 = WHITE, BorderSizePixel = 0, ClipsDescendants = true}, main)
 round(side, 14)
 grad(side, T.side0, T.side1, 90)
 local sideCover = new("Frame", {Size = UDim2.new(0, 14, 1, 0), Position = UDim2.new(1, -14, 0, 0), BackgroundColor3 = WHITE, BorderSizePixel = 0}, side)
@@ -1343,10 +1400,33 @@ else
     local j = mkLabel(side, "J", 18, T.text, F_BOLD, CENTER)
     j.Size = UDim2.new(1, 0, 0, HEAD)
 end
-tabHolder = new("Frame", {Size = UDim2.new(1, 0, 1, -(HEAD + 8)), Position = UDim2.fromOffset(0, HEAD + 6), BackgroundTransparency = 1}, side)
+tabHolder = new("Frame", {Size = UDim2.new(1, 0, 1, -(HEAD + 32)), Position = UDim2.fromOffset(0, HEAD + 30), BackgroundTransparency = 1}, side)
 new("UIListLayout", {Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder,
     HorizontalAlignment = Enum.HorizontalAlignment.Center}, tabHolder)
 content = new("Frame", {Size = UDim2.new(1, -SB - 1, 1, 0), Position = UDim2.new(0, SB + 1, 0, 0), BackgroundTransparency = 1}, main)
+-- tombol panah: collapse/expand sidebar (kayak referensi). Taruh di pojok kanan-bawah strip logo.
+local collapseBtn = new("TextButton", {Size = UDim2.fromOffset(20, 20), AnchorPoint = Vector2.new(0.5, 0),
+    Position = UDim2.new(0.5, 0, 0, HEAD + 4), BackgroundColor3 = T.btn, BorderSizePixel = 0, Text = "",
+    AutoButtonColor = false, ZIndex = 4}, side)
+round(collapseBtn, 10)
+outline(collapseBtn, T.stroke)
+local collapseIc = mkIcon(collapseBtn, "down", T.dim, 10)
+collapseIc.box.Position = UDim2.new(0.5, 0, 0.5, 0)
+collapseIc.box.Rotation = -90
+sideLabels = {}
+function setSidebar(open)
+    sideOpen = open
+    SB = open and SB_MAX or SB_MIN
+    local info = Enum.EasingStyle.Quint
+    tw(side, 0.3, {Size = UDim2.new(0, SB, 1, 0)}, info)
+    tw(content, 0.3, {Size = UDim2.new(1, -SB - 1, 1, 0), Position = UDim2.new(0, SB + 1, 0, 0)}, info)
+    collapseIc.box.Rotation = open and 90 or -90
+    for _, lb in ipairs(sideLabels) do tw(lb, open and 0.26 or 0.14, {TextTransparency = open and 0 or 1}) end
+    for _, o in ipairs(tabList) do
+        tw(o.ic.box, 0.3, {Position = open and UDim2.new(0, 14, 0.5, 0) or UDim2.new(0, 11, 0.5, 0)}, Enum.EasingStyle.Quint)
+    end
+end
+track(collapseBtn.MouseButton1Click:Connect(function() setSidebar(not sideOpen) end))
 local header = new("Frame", {Size = UDim2.new(1, 0, 0, HEAD), BackgroundTransparency = 1, Active = true}, content)
 new("Frame", {Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = T.stroke, BorderSizePixel = 0}, header)
 local hl = new("Frame", {Size = UDim2.new(1, -150, 1, -1), Position = UDim2.fromOffset(PADL, 0), BackgroundTransparency = 1}, header)
@@ -1447,9 +1527,11 @@ end
 local Tab, Card = {}, {}
 Tab.__index = Tab
 Card.__index = Card
-local tabList = {}
+tabList = {}
 S.tabList = tabList
 function selectTab(t)
+    S.selTab = t
+    local accentC = S.ui.accentOn and S.ui.accent or T.text
     for _, o in ipairs(tabList) do
         local sel = (o == t)
         o.sel = sel
@@ -1461,8 +1543,9 @@ function selectTab(t)
             o.page.Visible = false
         end
         tw(o.btn, 0.18, {BackgroundTransparency = sel and 0 or 1})
-        o.ic:Tween(sel and T.text or T.dim, 0.18)
+        o.ic:Tween(sel and accentC or T.dim, 0.18)
         tw(o.bar, 0.24, {
+            BackgroundColor3 = accentC,
             BackgroundTransparency = sel and 0 or 1,
             Size = sel and UDim2.fromOffset(3, 18) or UDim2.fromOffset(3, 6),
             Position = sel and UDim2.new(0, -6, 0.5, -9) or UDim2.new(0, -6, 0.5, -3),
@@ -1470,11 +1553,18 @@ function selectTab(t)
     end
 end
 local function addTab(name, iconKey, single)
-    local btn = new("TextButton", {Size = UDim2.fromOffset(40, 38), BackgroundColor3 = T.sel, BackgroundTransparency = 1,
-        Text = "", AutoButtonColor = false, LayoutOrder = #tabList + 1}, tabHolder)
+    local btn = new("TextButton", {Size = UDim2.new(1, -12, 0, 38), BackgroundColor3 = T.sel, BackgroundTransparency = 1,
+        Text = "", AutoButtonColor = false, LayoutOrder = #tabList + 1, ClipsDescendants = true}, tabHolder)
     round(btn, 11)
     local ic = mkIcon(btn, iconKey, T.dim, 18)
-    ic.box.Position = UDim2.new(0.5, 0, 0.5, 0)
+    ic.box.AnchorPoint = Vector2.new(0, 0.5)
+    ic.box.Position = sideOpen and UDim2.new(0, 14, 0.5, 0) or UDim2.new(0, 11, 0.5, 0)
+    local lb2 = mkLabel(btn, name, 12, T.dim, F_MED)
+    lb2.Position = UDim2.new(0, 42, 0.5, -7)
+    lb2.Size = UDim2.new(1, -50, 0, 14)
+    lb2.TextTransparency = 1
+    lb2.TextTruncate = Enum.TextTruncate.AtEnd
+    sideLabels[#sideLabels + 1] = lb2
     local bar = new("Frame", {Size = UDim2.fromOffset(3, 6), Position = UDim2.new(0, -6, 0.5, -3),
         BackgroundColor3 = WHITE, BackgroundTransparency = 1, BorderSizePixel = 0}, btn)
     round(bar, 2)
@@ -1503,7 +1593,7 @@ local function addTab(name, iconKey, single)
         vlist(c2, 10)
         colList = {c1, c2}
     end
-    local t = setmetatable({name = name, btn = btn, ic = ic, bar = bar, page = page, scroll = scroll,
+    local t = setmetatable({name = name, btn = btn, ic = ic, lb2 = lb2, bar = bar, page = page, scroll = scroll,
         cols = colList, nextCol = 1, load = {0, 0}}, Tab)
     tabList[#tabList + 1] = t
     track(btn.MouseButton1Click:Connect(function() selectTab(t) end))
@@ -6168,6 +6258,17 @@ local cUI = tSet:Group("Tampilan", 1)
 cUI:Dropdown("UI_Size", "Ukuran", {"Kecil", "Sedang", "Besar", "Jumbo"}, "Sedang", function(v) curSize = v applyLayout() end)
 cUI:Dropdown("UI_Ratio", "Rasio", {"4:3", "16:10", "16:9", "21:9"}, "16:9", function(v) curRatio = v applyLayout() end)
 cUI:Label("4:3 = tinggi, 21:9 = lebar dan gepeng.")
+cUI:Dropdown("UI_Theme", "Tema", {"Gelap", "Terang"}, "Gelap", function(v) applyTheme(v == "Terang" and "light" or "dark") end)
+cUI:Toggle("UI_AccentOn", "Warna aksen custom (indikator tab aktif)", false,
+    function(v)
+        S.ui.accentOn = v
+        if selectTab and S.selTab then selectTab(S.selTab) end
+    end,
+    {id = "UI_Accent", default = ACCENT_DEFAULT, cb = function(c)
+        S.ui.accent = c
+        if selectTab and S.selTab then selectTab(S.selTab) end
+    end})
+cUI:Label("Mati = indikator tab ikut warna teks (putih pas gelap, item pas terang). Nyala = pake warna pilihanmu.")
 local cMenu = tSet:Group("Menu", 2)
 cMenu:Button("Reset config", function()
     local p = findFile(CFG_FILE)
