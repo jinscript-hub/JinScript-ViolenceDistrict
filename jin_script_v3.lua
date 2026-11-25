@@ -1025,15 +1025,19 @@ end
 local F_MED, F_BOLD = Enum.Font.GothamMedium, Enum.Font.GothamBold
 local T = {
     text = Color3.fromRGB(244, 244, 245), dim = Color3.fromRGB(128, 128, 134),
-    stroke = Color3.fromRGB(38, 38, 40), off = Color3.fromRGB(44, 44, 47), btn = Color3.fromRGB(26, 26, 28),
+    stroke = Color3.fromRGB(52, 52, 58), off = Color3.fromRGB(44, 44, 47), btn = Color3.fromRGB(26, 26, 28),
+    hov = Color3.fromRGB(40, 40, 44),
     acc0 = Color3.fromRGB(255, 255, 255), acc1 = Color3.fromRGB(168, 168, 174),
-    bg0 = Color3.fromRGB(20, 20, 21), bg1 = Color3.fromRGB(8, 8, 9),
-    side0 = Color3.fromRGB(14, 14, 15), side1 = Color3.fromRGB(9, 9, 10),
-    card0 = Color3.fromRGB(24, 24, 26), card1 = Color3.fromRGB(16, 16, 17),
+    bg0 = Color3.fromRGB(24, 24, 28), bg1 = Color3.fromRGB(10, 10, 13),
+    side0 = Color3.fromRGB(18, 18, 21), side1 = Color3.fromRGB(10, 10, 12),
+    card0 = Color3.fromRGB(34, 34, 38), card1 = Color3.fromRGB(22, 22, 25),
     sel = Color3.fromRGB(38, 38, 41),
 }
 T.card = T.card1
 local WHITE, INK = Color3.new(1, 1, 1), Color3.fromRGB(12, 12, 12)
+T.knobOn, T.knobOff, T.knob = INK, Color3.fromRGB(170, 170, 170), WHITE
+T.pill, T.pillText = Color3.fromRGB(240, 240, 242), INK
+T.hair0, T.hair1 = Color3.fromRGB(210, 210, 220), Color3.fromRGB(70, 70, 78)
 local PALETTE = {
     Color3.fromRGB(255, 255, 255), Color3.fromRGB(0, 255, 120), Color3.fromRGB(255, 50, 50), Color3.fromRGB(0, 170, 255),
     Color3.fromRGB(255, 235, 0), Color3.fromRGB(170, 80, 255), Color3.fromRGB(255, 140, 0), Color3.fromRGB(255, 105, 180),
@@ -1042,24 +1046,37 @@ local LEFT, RIGHT, CENTER = Enum.TextXAlignment.Left, Enum.TextXAlignment.Right,
 -- ===== Tema (gelap/terang) + aksen custom =====
 -- CANDKEYS sengaja ga termasuk acc0/acc1 (itu warna literal putih buat track toggle, dipake di mana2 termasuk
 -- bukan konteks tema, kalo ikut disapu bakal salah kena).
-local CANDKEYS = {"text", "dim", "stroke", "off", "btn", "bg0", "bg1", "side0", "side1", "card0", "card1", "sel"}
+local CANDKEYS = {"text", "dim", "stroke", "off", "btn", "hov", "bg0", "bg1", "side0", "side1", "card0", "card1", "sel"}
+local EXTRAKEYS = {"acc0", "acc1", "knobOn", "knobOff", "knob", "pill", "pillText", "hair0", "hair1"}
 local DARK_T = {}
 for _, k in ipairs(CANDKEYS) do DARK_T[k] = T[k] end
+for _, k in ipairs(EXTRAKEYS) do DARK_T[k] = T[k] end
 local LIGHT_T = {
-    text = Color3.fromRGB(24, 24, 26), dim = Color3.fromRGB(120, 120, 128), stroke = Color3.fromRGB(205, 205, 212),
-    off = Color3.fromRGB(210, 210, 216), btn = Color3.fromRGB(230, 230, 236),
-    bg0 = Color3.fromRGB(248, 248, 250), bg1 = Color3.fromRGB(255, 255, 255),
-    side0 = Color3.fromRGB(255, 255, 255), side1 = Color3.fromRGB(240, 240, 244),
-    card0 = Color3.fromRGB(255, 255, 255), card1 = Color3.fromRGB(246, 246, 250),
-    sel = Color3.fromRGB(222, 222, 228),
+    text = Color3.fromRGB(22, 24, 30), dim = Color3.fromRGB(110, 116, 130), stroke = Color3.fromRGB(196, 201, 212),
+    off = Color3.fromRGB(208, 212, 222), btn = Color3.fromRGB(232, 235, 242), hov = Color3.fromRGB(218, 222, 232),
+    bg0 = Color3.fromRGB(250, 251, 254), bg1 = Color3.fromRGB(236, 240, 247),
+    side0 = Color3.fromRGB(255, 255, 255), side1 = Color3.fromRGB(241, 244, 250),
+    card0 = Color3.fromRGB(255, 255, 255), card1 = Color3.fromRGB(246, 248, 252),
+    sel = Color3.fromRGB(220, 225, 236),
+    acc0 = Color3.fromRGB(20, 20, 24), acc1 = Color3.fromRGB(72, 74, 84),
+    knobOn = WHITE, knobOff = Color3.fromRGB(252, 252, 254), knob = Color3.fromRGB(20, 20, 24),
+    pill = Color3.fromRGB(20, 22, 28), pillText = WHITE,
+    hair0 = WHITE, hair1 = Color3.fromRGB(165, 172, 188),
 }
-local themeReg, gradReg = {}, {}
+-- level transparansi "kaca": sama buat dua tema (fadeIn nyimpen nilai awal)
+local GL = {main = 0.16, side = 0.3, card = 0.4}
+local themeReg, gradReg, themeHooks = {}, {}, {}
 local curThemeMode = "dark"
+local gradDrv
+local featIndex, sideHeads = {}, {}
+local function indexFeature(card, label, row) featIndex[#featIndex + 1] = {label = label, card = card, row = row} end
+local navOrder = 0
+local function nextNav() navOrder = navOrder + 1 return navOrder end
 local function new(class, props, parent)
     local o = Instance.new(class)
     for k, v in pairs(props) do
         o[k] = v
-        if typeof(v) == "Color3" then
+        if typeof(v) == "Color3" and v ~= WHITE then
             for _, tk in ipairs(CANDKEYS) do
                 if v == T[tk] then themeReg[#themeReg + 1] = {o, k, tk} break end
             end
@@ -1070,17 +1087,35 @@ local function new(class, props, parent)
 end
 local function round(o, r) return new("UICorner", {CornerRadius = UDim.new(0, r or 8)}, o) end
 local function outline(o, c, th) return new("UIStroke", {Color = c or T.stroke, Thickness = th or 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border}, o) end
-local function grad(o, c0, c1, rot)
-    local g = new("UIGradient", {Color = ColorSequence.new(c0, c1), Rotation = rot or 0}, o)
-    local k0, k1
+local function keyFor(c, hint)
+    if hint then return hint end
+    local found
     for _, tk in ipairs(CANDKEYS) do
-        if c0 == T[tk] then k0 = tk end
-        if c1 == T[tk] then k1 = tk end
+        if c == T[tk] then found = tk end
     end
-    if k0 or k1 then gradReg[#gradReg + 1] = {g = g, k0 = k0, k1 = k1, c0 = c0, c1 = c1} end
+    return found
+end
+local function unreg(o, k)
+    for i = #themeReg, 1, -1 do
+        local e = themeReg[i]
+        if e[1] == o and e[2] == k then table.remove(themeReg, i) end
+    end
+end
+-- ka/kb = nama kunci tema (biar ga ambigu pas warna dua tema kebetulan sama); ta/tb = transparansi gradient (kaca)
+local function grad(o, c0, c1, rot, ka, kb, ta, tb)
+    local g = new("UIGradient", {Color = ColorSequence.new(c0, c1), Rotation = rot or 0}, o)
+    if ta then g.Transparency = NumberSequence.new(ta, tb or ta) end
+    local k0, k1 = keyFor(c0, ka), keyFor(c1, kb)
+    if k0 or k1 then gradReg[#gradReg + 1] = {g = g, k0 = k0, k1 = k1, c0 = c0, c1 = c1, cur0 = c0, cur1 = c1} end
     return g
 end
-local function panel(o) o.BackgroundColor3 = WHITE grad(o, T.card0, T.card1, 90) return o end
+local function panel(o)
+    unreg(o, "BackgroundColor3") -- warna dasar panel = WHITE (dikali gradient), jangan ikut disapu tema
+    o.BackgroundColor3 = WHITE
+    o.BackgroundTransparency = GL.card
+    grad(o, T.card0, T.card1, 90, "card0", "card1")
+    return o
+end
 local function pad(o, l, t, r, b)
     return new("UIPadding", {PaddingLeft = UDim.new(0, l), PaddingTop = UDim.new(0, t), PaddingRight = UDim.new(0, r), PaddingBottom = UDim.new(0, b)}, o)
 end
@@ -1127,8 +1162,9 @@ fadeIn = function(root, dur)
 end
 end
 local function hover(btn, normal, over)
-    track(btn.MouseEnter:Connect(function() tw(btn, 0.12, {BackgroundColor3 = over}) end))
-    track(btn.MouseLeave:Connect(function() tw(btn, 0.15, {BackgroundColor3 = normal}) end))
+    local kn, ko = keyFor(normal), keyFor(over)
+    track(btn.MouseEnter:Connect(function() tw(btn, 0.12, {BackgroundColor3 = ko and T[ko] or over}) end))
+    track(btn.MouseLeave:Connect(function() tw(btn, 0.15, {BackgroundColor3 = kn and T[kn] or normal}) end))
 end
 local function esc(s) return (tostring(s):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")) end
 local function headshot(uid) return "rbxthumb://type=AvatarHeadShot&id=" .. uid .. "&w=150&h=150" end
@@ -1288,18 +1324,60 @@ function applyTheme(mode, skipTween)
     curThemeMode = mode
     S.ui.theme = mode
     for _, k in ipairs(CANDKEYS) do T[k] = nt[k] end
+    for _, k in ipairs(EXTRAKEYS) do T[k] = nt[k] end
+    T.card = T.card1
+    -- buang objek yang udah di-destroy (chip dashboard dibangun ulang terus)
+    local live = {}
+    for _, e in ipairs(themeReg) do if e[1].Parent then live[#live + 1] = e end end
+    themeReg = live
     for _, e in ipairs(themeReg) do
         local o, k, tk = e[1], e[2], e[3]
-        if o.Parent then
-            if skipTween then pcall(function() o[k] = nt[tk] end) else pcall(function() tw(o, 0.22, {[k] = nt[tk]}) end) end
+        if skipTween then pcall(function() o[k] = nt[tk] end) else pcall(function() tw(o, 0.22, {[k] = nt[tk]}) end) end
+    end
+    -- gradient: TweenService ga bisa nge-tween ColorSequence (dulu gagal diam-diam di pcall), jadi di-lerp manual
+    local gl = {}
+    for _, e in ipairs(gradReg) do if e.g.Parent then gl[#gl + 1] = e end end
+    gradReg = gl
+    for _, e in ipairs(gradReg) do
+        e.f0, e.f1 = e.cur0, e.cur1
+        e.t0 = e.k0 and nt[e.k0] or e.c0
+        e.t1 = e.k1 and nt[e.k1] or e.c1
+    end
+    local function setG(a)
+        for _, e in ipairs(gradReg) do
+            local c0, c1 = e.f0:Lerp(e.t0, a), e.f1:Lerp(e.t1, a)
+            e.cur0, e.cur1 = c0, c1
+            pcall(function() e.g.Color = ColorSequence.new(c0, c1) end)
         end
     end
-    for _, e in ipairs(gradReg) do
-        if e.g.Parent then
-            local c0 = e.k0 and nt[e.k0] or e.c0
-            local c1 = e.k1 and nt[e.k1] or e.c1
-            if skipTween then pcall(function() e.g.Color = ColorSequence.new(c0, c1) end)
-            else pcall(function() tw(e.g, 0.22, {Color = ColorSequence.new(c0, c1)}) end) end
+    if gradDrv then
+        pcall(function() gradDrv.conn:Disconnect() end)
+        pcall(function() gradDrv.tween:Cancel() end)
+        pcall(function() gradDrv.nv:Destroy() end)
+        gradDrv = nil
+    end
+    if skipTween then
+        setG(1)
+    else
+        local nv = Instance.new("NumberValue")
+        local drv = {nv = nv}
+        drv.conn = nv.Changed:Connect(setG)
+        drv.tween = TS:Create(nv, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Value = 1})
+        gradDrv = drv
+        drv.tween.Completed:Connect(function(st)
+            if st == Enum.PlaybackState.Completed then setG(1) end
+            pcall(function() drv.conn:Disconnect() end)
+            pcall(function() nv:Destroy() end)
+            if gradDrv == drv then gradDrv = nil end
+        end)
+        drv.tween:Play()
+    end
+    for _, fn in ipairs(themeHooks) do pcall(fn) end
+    for _, t in ipairs(tabList) do
+        if t.subs then
+            for _, sb in ipairs(t.subs) do
+                tw(sb.btn, 0.18, {BackgroundColor3 = T.pill, TextColor3 = sb.sel and T.pillText or T.dim})
+            end
         end
     end
     if selectTab and S.selTab then selectTab(S.selTab) end
@@ -1358,10 +1436,10 @@ end
 local main = new("Frame", {
     Size = UDim2.fromOffset(RATIOS[curRatio][1], RATIOS[curRatio][2]), AnchorPoint = Vector2.new(0.5, 0.5),
     Position = UDim2.new(0.5, 0, 0.5, 0),
-    BackgroundColor3 = WHITE, BorderSizePixel = 0, Visible = false, ClipsDescendants = true, Active = true}, gui)
+    BackgroundColor3 = WHITE, BackgroundTransparency = GL.main, BorderSizePixel = 0, Visible = false, ClipsDescendants = true, Active = true}, gui)
 round(main, 14)
-grad(main, T.bg0, T.bg1, 35)
-grad(outline(main, WHITE, 1), Color3.fromRGB(96, 96, 102), Color3.fromRGB(26, 26, 28), 45)
+grad(main, T.bg0, T.bg1, 35, "bg0", "bg1", 0, 0.1)
+grad(outline(main, WHITE, 1), T.hair0, T.hair1, 45, "hair0", "hair1", 0.3, 0.8)
 local uiScale = new("UIScale", {Scale = layoutScale()}, main)
 isOpen = false
 function setOpen(v)
@@ -1384,51 +1462,176 @@ end
 pcall(function()
     track(workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(applyLayout))
 end)
-local side = new("Frame", {Size = UDim2.new(0, SB, 1, 0), BackgroundColor3 = WHITE, BorderSizePixel = 0, ClipsDescendants = true}, main)
-round(side, 14)
-grad(side, T.side0, T.side1, 90)
-local sideCover = new("Frame", {Size = UDim2.new(0, 14, 1, 0), Position = UDim2.new(1, -14, 0, 0), BackgroundColor3 = WHITE, BorderSizePixel = 0}, side)
-grad(sideCover, T.side0, T.side1, 90)
-local vdiv = new("Frame", {Size = UDim2.new(0, 1, 1, -28), Position = UDim2.new(0, SB, 0, 14), BackgroundColor3 = WHITE,
-    BackgroundTransparency = 0.86, BorderSizePixel = 0}, main)
+-- kilau kaca di atas panel (di bawah semua isi)
+local sheen = new("Frame", {Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = WHITE, BorderSizePixel = 0}, main)
+round(sheen, 14)
+new("UIGradient", {Rotation = 90, Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 0.9),
+    NumberSequenceKeypoint.new(0.4, 0.97), NumberSequenceKeypoint.new(1, 1)})}, sheen)
+sideLabels = {}
+-- `side` = pembungkus (clip, lebar = SB). `sideBg` = kaca bulat yang 20px lebih lebar, jadi sudut kanannya ke-clip
+-- (ga perlu tambalan sideCover lagi, yang bikin lapisan dobel kalau transparan).
+local side = new("Frame", {Size = UDim2.new(0, SB, 1, 0), BackgroundTransparency = 1, BorderSizePixel = 0, ClipsDescendants = true}, main)
+local sideBg = new("Frame", {Size = UDim2.new(1, 20, 1, 0), BackgroundColor3 = WHITE, BackgroundTransparency = GL.side, BorderSizePixel = 0}, side)
+round(sideBg, 14)
+grad(sideBg, T.side0, T.side1, 90, "side0", "side1", 0, 0.08)
+-- garis pemisah nempel di tepi kanan sidebar -> ikut melebar/nyempit otomatis (dulu posisinya ketinggalan di x=52)
+local vdiv = new("Frame", {Size = UDim2.new(0, 1, 1, -28), Position = UDim2.new(1, -1, 0, 14), BackgroundColor3 = T.text,
+    BackgroundTransparency = 0.86, BorderSizePixel = 0}, side)
 new("UIGradient", {Rotation = 90, Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 1),
     NumberSequenceKeypoint.new(0.2, 0), NumberSequenceKeypoint.new(0.8, 0), NumberSequenceKeypoint.new(1, 1)})}, vdiv)
+-- logo tetap di kiri atas (x tetap, ga geser ke tengah pas sidebar dibuka)
 if ICON then
-    new("ImageLabel", {Size = UDim2.fromOffset(26, 26), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0, HEAD / 2),
+    new("ImageLabel", {Size = UDim2.fromOffset(26, 26), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromOffset(SB_MIN / 2, HEAD / 2),
         BackgroundTransparency = 1, Image = ICON, ScaleType = Enum.ScaleType.Fit}, side)
 else
     local j = mkLabel(side, "J", 18, T.text, F_BOLD, CENTER)
-    j.Size = UDim2.new(1, 0, 0, HEAD)
+    j.Size = UDim2.fromOffset(SB_MIN, HEAD)
 end
-tabHolder = new("Frame", {Size = UDim2.new(1, 0, 1, -(HEAD + 32)), Position = UDim2.fromOffset(0, HEAD + 30), BackgroundTransparency = 1}, side)
-new("UIListLayout", {Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder,
-    HorizontalAlignment = Enum.HorizontalAlignment.Center}, tabHolder)
 content = new("Frame", {Size = UDim2.new(1, -SB - 1, 1, 0), Position = UDim2.new(0, SB + 1, 0, 0), BackgroundTransparency = 1}, main)
--- tombol panah: collapse/expand sidebar (kayak referensi). Taruh di pojok kanan-bawah strip logo.
-local collapseBtn = new("TextButton", {Size = UDim2.fromOffset(20, 20), AnchorPoint = Vector2.new(0.5, 0),
-    Position = UDim2.new(0.5, 0, 0, HEAD + 4), BackgroundColor3 = T.btn, BorderSizePixel = 0, Text = "",
-    AutoButtonColor = false, ZIndex = 4}, side)
+local sideScroll = new("ScrollingFrame", {Size = UDim2.new(1, 0, 1, -(HEAD + 2)), Position = UDim2.fromOffset(0, HEAD + 2),
+    BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 0, AutomaticCanvasSize = Enum.AutomaticSize.Y,
+    CanvasSize = UDim2.new(), ScrollingDirection = Enum.ScrollingDirection.Y}, side)
+new("UIListLayout", {Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder,
+    HorizontalAlignment = Enum.HorizontalAlignment.Center}, sideScroll)
+pad(sideScroll, 0, 2, 0, 8)
+-- profil Roblox (foto + username)
+local prof = new("Frame", {Size = UDim2.new(1, -12, 0, 34), BackgroundColor3 = T.btn, BackgroundTransparency = 0.4,
+    BorderSizePixel = 0, LayoutOrder = 1}, sideScroll)
+round(prof, 11)
+outline(prof, T.stroke, 1)
+local pAv = mkAvatar(prof, 26, lp.UserId, lp.DisplayName)
+pAv.AnchorPoint = Vector2.new(0, 0.5)
+pAv.Position = UDim2.new(0, 7, 0.5, 0)
+local pName = mkLabel(prof, lp.DisplayName, 12, T.text, F_BOLD)
+pName.Position = UDim2.fromOffset(40, 3); pName.Size = UDim2.new(1, -46, 0, 15)
+pName.TextTruncate = Enum.TextTruncate.AtEnd; pName.TextTransparency = 1
+local pUser = mkLabel(prof, "@" .. lp.Name, 10, T.dim, F_MED)
+pUser.Position = UDim2.fromOffset(40, 17); pUser.Size = UDim2.new(1, -46, 0, 13)
+pUser.TextTruncate = Enum.TextTruncate.AtEnd; pUser.TextTransparency = 1
+sideLabels[#sideLabels + 1] = pName
+sideLabels[#sideLabels + 1] = pUser
+-- search bar (nyari fitur)
+local srch = new("Frame", {Size = UDim2.new(1, -12, 0, 26), BackgroundColor3 = T.btn, BackgroundTransparency = 0.4,
+    BorderSizePixel = 0, LayoutOrder = 2}, sideScroll)
+round(srch, 11)
+outline(srch, T.stroke, 1)
+do
+    local mg = new("Frame", {Size = UDim2.fromOffset(16, 16), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromOffset(20, 13),
+        BackgroundTransparency = 1}, srch)
+    local ringF = new("Frame", {Size = UDim2.fromOffset(9, 9), Position = UDim2.fromOffset(1, 1), BackgroundTransparency = 1}, mg)
+    round(ringF, 5)
+    outline(ringF, T.dim, 1.5)
+    new("Frame", {Size = UDim2.fromOffset(5, 1.6), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromOffset(12.5, 12.5),
+        Rotation = 45, BackgroundColor3 = T.dim, BorderSizePixel = 0}, mg)
+end
+local sbox = new("TextBox", {Size = UDim2.new(1, -40, 1, 0), Position = UDim2.fromOffset(34, 0), BackgroundTransparency = 1,
+    Text = "", PlaceholderText = "Cari fitur...", PlaceholderColor3 = T.dim, TextColor3 = T.text, Font = F_MED, TextSize = 12,
+    TextXAlignment = LEFT, ClearTextOnFocus = false, Visible = false}, srch)
+local sHit = new("TextButton", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = "", ZIndex = 3}, srch)
+local sres = new("Frame", {Size = UDim2.new(1, -12, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
+    Visible = false, LayoutOrder = 3}, sideScroll)
+new("UIListLayout", {Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder}, sres)
+tabHolder = new("Frame", {Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, LayoutOrder = 4}, sideScroll)
+new("UIListLayout", {Padding = UDim.new(0, 1), SortOrder = Enum.SortOrder.LayoutOrder,
+    HorizontalAlignment = Enum.HorizontalAlignment.Center}, tabHolder)
+-- tombol panah collapse: nempel di garis pemisah, sejajar logo (kayak referensi)
+local collapseBtn = new("TextButton", {Size = UDim2.fromOffset(20, 20), AnchorPoint = Vector2.new(0.5, 0.5),
+    Position = UDim2.new(0, SB, 0, HEAD / 2), BackgroundColor3 = T.btn, BorderSizePixel = 0, Text = "",
+    AutoButtonColor = false, ZIndex = 6}, main)
 round(collapseBtn, 10)
 outline(collapseBtn, T.stroke)
 local collapseIc = mkIcon(collapseBtn, "down", T.dim, 10)
 collapseIc.box.Position = UDim2.new(0.5, 0, 0.5, 0)
 collapseIc.box.Rotation = -90
-sideLabels = {}
 function setSidebar(open)
     sideOpen = open
     SB = open and SB_MAX or SB_MIN
     local info = Enum.EasingStyle.Quint
     tw(side, 0.3, {Size = UDim2.new(0, SB, 1, 0)}, info)
     tw(content, 0.3, {Size = UDim2.new(1, -SB - 1, 1, 0), Position = UDim2.new(0, SB + 1, 0, 0)}, info)
+    tw(collapseBtn, 0.3, {Position = UDim2.new(0, SB, 0, HEAD / 2)}, info)
     collapseIc.box.Rotation = open and 90 or -90
+    sbox.Visible = open
+    sHit.Visible = not open
+    for _, h in ipairs(sideHeads) do
+        h.TextXAlignment = open and LEFT or CENTER
+        h.TextSize = open and 9 or 8
+        h.Position = UDim2.fromOffset(open and 8 or 0, h.Position.Y.Offset)
+    end
     for _, lb in ipairs(sideLabels) do tw(lb, open and 0.26 or 0.14, {TextTransparency = open and 0 or 1}) end
     for _, o in ipairs(tabList) do
         tw(o.ic.box, 0.3, {Position = open and UDim2.new(0, 14, 0.5, 0) or UDim2.new(0, 11, 0.5, 0)}, Enum.EasingStyle.Quint)
     end
 end
 track(collapseBtn.MouseButton1Click:Connect(function() setSidebar(not sideOpen) end))
+track(sHit.MouseButton1Click:Connect(function()
+    setSidebar(true)
+    task.delay(0.3, function() if running and sideOpen then pcall(function() sbox:CaptureFocus() end) end end)
+end))
+-- ===== pencarian fitur =====
+local function clearRes()
+    for _, c in ipairs(sres:GetChildren()) do
+        if c:IsA("GuiObject") then c:Destroy() end
+    end
+end
+local function goToFeature(it)
+    local tabObj = it.card.tab
+    local top = tabObj.parentTab or tabObj
+    sbox.Text = ""
+    selectTab(top)
+    if tabObj.parentTab then top:SelectSub(tabObj) end
+    task.delay(0.35, function()
+        if not (running and it.row and it.row.Parent and top.scroll and top.scroll.Parent) then return end
+        local sc = top.scroll
+        local y = (it.row.AbsolutePosition.Y - sc.AbsolutePosition.Y) / math.max(uiScale.Scale, 0.01) + sc.CanvasPosition.Y - 8
+        sc.CanvasPosition = Vector2.new(0, math.max(0, y))
+        local fl = new("Frame", {Size = UDim2.new(1, 8, 1, 6), Position = UDim2.fromOffset(-4, -3), BackgroundColor3 = WHITE,
+            BackgroundTransparency = 0.8, BorderSizePixel = 0, ZIndex = 6}, it.row)
+        fl.BackgroundColor3 = T.text
+        round(fl, 8)
+        tw(fl, 0.9, {BackgroundTransparency = 1})
+        task.delay(1, function() pcall(function() fl:Destroy() end) end)
+    end)
+end
+local function refreshSearch()
+    local q = (sbox.Text:lower():gsub("^%s+", ""):gsub("%s+$", ""))
+    clearRes()
+    if q == "" then
+        sres.Visible = false
+        tabHolder.Visible = true
+        return
+    end
+    tabHolder.Visible = false
+    sres.Visible = true
+    local n = 0
+    for _, it in ipairs(featIndex) do
+        if n >= 8 then break end
+        local tabObj = it.card.tab
+        local top = tabObj.parentTab or tabObj
+        local sub = tabObj.parentTab and tabObj or nil
+        local hay = (it.label .. " " .. (it.card.title or "") .. " " .. top.name .. " " .. (sub and sub.name or "")):lower()
+        if hay:find(q, 1, true) then
+            n = n + 1
+            local b = new("TextButton", {Size = UDim2.new(1, 0, 0, 34), BackgroundColor3 = T.sel, BackgroundTransparency = 0.5,
+                BorderSizePixel = 0, Text = "", AutoButtonColor = false, LayoutOrder = n}, sres)
+            round(b, 9)
+            local l1 = mkLabel(b, it.label, 11, T.text, F_BOLD)
+            l1.Position = UDim2.fromOffset(8, 3); l1.Size = UDim2.new(1, -12, 0, 15)
+            l1.TextTruncate = Enum.TextTruncate.AtEnd
+            local l2 = mkLabel(b, top.name .. (sub and (" > " .. sub.name) or ""), 9, T.dim, F_MED)
+            l2.Position = UDim2.fromOffset(8, 18); l2.Size = UDim2.new(1, -12, 0, 13)
+            l2.TextTruncate = Enum.TextTruncate.AtEnd
+            track(b.MouseButton1Click:Connect(function() goToFeature(it) end))
+        end
+    end
+    if n == 0 then
+        local e = mkLabel(sres, "Ga ketemu", 11, T.dim, F_MED, CENTER)
+        e.Size = UDim2.new(1, 0, 0, 24)
+    end
+end
+track(sbox:GetPropertyChangedSignal("Text"):Connect(refreshSearch))
 local header = new("Frame", {Size = UDim2.new(1, 0, 0, HEAD), BackgroundTransparency = 1, Active = true}, content)
-new("Frame", {Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = T.stroke, BorderSizePixel = 0}, header)
+new("Frame", {Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1), BackgroundColor3 = T.stroke, BackgroundTransparency = 0.5, BorderSizePixel = 0}, header)
 local hl = new("Frame", {Size = UDim2.new(1, -150, 1, -1), Position = UDim2.fromOffset(PADL, 0), BackgroundTransparency = 1}, header)
 new("UIListLayout", {FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 8),
     VerticalAlignment = Enum.VerticalAlignment.Center, SortOrder = Enum.SortOrder.LayoutOrder}, hl)
@@ -1542,7 +1745,7 @@ function selectTab(t)
         elseif not sel then
             o.page.Visible = false
         end
-        tw(o.btn, 0.18, {BackgroundTransparency = sel and 0 or 1})
+        tw(o.btn, 0.18, {BackgroundTransparency = sel and 0.1 or 1})
         o.ic:Tween(sel and accentC or T.dim, 0.18)
         tw(o.bar, 0.24, {
             BackgroundColor3 = accentC,
@@ -1553,8 +1756,8 @@ function selectTab(t)
     end
 end
 local function addTab(name, iconKey, single)
-    local btn = new("TextButton", {Size = UDim2.new(1, -12, 0, 38), BackgroundColor3 = T.sel, BackgroundTransparency = 1,
-        Text = "", AutoButtonColor = false, LayoutOrder = #tabList + 1, ClipsDescendants = true}, tabHolder)
+    local btn = new("TextButton", {Size = UDim2.new(1, -12, 0, 27), BackgroundColor3 = T.sel, BackgroundTransparency = 1,
+        Text = "", AutoButtonColor = false, LayoutOrder = nextNav(), ClipsDescendants = true}, tabHolder)
     round(btn, 11)
     local ic = mkIcon(btn, iconKey, T.dim, 18)
     ic.box.AnchorPoint = Vector2.new(0, 0.5)
@@ -1577,8 +1780,9 @@ local function addTab(name, iconKey, single)
     local scroll = new("ScrollingFrame", {Size = UDim2.new(1, 0, 1, -34), Position = UDim2.fromOffset(0, 34),
         BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 2, ScrollBarImageColor3 = Color3.fromRGB(70, 70, 74),
         AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = UDim2.new()}, page)
-    pad(scroll, PADL, 2, 0, 14)
-    local cols = new("Frame", {Size = UDim2.new(1, -PADR, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1}, scroll)
+    pad(scroll, 0, 2, 0, 14)
+    -- lebar & posisi eksplisit: kiri/kanan sama-sama PADL/PADR (dulu UIPadding kiri bikin kolom kanan kepotong)
+    local cols = new("Frame", {Size = UDim2.new(1, -(PADL + PADR), 0, 0), Position = UDim2.fromOffset(PADL, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1}, scroll)
     local colList = {}
     if single then
         vlist(cols, 0)
@@ -1626,7 +1830,7 @@ function Tab:Group(titleText, col)
     outline(card)
     pad(card, 12, 12, 12, 12)
     vlist(card, 9)
-    return setmetatable({body = card, tab = self, order = 0, col = col}, Card)
+    return setmetatable({body = card, tab = self, order = 0, col = col, title = titleText}, Card)
 end
 function Tab:SelectSub(sub)
     for _, o in ipairs(self.subs) do
@@ -1639,7 +1843,7 @@ function Tab:SelectSub(sub)
         elseif not sel then
             o.frame.Visible = false
         end
-        tw(o.btn, 0.18, {BackgroundTransparency = sel and 0 or 1, TextColor3 = sel and INK or T.dim})
+        tw(o.btn, 0.18, {BackgroundTransparency = sel and 0 or 1, BackgroundColor3 = T.pill, TextColor3 = sel and T.pillText or T.dim})
     end
     self.scroll.CanvasPosition = Vector2.new(0, 0)
 end
@@ -1652,16 +1856,16 @@ function Tab:Sub(name)
         self.scroll.Position = UDim2.fromOffset(0, 66)
         self.scroll.Size = UDim2.new(1, 0, 1, -66)
     end
-    local frame = new("Frame", {Size = UDim2.new(1, -PADR, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Visible = false}, self.scroll)
+    local frame = new("Frame", {Size = UDim2.new(1, -(PADL + PADR), 0, 0), Position = UDim2.fromOffset(PADL, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Visible = false}, self.scroll)
     vlist(frame, 8, Enum.FillDirection.Horizontal)
     local c1 = new("Frame", {Size = UDim2.new(0.5, -4, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, LayoutOrder = 1}, frame)
     vlist(c1, 10)
     local c2 = new("Frame", {Size = UDim2.new(0.5, -4, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, LayoutOrder = 2}, frame)
     vlist(c2, 10)
-    local btn = new("TextButton", {Size = UDim2.fromOffset(#name * 7 + 24, 24), BackgroundColor3 = Color3.fromRGB(240, 240, 242), BackgroundTransparency = 1,
+    local btn = new("TextButton", {Size = UDim2.fromOffset(#name * 7 + 24, 24), BackgroundColor3 = T.pill, BackgroundTransparency = 1,
         Text = name, TextSize = 12, Font = F_BOLD, TextColor3 = T.dim, AutoButtonColor = false, LayoutOrder = #self.subs + 1}, self.strip)
     round(btn, 12)
-    local sub = setmetatable({cols = {c1, c2}, nextCol = 1, load = {0, 0}, frame = frame, btn = btn, scroll = self.scroll}, Tab)
+    local sub = setmetatable({name = name, parentTab = self, cols = {c1, c2}, nextCol = 1, load = {0, 0}, frame = frame, btn = btn, scroll = self.scroll}, Tab)
     self.subs[#self.subs + 1] = sub
     local owner = self
     track(btn.MouseButton1Click:Connect(function() owner:SelectSub(sub) end))
@@ -1679,26 +1883,34 @@ end
 function Card:Toggle(id, txt, default, cb, color)
     local o = self:nextOrder()
     local row = new("Frame", {Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1, LayoutOrder = o}, self.body)
+    indexFeature(self, txt, row)
     local lb = mkLabel(row, txt, 12, T.text)
     lb.Size = UDim2.new(1, color and -78 or -50, 1, 0)
     lb.TextTruncate = Enum.TextTruncate.AtEnd
     local state = default
-    local KNOB_ON, KNOB_OFF = INK, Color3.fromRGB(170, 170, 170)
     local sw = new("Frame", {Size = UDim2.fromOffset(38, 22), Position = UDim2.new(1, -38, 0.5, -11),
-        BackgroundColor3 = state and WHITE or T.off, BorderSizePixel = 0}, row)
+        BackgroundColor3 = WHITE, BorderSizePixel = 0}, row)
     round(sw, 11)
-    grad(sw, T.acc0, T.acc1, 0)
+    local swg = grad(sw, T.acc0, T.acc1, 0, "acc0", "acc1")
     local knob = new("Frame", {Size = UDim2.fromOffset(16, 16),
         Position = state and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8),
-        BackgroundColor3 = state and KNOB_ON or KNOB_OFF, BorderSizePixel = 0}, sw)
+        BackgroundColor3 = WHITE, BorderSizePixel = 0}, sw)
     round(knob, 8)
+    local function paint()
+        sw.BackgroundColor3 = state and WHITE or T.off
+        swg.Enabled = state
+        knob.BackgroundColor3 = state and T.knobOn or T.knobOff
+    end
+    paint()
+    themeHooks[#themeHooks + 1] = paint
     local hit = new("TextButton", {Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = "", ZIndex = 2}, row)
     local function set(v, silent)
         state = v and true or false
+        swg.Enabled = state
         tw(sw, 0.22, {BackgroundColor3 = state and WHITE or T.off}, Enum.EasingStyle.Quint)
         tw(knob, 0.22, {
             Position = state and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8),
-            BackgroundColor3 = state and KNOB_ON or KNOB_OFF,
+            BackgroundColor3 = state and T.knobOn or T.knobOff,
         }, Enum.EasingStyle.Quint)
         if not silent then cb(state) touch() end
     end
@@ -1750,6 +1962,7 @@ function Card:Toggle(id, txt, default, cb, color)
 end
 function Card:Slider(id, txt, min, max, default, step, cb, suffix)
     local row = new("Frame", {Size = UDim2.new(1, 0, 0, 40), BackgroundTransparency = 1, LayoutOrder = self:nextOrder()}, self.body)
+    indexFeature(self, txt, row)
     local lb = mkLabel(row, txt, 12, T.text)
     lb.Size = UDim2.new(1, -64, 0, 16)
     lb.TextTruncate = Enum.TextTruncate.AtEnd
@@ -1759,10 +1972,11 @@ function Card:Slider(id, txt, min, max, default, step, cb, suffix)
     round(bar, 2)
     local fill = new("Frame", {Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = WHITE, BorderSizePixel = 0}, bar)
     round(fill, 2)
-    grad(fill, T.acc0, T.acc1, 0)
+    grad(fill, T.acc0, T.acc1, 0, "acc0", "acc1")
     local knob = new("Frame", {Size = UDim2.fromOffset(14, 14), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0, 0, 0.5, 0),
         BackgroundColor3 = WHITE, BorderSizePixel = 0}, bar)
     new("UICorner", {CornerRadius = UDim.new(0.5, 0)}, knob)
+    themeHooks[#themeHooks + 1] = function() knob.BackgroundColor3 = T.knob end
     local hit = new("TextButton", {Size = UDim2.new(1, 0, 0, 26), Position = UDim2.fromOffset(0, 16), BackgroundTransparency = 1, Text = "", ZIndex = 2}, row)
     local value = default
     local function render(instant)
@@ -1797,6 +2011,7 @@ function Card:Dropdown(id, txt, values, default, cb)
     local row = new("TextButton", {Size = UDim2.new(1, 0, 0, 32), BackgroundColor3 = T.btn, Text = "",
         AutoButtonColor = false, LayoutOrder = o}, self.body)
     round(row, 9)
+    indexFeature(self, txt, row)
     hover(row, T.btn, T.off)
     local lb = mkLabel(row, txt, 12, T.dim)
     lb.Position = UDim2.fromOffset(10, 0); lb.Size = UDim2.new(0.4, -10, 1, 0)
@@ -1821,7 +2036,7 @@ function Card:Dropdown(id, txt, values, default, cb)
         local b = new("TextButton", {Size = UDim2.new(1, 0, 0, 24), BackgroundTransparency = 1, Text = v, TextColor3 = T.text,
             Font = F_MED, TextSize = 12, AutoButtonColor = false}, lst)
         round(b, 7)
-        track(b.MouseEnter:Connect(function() tw(b, 0.1, {BackgroundTransparency = 0.88, BackgroundColor3 = WHITE}) end))
+        track(b.MouseEnter:Connect(function() tw(b, 0.1, {BackgroundTransparency = 0.88, BackgroundColor3 = T.text}) end))
         track(b.MouseLeave:Connect(function() tw(b, 0.12, {BackgroundTransparency = 1}) end))
         track(b.MouseButton1Click:Connect(function() set(v) end))
     end
@@ -1837,9 +2052,10 @@ function Card:Button(txt, cb)
         Font = F_MED, TextSize = 12, AutoButtonColor = false, LayoutOrder = self:nextOrder()}, self.body)
     round(b, 9)
     outline(b, T.stroke, 1)
-    hover(b, T.btn, Color3.fromRGB(40, 40, 44))
+    indexFeature(self, txt, b)
+    hover(b, T.btn, T.hov)
     track(b.MouseButton1Down:Connect(function() tw(b, 0.08, {BackgroundColor3 = T.off}) end))
-    track(b.MouseButton1Up:Connect(function() tw(b, 0.14, {BackgroundColor3 = Color3.fromRGB(40, 40, 44)}) end))
+    track(b.MouseButton1Up:Connect(function() tw(b, 0.14, {BackgroundColor3 = T.hov}) end))
     track(b.MouseButton1Click:Connect(function() cb() end))
 end
 function Card:Label(txt)
@@ -1851,11 +2067,26 @@ function Card:Label(txt)
     l.LayoutOrder = self:nextOrder()
     return l
 end
+local function sideHeader(text, first)
+    local h = new("Frame", {Size = UDim2.new(1, -12, 0, first and 14 or 17), BackgroundTransparency = 1, LayoutOrder = nextNav()}, tabHolder)
+    if not first then
+        new("Frame", {Size = UDim2.new(1, -4, 0, 1), Position = UDim2.fromOffset(2, 1), BackgroundColor3 = T.stroke,
+            BackgroundTransparency = 0.4, BorderSizePixel = 0}, h)
+    end
+    local l = mkLabel(h, string.upper(text), 8, T.dim, F_BOLD, CENTER)
+    l.Size = UDim2.new(1, -8, 0, 12)
+    l.Position = UDim2.fromOffset(0, first and 1 or 4)
+    sideHeads[#sideHeads + 1] = l
+    return h
+end
+sideHeader("Menu", true)
 tHome = addTab("Dashboard", "home", true)
 local tSurv = addTab("Survivor", "user")
 tKill = addTab("Killer", "blade")
+sideHeader("Tools")
 local tESP = addTab("ESP", "eye")
 tMisc = addTab("Misc", "sliders")
+sideHeader("General")
 tSet = addTab("Settings", "gear")
 do
     local sA, sC, sM = tSurv:Sub("Auto"), tSurv:Sub("Combat"), tSurv:Sub("Gerak")
@@ -1940,8 +2171,8 @@ local function statGrid(parent, order, rows)
     return out
 end
 local function setStat(l, name, value, color)
-    l.Text = ('<font color="#808088">%s:</font> <font color="#%s"><b>%s</b></font>'):format(
-        esc(name), (color or T.text):ToHex(), esc(value))
+    l.Text = ('<font color="#%s">%s:</font> <font color="#%s"><b>%s</b></font>'):format(
+        T.dim:ToHex(), esc(name), (color or T.text):ToHex(), esc(value))
 end
 local dGrid = statGrid(det, 3, 6)
 local STAT_ORDER = {"Level", "EXP", "Screws", "Gears", "KillerChance", "Ornaments", "PassExp", "PassClaimed"}
