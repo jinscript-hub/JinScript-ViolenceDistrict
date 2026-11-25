@@ -2976,12 +2976,19 @@ do local function parryInit()
                     end
                 end
                 if P2.losGate then
-                    local kp = k.hrp.Position + Vector3.new(0, 2, 0)
-                    local tp = h2.Position + Vector3.new(0, 2, 0)
-                    if losBlocked(kp, tp) then
+                    -- sampling 1 ketinggian doang ga cukup: box/pallet rendah bisa punya sela di atas 2 stud yang
+                    -- bikin raycast lewat padahal badan masih ketutup. Cek 3 ketinggian (pinggang/dada/kepala);
+                    -- ketutup di SALAH SATU aja udah cukup buat skip (lebih baik hemat dagger daripada kebuang sia-sia).
+                    local blk, atH
+                    for _, hOff in ipairs({1, 2, 3}) do
+                        local kp = k.hrp.Position + Vector3.new(0, hOff, 0)
+                        local tp = h2.Position + Vector3.new(0, hOff, 0)
+                        if losBlocked(kp, tp) then blk, atH = true, hOff break end
+                    end
+                    if blk then
                         P2.why, P2.whyT = " ketutup pallet/window/tembok, swing ga bisa nembus", os.clock()
                         P2.whyK, P2.whyKT = P2.why, P2.whyT
-                        plog("LOS", id, "| garis killer->kita ketutup objek, SKIP")
+                        plog("LOS", id, ("| garis killer->kita ketutup objek di tinggi %d, SKIP"):format(atH))
                         return
                     end
                 end
