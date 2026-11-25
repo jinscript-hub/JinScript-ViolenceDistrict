@@ -4361,6 +4361,17 @@ do
     end
     local rayP = RaycastParams.new()
     rayP.FilterType = Enum.RaycastFilterType.Exclude
+    -- tinggi plafon di atas origin (nil kalau ga ketutup sampe 60 stud / di luar)
+    local function ceilingAt(origin)
+        local ex = {}
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p.Character then ex[#ex + 1] = p.Character end
+        end
+        rayP.FilterDescendantsInstances = ex
+        local r = workspace:Raycast(origin, Vector3.new(0, 60, 0), rayP)
+        if r and not ignoreWorld(r.Instance) then return r.Position.Y - origin.Y end
+        return nil
+    end
     -- true kalau lintasan tombak (parabola) ga nabrak dinding sampai waktu tEnd
     local function pathClear(spawn, v0, tEnd)
         local ex = {}
@@ -4420,36 +4431,48 @@ do
         local vel = Vector3.new(v.X, 0, v.Z):Lerp(Vector3.new(vA.X, 0, vA.Z), blend)
         local hum = hrp.Parent and hrp.Parent:FindFirstChildOfClass("Humanoid")
         local air = hum and hum.FloorMaterial == Enum.Material.Air
+        local flatDir = Vector3.new(hrp.Position.X - camO.X, 0, hrp.Position.Z - camO.Z)
+        local right = flatDir.Magnitude > 0.01 and flatDir.Unit:Cross(Vector3.yAxis) or Vector3.xAxis
+        local ceil = ceilingAt(camO)
         local why, maxR = "jauh", nil
-        for arcIdx = 1, 2 do
-            local dir = (hrp.Position - camO).Unit
-            local t, sol = 0, nil
-            for _ = 1, 6 do
-                local origin = camO + dir * SPAWN
-                local tt = t + lag -- posisi target yang kita lihat udah telat ~lag dtk dari waktu server
-                local aim = hrp.Position + vel * tt
-                if air then
-                    aim = aim + Vector3.new(0, math.clamp(v.Y * tt - 0.5 * workspace.Gravity * tt * tt, -12, 12), 0)
-                end
-                local a = arcs(origin, aim, speed)
-                if not a then
-                    sol = nil
-                    local h = aim.Y - origin.Y
-                    maxR = (speed * speed / GRAV) * math.sqrt(math.max(1 - 2 * GRAV * h / (speed * speed), 0))
-                    break
-                end
-                sol = a[arcIdx]
-                dir, t = sol.dir, sol.t
-            end
-            if sol then
-                if t > MAXLIFE - 0.05 then
-                    if why ~= "tembok" then why = "lama" end
-                else
-                    local origin = camO + sol.dir * SPAWN
-                    if pierce or pathClear(origin, sol.dir * speed, t) then
-                        return sol.dir, t, arcIdx
+        -- di ruangan sempit/rendah, lob tinggi kena plafon dan lengkung rendah kena tembok/kusen pintu.
+        -- coba beberapa titik di badan survivor (turun ke pinggang/kaki, geser dikit ke kiri/kanan):
+        -- sudut lemparnya jadi sedikit beda tiap titik, kadang itu yang muat lewat celah. Urut dari paling akurat (tengah badan).
+        local spots = {{0, 0}, {-1.5, 0}, {0, 1}, {0, -1}, {-3, 0}, {-1.5, 1}, {-1.5, -1}}
+        for _, off in ipairs(spots) do
+            local yOff, xOff = off[1], off[2]
+            -- plafon rendah (< 15 stud ke atas dari posisi lempar): lob tinggi hampir pasti nabrak, lewatin aja biar ga buang raycast
+            local order = (ceil and ceil < 15) and {1} or {1, 2}
+            for _, arcIdx in ipairs(order) do
+                local dir = (hrp.Position - camO).Unit
+                local t, sol = 0, nil
+                for _ = 1, 6 do
+                    local origin = camO + dir * SPAWN
+                    local tt = t + lag -- posisi target yang kita lihat udah telat ~lag dtk dari waktu server
+                    local aim = hrp.Position + vel * tt + Vector3.new(0, yOff, 0) + right * xOff
+                    if air then
+                        aim = aim + Vector3.new(0, math.clamp(v.Y * tt - 0.5 * workspace.Gravity * tt * tt, -12, 12), 0)
                     end
-                    why = "tembok"
+                    local a = arcs(origin, aim, speed)
+                    if not a then
+                        sol = nil
+                        local h = aim.Y - origin.Y
+                        maxR = (speed * speed / GRAV) * math.sqrt(math.max(1 - 2 * GRAV * h / (speed * speed), 0))
+                        break
+                    end
+                    sol = a[arcIdx]
+                    dir, t = sol.dir, sol.t
+                end
+                if sol then
+                    if t > MAXLIFE - 0.05 then
+                        if why ~= "tembok" then why = "lama" end
+                    else
+                        local origin = camO + sol.dir * SPAWN
+                        if pierce or pathClear(origin, sol.dir * speed, t) then
+                            return sol.dir, t, arcIdx
+                        end
+                        why = "tembok"
+                    end
                 end
             end
         end
