@@ -2023,7 +2023,7 @@ cSC:Dropdown("SC_Mode", "Mode", {"Instant", "Perfect", "Great", "Random"}, "Perf
 do local function parryInit()
     S.parry = {on = false, aggr = false, dist = 14, last = 0, busy = false, method = 2, hitOnly = false, circle = false, color = Color3.fromRGB(170, 0, 255), detect = false, learn = true, pre = false, hitDot = 0.55, block = 0, cdLo = 0, nl = 0, face = false, human = true, earlyK = 0.043}
     local PARRY_DEBUG = false
-    local PARRY_LOG = false
+    local PARRY_LOG = true -- nyala biar kejadian meleset/salah tembak kecatet ke jin_parry_log.txt buat didiagnosis
     local ATTACK_ANIMS = {}
     for _, id in ipairs({
         "135002183282873", "121216847022485",
@@ -2141,9 +2141,12 @@ do local function parryInit()
     cPar:Label("Matchup: delay + BonusDist per killer. Delay ditambah slider, hasil akhir min 0.")
     cPar:Toggle("PAR_Bait", "Anti rege bait", true, function(v) S.parry.baitCheck = v end)
     cPar:Label("Skip parry kalau kamera killer ngebelakangi.")
+    cPar:Toggle("PAR_LOS", "Skip kalau ketutup pallet/window/tembok", true, function(v) S.parry.losGate = v end)
+    cPar:Label("Kalau garis lurus killer -> kita ketutup pallet/window/tembok yang masih berdiri, parry di-skip (serangan ga mungkin nembus).")
     S.parry.zoneMax, S.parry.swingDot = 22, 0
     S.parry.baitCheck, S.parry.baitDot = true, 0.3
     S.parry.close, S.parry.closeR, S.parry.lateSkip = false, 4.0, false
+    S.parry.losGate, S.parry.losTol = true, 1.5
     S.parry.circle = true
     S.parry.circShow = 60
     cPar:Toggle("PAR_Circle", "Garis zona parry", true, function(v) S.parry.circle = v end,
@@ -2702,6 +2705,26 @@ do local function parryInit()
         if v.Magnitude < 0.01 then return 1 end
         return aim:Dot(v.Unit)
     end
+    local losIgnore = setmetatable({}, {__mode = "k"})
+    local function losBlocked(from, to)
+        local d = to - from
+        if d.Magnitude < 1 then return false end
+        local ex = {}
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p.Character then ex[#ex + 1] = p.Character end
+        end
+        local rp = RaycastParams.new()
+        rp.FilterType = Enum.RaycastFilterType.Exclude
+        rp.FilterDescendantsInstances = ex
+        local r = workspace:Raycast(from, d, rp)
+        if not r then return false end
+        local inst = r.Instance
+        -- part transparan / ga collide dianggap ga ngeblok beneran (dekorasi, bukan pallet/window yg masih utuh)
+        if inst.CanCollide == false then return false end
+        local okT, tr = pcall(function() return inst.Transparency end)
+        if okT and tr and tr >= 0.4 then return false end
+        return true
+    end
     local function rayMiss(k, to)
         local aim = aimOf(k)
         local v = Vector3.new(to.X - k.hrp.Position.X, 0, to.Z - k.hrp.Position.Z)
@@ -2949,6 +2972,16 @@ do local function parryInit()
                     if bad then
                         P2.why, P2.whyT = (" ayunan ga ngadep kita (dot %.2f, closing %.1f)"):format(dot2, closing2), os.clock()
                         P2.whyK, P2.whyKT = P2.why, P2.whyT
+                        return
+                    end
+                end
+                if P2.losGate then
+                    local kp = k.hrp.Position + Vector3.new(0, 2, 0)
+                    local tp = h2.Position + Vector3.new(0, 2, 0)
+                    if losBlocked(kp, tp) then
+                        P2.why, P2.whyT = " ketutup pallet/window/tembok, swing ga bisa nembus", os.clock()
+                        P2.whyK, P2.whyKT = P2.why, P2.whyT
+                        plog("LOS", id, "| garis killer->kita ketutup objek, SKIP")
                         return
                     end
                 end
