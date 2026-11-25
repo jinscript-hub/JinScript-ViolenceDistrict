@@ -1725,6 +1725,7 @@ local function sectionLabel(parent, text, order)
     local l = mkLabel(parent, string.upper(text), 10, T.dim, F_BOLD)
     l.Size = UDim2.new(1, 0, 0, 14)
     l.LayoutOrder = order or 1
+    l.TextTruncate = Enum.TextTruncate.AtEnd
     new("UIPadding", {PaddingLeft = UDim.new(0, 4)}, l)
     return l
 end
@@ -1933,6 +1934,8 @@ function Card:Dropdown(id, txt, values, default, cb)
     lb.Position = UDim2.fromOffset(10, 0); lb.Size = UDim2.new(0.4, -10, 1, 0)
     local cur = mkLabel(row, default, 12, T.text, F_BOLD, RIGHT)
     cur.Size = UDim2.new(0.6, -28, 1, 0); cur.Position = UDim2.new(0.4, 0, 0, 0)
+    cur.TextTruncate = Enum.TextTruncate.AtEnd
+    lb.TextTruncate = Enum.TextTruncate.AtEnd
     local arrow = mkIcon(row, "down", T.dim, 9)
     arrow.box.Position = UDim2.new(1, -14, 0.5, 0)
     local lst = new("Frame", {Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = T.btn,
@@ -1969,6 +1972,9 @@ function Card:Button(txt, cb)
     round(b, 9)
     outline(b, T.stroke, 1)
     indexFeature(self, txt, b)
+    b.TextScaled = true -- teks ngecilin sendiri biar muat di layar sempit (4:3)
+    new("UITextSizeConstraint", {MaxTextSize = 12, MinTextSize = 8}, b)
+    pad(b, 8, 0, 8, 0)
     hover(b, T.btn, T.hov)
     track(b.MouseButton1Down:Connect(function() tw(b, 0.08, {BackgroundColor3 = T.off}) end))
     track(b.MouseButton1Up:Connect(function() tw(b, 0.14, {BackgroundColor3 = T.hov}) end))
@@ -2024,7 +2030,7 @@ do
         ["View"] = mV, ["Fullbright"] = mV, ["Crosshair custom"] = mV,
         ["Anti lag: efek"] = mP, ["Anti lag: map"] = mP,
         ["Fun menu"] = mF, ["Speed boost"] = mF,
-        ["Debug"] = tSet, default = mV,
+        default = mV,
     }
 end
 do
@@ -2238,14 +2244,12 @@ do
     cLbl:Toggle("ESP_Names", "Nama", true, function(v) S.names = v end)
     cLbl:Toggle("ESP_Dist", "Jarak player [27M]", true, function(v) S.dist = v end)
     cLbl:Toggle("ESP_ObjDist", "Jarak objek [27M]", false, function(v) S.objDist = v end)
-    cLbl:Label("Generator: persen selalu tampil di tengah.")
     cLbl:Slider("ESP_TextSize", "Ukuran teks", 10, 24, 13, 1, function(v) S.textSize = v end)
     cLbl:Slider("ESP_TextDist", "Jarak teks player (0 = bebas)", 0, 1000, 0, 50, function(v) S.textDist = v end, "m")
     cLbl:Toggle("ESP_Outline", "Outline teks (matiin kalau berat)", true, function(v) S.outline = v if S.espRestyle then S.espRestyle() end end)
     local cPerf = sD:Group("Performa ESP", 2)
     cPerf:Slider("ESP_Rate", "Refresh ESP (naikin kalau lag)", 100, 1000, 250, 50, function(v) S.espMs = v end, "ms")
     cPerf:Slider("ESP_HLMax", "Maks highlight objek (turunin kalau lag)", 0, 27, 8, 1, function(v) S.hlMax = v end)
-    cPerf:Label("Highlight = siluet tembus tembok. Berat di GPU HP. Objek di luar batas tetap dapat teks nama/jarak.")
     local cCone = sP:Group("Area liat killer (tanah)", 2)
     cCone:Toggle("Cone_On", "Aktif", true, function(v) S.cone.on = v end)
     cCone:Slider("Cone_Angle", "Sudut area killer", 40, 180, 100, 5, function(v) S.cone.angle = v end)
@@ -2262,7 +2266,7 @@ cSC:Dropdown("SC_Mode", "Mode", {"Instant", "Perfect", "Great", "Random"}, "Perf
 do local function parryInit()
     S.parry = {on = false, aggr = false, dist = 14, last = 0, busy = false, method = 2, hitOnly = false, circle = false, color = Color3.fromRGB(170, 0, 255), detect = false, learn = true, pre = false, hitDot = 0.55, block = 0, cdLo = 0, nl = 0, face = false, human = true, earlyK = 0.043}
     local PARRY_DEBUG = false
-    local PARRY_LOG = true -- nyala biar kejadian meleset/salah tembak kecatet ke jin_parry_log.txt buat didiagnosis
+    local PARRY_LOG = false -- nyala biar kejadian meleset/salah tembak kecatet ke jin_parry_log.txt buat didiagnosis
     local ATTACK_ANIMS = {}
     for _, id in ipairs({
         "135002183282873", "121216847022485",
@@ -2377,11 +2381,8 @@ do local function parryInit()
     S.parry.match, S.parry.delayOff = true, 0
     cPar:Toggle("PAR_Match", "Killer Matchup", true, function(v) S.parry.match = v end)
     cPar:Slider("PAR_DelayOff", "Tambah / kurang delay", -0.15, 0.2, 0, 0.01, function(v) S.parry.delayOff = v end, "dtk")
-    cPar:Label("Matchup: delay + BonusDist per killer. Delay ditambah slider, hasil akhir min 0.")
     cPar:Toggle("PAR_Bait", "Anti rege bait", true, function(v) S.parry.baitCheck = v end)
-    cPar:Label("Skip parry kalau kamera killer ngebelakangi.")
     cPar:Toggle("PAR_LOS", "Skip kalau ketutup pallet/window/tembok", true, function(v) S.parry.losGate = v end)
-    cPar:Label("Kalau garis lurus killer -> kita ketutup pallet/window/tembok yang masih berdiri, parry di-skip (serangan ga mungkin nembus).")
     S.parry.zoneMax, S.parry.swingDot = 22, 0
     S.parry.baitCheck, S.parry.baitDot = true, 0.3
     S.parry.close, S.parry.closeR, S.parry.lateSkip = false, 4.0, false
@@ -3625,7 +3626,7 @@ do
     cSA:Toggle("SA_Tracer", "Garis tracer ke killer (ijo = siap, merah = ketutup)", true, function(v) S.sa.tracer = v end)
     cSA:Slider("SA_TracerW", "Tebal garis tracer", 1, 6, 2, 1, function(v) S.sa.thick = v end)
     local cSA2 = tSurv:Group("Pistol kalibrasi (lanjutan)", 2)
-    local aimLbl, dumpLbl, dumpPistol, startAimLearn
+    local aimLbl, startAimLearn
     cSA2:Dropdown("SA_TracerMode", "Tracer muncul", {"Pas aiming", "Selalu"}, "Pas aiming", function(v) S.sa.aimMode = v end)
     aimLbl = cSA2:Label("Tombol aim: belum direkam (tracer pakai tebakan)")
     cSA2:Button("Rekam tombol aim (tekan sekali)", function() if startAimLearn then startAimLearn() end end)
@@ -3634,14 +3635,6 @@ do
     end)
     cSA2:Slider("SA_Speed", "Kecepatan peluru (stud/dtk)", 100, 2000, 800, 50, function(v) S.sa.speed = v end)
     cSA2:Slider("SA_Drop", "Gravitasi peluru (x gravity, 0 = lurus)", 0, 2, 0, 0.1, function(v) S.sa.drop = v end)
-    cSA2:Label("Peluru jatuh pendek di jarak jauh? Naikin gravitasi peluru dikit-dikit. 0 = lurus kayak sebelumnya.")
-    cSA2:Button("Dump modul pistol (cek angka peluru)", function()
-        if dumpPistol then
-            local ok, a = pcall(dumpPistol)
-            if dumpLbl then dumpLbl.Text = ok and a or ("Dump gagal: " .. tostring(a)) end
-        end
-    end)
-    dumpLbl = cSA2:Label("Dump: belum dijalanin (masuk match + pegang pistol dulu)")
 
     local function dot3(a, b) return a.X * b.X + a.Y * b.Y + a.Z * b.Z end
     local saRay = RaycastParams.new()
@@ -4000,51 +3993,6 @@ do
             task.wait(2)
         end
     end)
-    -- dump isi modul pistol (angka/konstanta) buat nyari kecepatan + gravitasi peluru asli
-    dumpPistol = function()
-        local m = game:GetService("ReplicatedStorage"):FindFirstChild("Modules")
-        m = m and m:FindFirstChild("Items")
-        m = m and m:FindFirstChild("TwistOfFate")
-        m = m and m:FindFirstChild("TwistoffateEffects")
-        if not m then return "Dump: modul pistol belum ada (masuk match dulu)" end
-        local okR, mod = pcall(require, m)
-        if not okR or type(mod) ~= "table" then return "Dump: modul ga bisa dibaca" end
-        local gc = (debug and debug.getconstants) or getconstants
-        local lines, brief = {}, {}
-        for k, v in pairs(mod) do
-            local tv = typeof(v)
-            if tv == "number" or tv == "boolean" or tv == "string" or tv == "Vector3" or tv == "EnumItem" then
-                lines[#lines + 1] = tostring(k) .. " = " .. tostring(v)
-                if tv == "number" then brief[#brief + 1] = tostring(k) .. "=" .. tostring(v) end
-            elseif tv == "function" then
-                local f = v
-                local rec = patched[mod]
-                if rec and k == "aimDirection" then f = rec.orig end
-                lines[#lines + 1] = tostring(k) .. " = function"
-                if gc then
-                    local okC, cs = pcall(gc, f)
-                    if okC and type(cs) == "table" then
-                        local ns = {}
-                        for _, c in ipairs(cs) do
-                            if type(c) == "number" or (type(c) == "string" and #c < 24) then ns[#ns + 1] = tostring(c) end
-                            if #ns >= 40 then break end
-                        end
-                        lines[#lines + 1] = "  konstanta: " .. table.concat(ns, ", ")
-                        local nn = {}
-                        for _, c in ipairs(cs) do if type(c) == "number" then nn[#nn + 1] = tostring(c) end if #nn >= 8 then break end end
-                        if #nn > 0 then brief[#brief + 1] = tostring(k) .. "(" .. table.concat(nn, ",") .. ")" end
-                    end
-                end
-            elseif tv == "table" then
-                lines[#lines + 1] = tostring(k) .. " = table"
-            end
-        end
-        table.sort(lines)
-        if writefile then pcall(writefile, BASE .. "pistol_dump.txt", table.concat(lines, "\n")) end
-        local out = table.concat(brief, "  ")
-        if #out > 420 then out = out:sub(1, 420) .. "..." end
-        return ("Dump: %d baris (file pistol_dump.txt). %s"):format(#lines, out ~= "" and out or "ga ada angka kebaca")
-    end
     S.saRestore = function()
         for mod, rec in pairs(patched) do
             pcall(function() if mod.aimDirection == rec.wrapper then mod.aimDirection = rec.orig end end)
@@ -4068,7 +4016,6 @@ xpcall(function()
     cFV:Toggle("FV_On", "Fast Vault", false, function(v) FV.on = v end)
     -- Perfect Vault: spoof lari (speed + arah) biar karakter selalu lompat kayak perfect vault, animasi asli dibiarin jalan
     cFV:Toggle("FV_Perfect", "Perfect Vault (lompat)", false, function(v) FV.perfect = v end)
-    cFV:Label("Butuh log remote fastvault kalau status belum siap.")
 
     task.spawn(function()
         local rs = game:GetService("ReplicatedStorage")
@@ -4467,7 +4414,6 @@ end)
 cView:Slider("FOV_Val", "FOV", 30, 120, 70, 1, function(v) S.fov.val = v end)
 cView:Toggle("AR_On", "Rasio layar custom", false, function(v) S.ar.on = v end)
 cView:Slider("AR_Val", "Rasio layar", 0.3, 1.5, 0.75, 0.05, function(v) S.ar.ratio = v end)
-cView:Label("Kecil = melebar, besar = tinggi.")
 cView:Dropdown("AR_Tpl", "Template rasio", {"Pilih template", "Normal (1.00)", "Stretch ringan (0.85)", "4:3 stretch (0.75)", "Stretch sedang (0.65)", "Stretch berat (0.55)", "Gepeng banget (0.45)", "Tinggi / renggang (1.25)"}, "Pilih template", function(v)
     local n = tonumber(string.match(tostring(v), "%(([%d%.]+)%)"))
     local r = Reg["AR_Val"]
@@ -5085,7 +5031,7 @@ xpcall(function()
 
     cKE:Toggle("KE_Stalk", "Auto Stalk", false, function(v)
         KE.stalk = v
-        if v and not stalkRemote() then notify("Auto Stalk", "remote StartStalking ga ada di build ini (cek Dump info)") end
+        if v and not stalkRemote() then notify("Auto Stalk", "remote StartStalking ga ada di build ini") end
     end)
     cKE:Slider("KE_StalkRange", "Jarak stalk", 50, 400, 150, 10, function(v) KE.stalkRange = v end, "m")
     cKE:Toggle("KE_CP", "Counter Auto Parry", false, function(v)
@@ -5881,7 +5827,7 @@ xpcall(function()
             setLbl(apLbl, (goalKind == "gen" and "Status: memperbaiki generator" or "Status: membuka exit gate") .. via)
         else
             hum:MoveTo(hrp.Position)
-            setLbl(apLbl, "Status: tombol action ga kepencet di " .. goalInst.Name .. " (cek Dump info)")
+            setLbl(apLbl, "Status: tombol action ga kepencet di " .. goalInst.Name .. "")
         end
     end
 
@@ -5987,102 +5933,6 @@ xpcall(function()
         end
     end
 
-    -- ===== Dump info game: ngumpulin struktur GUI/objek/remote buat ngecek fitur yang ga jalan =====
-    local function dumpInfo()
-        local out = {}
-        local function add(t) out[#out + 1] = t end
-        local function attrs(o)
-            local t = {}
-            for k, v in pairs(o:GetAttributes()) do t[#t + 1] = k .. "=" .. tostring(v) end
-            return #t > 0 and (" {" .. table.concat(t, ", ") .. "}") or ""
-        end
-        local function tree(o, depth, maxd, budget, filter)
-            if budget.n <= 0 then return end
-            budget.n = budget.n - 1
-            local extra = ""
-            if o:IsA("ProximityPrompt") then
-                extra = (" [PP action='%s' obj='%s' hold=%s en=%s dist=%s]"):format(o.ActionText, o.ObjectText,
-                    tostring(o.HoldDuration), tostring(o.Enabled), tostring(o.MaxActivationDistance))
-            elseif o:IsA("ValueBase") then
-                extra = " = " .. tostring(o.Value)
-            end
-            add(("  "):rep(depth) .. o.Name .. " <" .. o.ClassName .. ">" .. extra .. attrs(o))
-            if depth < maxd then
-                for _, c in ipairs(o:GetChildren()) do
-                    if not filter or filter(c) then tree(c, depth + 1, maxd, budget, filter) end
-                end
-            end
-        end
-        add("== ENV ==")
-        add(("executor=%s getconnections=%s firesignal=%s fireproximityprompt=%s getfenv=%s setclipboard=%s"):format(
-            tostring(EXEC), tostring(getconnections ~= nil), tostring(firesignal ~= nil),
-            tostring(fireproximityprompt ~= nil), tostring(getfenv ~= nil), tostring(setclipboard ~= nil)))
-        local _, playing, why = pcall(inMatch)
-        add("role=" .. tostring(roleOf(lp)) .. " spectator=" .. tostring(isSpectator(lp)) .. " inMatch=" .. tostring(playing) .. " (" .. tostring(why) .. ")")
-        add("team=" .. (lp.Team and lp.Team.Name or "nil") .. attrs(lp))
-        if lp.Character then add("char" .. attrs(lp.Character)) end
-        add("generators=" .. (function() local n = 0 for _ in pairs(found.generator) do n = n + 1 end return n end)())
-        add("== GUI ==")
-        local SIGS = {"MouseButton1Down", "MouseButton1Up", "MouseButton1Click", "Activated"}
-        for _, g in ipairs(pg:GetChildren()) do
-            if g:IsA("ScreenGui") then
-                local isMob = g.Name:lower():find("mob", 1, true) ~= nil
-                add(g.Name .. " Enabled=" .. tostring(g.Enabled))
-                local root = isMob and g or g:FindFirstChild("Controls")
-                if root then
-                    for _, b in ipairs(root:GetDescendants()) do
-                        if b:IsA("GuiButton") then
-                            local parts = {}
-                            if getconnections then
-                                for _, sn in ipairs(SIGS) do
-                                    local ok, cs = pcall(getconnections, b[sn])
-                                    if ok and #cs > 0 then
-                                        local names = {}
-                                        for _, c in ipairs(cs) do
-                                            local okS, sc = pcall(function() return getfenv(c.Function).script end)
-                                            names[#names + 1] = (okS and sc and sc.Name) or "?"
-                                        end
-                                        parts[#parts + 1] = sn .. "=" .. table.concat(names, "/")
-                                    end
-                                end
-                            end
-                            add(("  btn %s vis=%s %s"):format((b:GetFullName():gsub("^.*PlayerGui%.", "")), tostring(b.Visible), table.concat(parts, " ")))
-                        end
-                    end
-                end
-            end
-        end
-        local lh = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
-        for _, cat in ipairs({"generator", "pallet", "gate"}) do
-            add("== " .. cat:upper() .. " terdekat ==")
-            local best, bd = nil, math.huge
-            for i in pairs(found[cat]) do
-                if i.Parent then
-                    local ps = posOf(i)
-                    local d = (ps and lh) and (ps - lh.Position).Magnitude or 0
-                    if d < bd then best, bd = i, d end
-                end
-            end
-            if best then
-                add(best:GetFullName() .. " jarak=" .. math.floor(bd))
-                tree(best, 0, 3, {n = 60})
-            else
-                add("(ga ketemu)")
-            end
-        end
-        add("== REMOTES ==")
-        local rsv = game:GetService("ReplicatedStorage")
-        local rr = rsv:FindFirstChild("Remotes")
-        tree(rr or rsv, 0, 3, {n = 150}, function(c)
-            return c:IsA("Folder") or c:IsA("RemoteEvent") or c:IsA("RemoteFunction") or c:IsA("BindableEvent")
-        end)
-        local text = table.concat(out, "\n")
-        if writefile then pcall(writefile, BASE .. "jin_dump.txt", text) end
-        if setclipboard then pcall(setclipboard, text) end
-        warn("[jin] dump:\n" .. text)
-        notify("Dump info", (setclipboard and "udah di-copy" or "ga ada setclipboard") .. (writefile and ", file: " .. BASE .. "jin_dump.txt" or ""))
-    end
-
     -- ===== UI =====
     local cAP = tSv:Group("Auto Play (survivor)", 1)
     apLbl = cAP:Label("Status: mati")
@@ -6099,31 +5949,6 @@ xpcall(function()
     cMW:Slider("MW_Freq", "Kecepatan ayun", 3, 16, 8, 1, function(v) X.mw.freq = v end, "Hz")
     cMW:Slider("MW_Smooth", "Kehalusan putar", 6, 30, 14, 1, function(v) X.mw.smooth = v end)
     cMW:Label("TAHAN tombol ↑↓ buat moonwalk, lepas = balik normal. Mau pindahin tombol: nyalain Mode geser, geser, matiin lagi.")
-    local cDbg = tMs:Group("Debug", 2)
-    cDbg:Button("Dump info game (copy + file)", function()
-        local ok, e = pcall(dumpInfo)
-        if not ok then notify("Dump info", "error: " .. tostring(e):sub(1, 60)) end
-    end)
-    cDbg:Label("Kalo ada fitur ga jalan: tekan pas lagi di match, lalu paste hasilnya ke chat.")
-    local profLbl = cDbg:Label("Profiler: mati. Tekan tombol di atas, main (kejar/parry) 10-20 dtk, terus liat angkanya.")
-    cDbg:Button("Profiler FPS: nyalain / matiin", function()
-        local pr = RS.prof
-        pr.on = not pr.on
-        pr.d = {}
-        profLbl.Text = pr.on and "Profiler: nyala, ngumpulin data..." or "Profiler: mati"
-    end)
-    RS.prof.report = function()
-        local pr, rows = RS.prof, {}
-        for nm, r in pairs(pr.d) do rows[#rows + 1] = {nm = nm, sum = r.sum, max = r.max, n = r.n} end
-        pr.d = {}
-        table.sort(rows, function(a, b) return a.sum > b.sum end)
-        local out = {}
-        for i = 1, math.min(#rows, 8) do
-            local r = rows[i]
-            out[i] = ("%s: %.1f ms/dtk, puncak %.1f ms, %dx"):format(r.nm, r.sum, r.max, r.n)
-        end
-        profLbl.Text = #out > 0 and ("Profiler (ms per detik, makin gede makin berat)\n" .. table.concat(out, "\n")) or "Profiler: belum ada data"
-    end
     X.mw.btn = true
     mwBtnBuild()
 
@@ -6406,7 +6231,6 @@ local cleanup
 local cUI = tSet:Group("Tampilan", 1)
 cUI:Dropdown("UI_Size", "Ukuran", {"Kecil", "Sedang", "Besar", "Jumbo"}, "Sedang", function(v) curSize = v applyLayout() end)
 cUI:Dropdown("UI_Ratio", "Rasio", {"4:3", "16:10", "16:9", "21:9"}, "16:9", function(v) curRatio = v applyLayout() end)
-cUI:Label("4:3 = tinggi, 21:9 = lebar dan gepeng.")
 cUI:Dropdown("UI_Theme", "Tema", {"Gelap", "Terang"}, "Gelap", function(v) applyTheme(v == "Terang" and "light" or "dark") end)
 cUI:Toggle("UI_AccentOn", "Warna aksen custom (indikator tab aktif)", false,
     function(v)
@@ -6417,7 +6241,6 @@ cUI:Toggle("UI_AccentOn", "Warna aksen custom (indikator tab aktif)", false,
         S.ui.accent = c
         if selectTab and S.selTab then selectTab(S.selTab) end
     end})
-cUI:Label("Mati = indikator tab ikut warna teks (putih pas gelap, item pas terang). Nyala = pake warna pilihanmu.")
 local cMenu = tSet:Group("Menu", 2)
 cMenu:Button("Reset config", function()
     local p = findFile(CFG_FILE)
