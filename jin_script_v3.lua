@@ -6,10 +6,10 @@ local SHEET_FILE  = "jin_icons.png"
 local SOCIAL_ID   = ""
 local SOCIAL_FILE = "jin_social.png"
 local LINKS = {
-    YouTube  = "",
-    TikTok   = "",
-    WhatsApp = "",
-    Discord  = "",
+    YouTube  = "", -- belum ada, sengaja dikosongin dulu
+    TikTok   = "https://www.tiktok.com/@_0nlylorenx?_r=1&_t=ZS-9BiflwSpVDz",
+    WhatsApp = "https://whatsapp.com/channel/0029VbDpUFJ9hXFEUASkt223",
+    Discord  = "https://discord.gg/Te259cd2b",
     -- folder aset di GitHub (raw), akhiran "/". Contoh: "https://raw.githubusercontent.com/USER/REPO/BRANCH/assets/"
     -- aset yang belum ada di folder executor diunduh dari sini (nama file = ICON_FILE / SHEET_FILE / SOCIAL_FILE di atas)
     AssetBase = "https://raw.githubusercontent.com/jinscript-hub/JinScript-ViolenceDistrict/main/assets/",
@@ -1557,7 +1557,7 @@ local chip = new("Frame", {Size = UDim2.fromOffset(0, 16), AutomaticSize = Enum.
     BackgroundColor3 = T.sel, BorderSizePixel = 0, LayoutOrder = 2}, hl)
 round(chip, 8)
 pad(chip, 7, 0, 7, 0)
-local ver = mkLabel(chip, "v4.8", 9, T.dim, F_BOLD, CENTER)
+local ver = mkLabel(chip, "v1 Beta", 9, T.dim, F_BOLD, CENTER)
 ver.Size = UDim2.fromOffset(0, 16); ver.AutomaticSize = Enum.AutomaticSize.X
 local closeBtn = new("TextButton", {Size = UDim2.fromOffset(24, 24), AnchorPoint = Vector2.new(1, 0.5),
     Position = UDim2.new(1, -8, 0.5, -1), BackgroundTransparency = 1, Text = "", AutoButtonColor = false}, header)
@@ -2022,7 +2022,7 @@ do
     local kV, kC, kI = tKill:Sub("Veil"), tKill:Sub("Combat"), tKill:Sub("Info")
     tKill.route = {
         ["Silent Veil (tombak)"] = kV, ["Veil lock"] = kV, ["Veil kalibrasi (lanjutan)"] = kV,
-        ["Killer extras"] = kC, ["Auto break pallet"] = kC, ["Auto attack"] = kC,
+        ["Killer extras"] = kC,
         ["Prediksi killer berikutnya"] = kI, default = kC,
     }
     local mV, mP, mF = tMisc:Sub("View"), tMisc:Sub("Performa"), tMisc:Sub("Fun")
@@ -4494,8 +4494,9 @@ do
     --   kecepatan = clamp(lama charge * 165, 1, 165) stud/dtk, gravitasi 98.1, tombak muncul di Origin + arah * 3, umur maks 4 dtk.
     -- Server yang menggerakkan tombak, jadi yang bisa diatur cuma arah awal (dan ViewDelay). Pilih survivor TERDEKAT di dalam POV
     -- yang kejangkau, hitung lengkungan (rendah, kalau ketutup tembok coba lob tinggi). Kalau EmpoweredSpear aktif (efek muncul) tembok diabaikan.
-    -- ASUMSI (belum dites): server nerima Direction yang beda dari arah kamera, dan ViewDelay target boleh dipakai.
-    -- Kalau ditolak, "Hasil lemparan" nulis DITOLAK.
+    -- TERVERIFIKASI di game 2026-11-26: server NERIMA Direction yang beda dari arah kamera asli (user sengaja melesetin arah,
+    -- tetep KENA lewat Silent Veil, termasuk dari jarak ~278 stud). ViewDelay belum kekonfirmasi kepake atau nggak (server ga
+    -- pernah nolak lemparan sejauh ini, jadi belum ketahuan apa ViewDelay yang nentuin atau bukan). Kalau ditolak, "Hasil lemparan" nulis DITOLAK.
     S.sv = {on = false, angle = 70, range = 600, cur = nil, shift = false}
     local SV = S.sv
     local SPEED_MAX, GRAV, SPAWN, MAXLIFE = 165, 98.1, 3, 4
@@ -4896,12 +4897,11 @@ do
             return rs:WaitForChild("Remotes", 15):WaitForChild("Killers", 15):WaitForChild("Veil", 15):WaitForChild("SpearState", 15)
         end)
         if not (ok and re) then return end
-        -- Log spy 2026-11-26 (2 lemparan asli): "stop" payload punya field Impact (boolean, true=kena), BUKAN "Reason" kayak yang
-        -- ditebak sebelumnya (Reason ga kelihatan sama sekali di log, kemungkinan field itu ga ada di build ini). Payload "stop" juga
-        -- ga nunjukin field Source di log (beda sama "launch"/"cooldown" yang jelas-jelas punya Source) -- jadi cek
-        -- "data.Source == lp.Character" di bawah kemungkinan BIKIN LABEL HASIL GA PERNAH KEUPDATE kalau Source emang ga ada di "stop".
-        -- Difilter longgarin: Sequence udah match lastSeq (dicek di atas) = udah cukup buat mastiin ini lemparan kita sendiri, jadi
-        -- Source cuma dipake kalau ADA, bukan syarat wajib. Field Reason tetep dipake sebagai fallback kalau ternyata ada.
+        -- Log spy 2026-11-26 sesi 2 (3 lemparan, KENA bukti nyata lewat Part=Right Arm/Torso): "Impact" SALAH DIBACA di versi
+        -- sebelumnya. Di 3 lemparan yang KETERBUKTI kena (ada Part, tubuh survivor), "Impact" tetep false di ketiganya. Jadi
+        -- Impact BUKAN penanda kena-survivor (artinya belum jelas -- mungkin "kena tembok/dunia", belum ada contoh wall buat mastiin).
+        -- Penanda yang BENERAN jelas: Reason=="hit" muncul di ketiga lemparan itu, dibarengi field Part (BasePart tubuh survivor).
+        -- Source juga ADA di payload "stop" sesi ini (beda sama sesi 1 yang ga nampilin Source -- mungkin cuma kepotong serializer lama).
         track(re.OnClientEvent:Connect(function(kind, data)
             if type(data) ~= "table" or not lastSeq or data.Sequence ~= lastSeq then return end
             if kind == "reject" then
@@ -4912,14 +4912,19 @@ do
                     svResult("Hasil lemparan: DITOLAK server (arah beda dari kamera?)")
                 end
             elseif kind == "stop" and (data.Source == nil or data.Source == lp.Character) then
-                local hit = data.Impact == true
+                local hit = data.Reason == "hit"
                 local txt
                 if hit then
-                    txt = "KENA survivor"
+                    local partNm = typeof(data.Part) == "Instance" and data.Part.Name or nil
+                    txt = partNm and ("KENA survivor (" .. partNm .. ")") or "KENA survivor"
+                elseif data.Reason == "wall" then
+                    txt = "kena TEMBOK"
+                elseif data.Reason == "expired" then
+                    txt = "kadaluarsa"
                 elseif type(data.Reason) == "string" then
-                    txt = data.Reason == "wall" and "kena TEMBOK" or data.Reason == "expired" and "kadaluarsa" or data.Reason
+                    txt = data.Reason
                 else
-                    txt = "meleset"
+                    txt = "meleset (status ga dikenali)"
                 end
                 if not hit and typeof(data.Position) == "Vector3" and lastTarget and lastTarget.Parent then
                     txt = txt .. (", %d stud dari target"):format(math.floor((data.Position - lastTarget.Position).Magnitude))
@@ -4973,11 +4978,8 @@ end
 
 xpcall(function()
     -- ===== Killer Extras (diadaptasi dari HANX) =====
-    -- Remote StartStalking ada & anim counter parry kebaca (scan 2026-11-25). Argumen asli StartStalking dan efek counter parry ke server belum diverifikasi.
     local KE = {
         stalk = false, stalkRange = 150, stalkLast = 0, stalkHold = false, stalkWarnT = 0,
-        cp = false, cpDist = 15, cpThread = nil, cpTrack = nil,
-        cpAnim = "rbxassetid://117042998468241",
         nsd = false,
     }
     S.ke = KE
@@ -5064,47 +5066,6 @@ xpcall(function()
         pcall(function() hold:FireServer(true) end)
     end))
 
-    -- Counter Auto Parry: mainkan animasi pendek kalau ada survivor dalam jarak.
-    local function cpStop()
-        KE.cp = false
-        if KE.cpTrack then
-            pcall(function() KE.cpTrack:Stop() end)
-            KE.cpTrack = nil
-        end
-    end
-
-    local function cpStart()
-        if KE.cpThread then return end
-        KE.cpThread = task.spawn(function()
-            while running and KE.cp do
-                local ch = lp.Character
-                local hum = ch and ch:FindFirstChildOfClass("Humanoid")
-                local animator = hum and hum:FindFirstChildOfClass("Animator")
-                local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
-                if roleOf(lp) == "killer" and animator and hrp then
-                    if not KE.cpTrack then
-                        local ok, tr = pcall(function()
-                            local a = Instance.new("Animation")
-                            a.AnimationId = KE.cpAnim
-                            return animator:LoadAnimation(a)
-                        end)
-                        if ok then KE.cpTrack = tr end
-                    end
-                    if KE.cpTrack and nearestSurvivor(hrp.Position, KE.cpDist, 0) then
-                        pcall(function()
-                            KE.cpTrack:Play()
-                            KE.cpTrack:AdjustWeight(0)
-                        end)
-                        task.wait(0.05)
-                        pcall(function() KE.cpTrack:Stop() end)
-                    end
-                end
-                task.wait(0.3)
-            end
-            KE.cpThread = nil
-        end)
-    end
-
     -- No Slowdown: naikkan WalkSpeed ke minimal 16 selagi role Killer.
     task.spawn(function()
         while running do
@@ -5122,23 +5083,17 @@ xpcall(function()
         if not v then stalkRelease() end
     end)
     cKE:Slider("KE_StalkRange", "Jarak stalk", 50, 400, 150, 10, function(v) KE.stalkRange = v end, "m")
-    cKE:Toggle("KE_CP", "Counter Auto Parry", false, function(v)
-        KE.cp = v
-        if v then cpStart() else cpStop() end
-    end)
-    cKE:Slider("KE_CPDist", "Jarak counter parry", 5, 30, 15, 1, function(v) KE.cpDist = v end, "m")
     cKE:Toggle("KE_NSD", "No Slowdown Killer", false, function(v) KE.nsd = v end)
     cKE:Label("Fitur ini cuma aktif pas role lo Killer.")
 
     S.keRestore = function()
         KE.stalk, KE.nsd = false, false
         stalkRelease()
-        cpStop()
     end
 end, function(e) warn("[jin] Killer Extras gagal dipasang: " .. tostring(e)) end)
 
 xpcall(function()
-    -- ===== Jin Extras: Auto Play, Moonwalk, Speed Boost, Auto Break Pallet, Auto Attack, Crosshair =====
+    -- ===== Jin Extras: Auto Play, Moonwalk, Speed Boost, Crosshair =====
     -- Ditulis ulang dari nol (bukan salinan script lain). Tidak ada nama remote yang dipakai:
     -- interaksi lewat ProximityPrompt yang dicari saat runtime. BELUM diuji di game.
     -- Semua toggle input-producing sengaja TIDAK disimpan di config (selalu mati saat script dimuat).
@@ -5146,8 +5101,6 @@ xpcall(function()
     local X = {
         sb = {on = false, pct = 15},
         mw = {latch = false, held = false, rot = false, btn = true, pos = nil, move = false, yaw = nil, t = 0, swing = 28, freq = 8, smooth = 14},
-        bp = {on = false, radius = 8, cd = 1.2, last = 0},
-        aa = {on = false, range = 10, count = 1, delay = 0.1, cd = 0.8, last = 0, method = "Auto"},
         ap = {on = false, active = false, sprint = true, sprT = 0, sprN = 0, walkAt = 0, dest = nil, computing = false, wpsGoal = nil, btn = nil, btnWho = nil, mode = "work", btnT = 0, btnProg = 0, faced = nil, gateT = nil, fleeUntil = 0, fleePt = nil, fleeAt = 0, fleeVec = nil, goalInst = nil, goalKind = nil, flee = 45, goal = nil, wps = nil, wi = 2, pathAt = 0, held = nil, thread = nil, lastPos = nil, lastCheck = 0, heal = false},
         ch = {on = false, style = "Plus", size = 12, thick = 2, gap = 4, ox = 0, oy = 0, color = "Putih"},
     }
@@ -5517,132 +5470,6 @@ xpcall(function()
             end
         end
     end))
-
-    -- ===== Auto Break Pallet (Killer) =====
-    local bpLbl
-    local clickOnce
-    task.spawn(function()
-        while running do
-            task.wait(0.25)
-            local bp = X.bp
-            if bp.on and myRole() == "killer" and os.clock() - bp.last >= bp.cd then
-                local ch, hum, hrp = myChar()
-                if hrp then
-                    local target, targetPrompt, bestD = nil, nil, math.huge
-                    local note, fallbackT = nil, nil
-                    for inst in pairs(found.pallet) do
-                        if inst.Parent then
-                            local pos = posOf(inst)
-                            if pos then
-                                local d = (pos - hrp.Position).Magnitude
-                                if d <= bp.radius + 3 and d < bestD then
-                                    local okD, down = pcall(palletDown, inst)
-                                    if okD and down then
-                                        local p = pickPrompt(inst, {"break", "destroy", "hancur", "rusak"})
-                                        if p then
-                                            local pp = posOf(p.Parent) or pos
-                                            local dp = (pp - hrp.Position).Magnitude
-                                            if dp <= math.min(bp.radius, p.MaxActivationDistance + 1) then
-                                                target, targetPrompt, bestD = inst, p, d
-                                            end
-                                        else
-                                            note = "pallet jatuh, prompt break ga ketemu"
-                                            fallbackT = inst
-                                        end
-                                    end
-                                end
-                            end
-                        end
-                    end
-                    if targetPrompt then
-                        bp.last = os.clock()
-                        pressPrompt(targetPrompt)
-                        setLbl(bpLbl, "Status: break dikirim ke " .. target.Name)
-                    elseif fallbackT then
-                        bp.last = os.clock()
-                        local used = clickOnce()
-                        setLbl(bpLbl, used and ("Status: pallet dihancurin via " .. used) or "Status: pallet jatuh, ga ada input yang jalan")
-                    elseif note then
-                        setLbl(bpLbl, "Status: " .. note)
-                    end
-                end
-            end
-        end
-    end)
-
-    -- ===== Auto Attack (Killer) =====
-    local aaLbl
-    local aaRP = RaycastParams.new()
-    aaRP.FilterType = Enum.RaycastFilterType.Exclude
-
-    clickOnce = function()
-        local m = X.aa.method
-        if m == "Auto" or m == "Tombol HP" then
-            local b = findMobBtn({"attack", "attak", "slash", "swing", "hit", "action"})
-            if b then
-                local n, who = btnFire(b, "Tap")
-                if n > 0 then return "tombol " .. b.Name .. " (" .. who .. ")" end
-            end
-        end
-        if m == "Auto" or m == "Tool" then
-            local ch = lp.Character
-            local tool = ch and ch:FindFirstChildOfClass("Tool")
-            if tool and pcall(function() tool:Activate() end) then return "Tool " .. tool.Name end
-        end
-        if (m == "Auto" or m == "mouse1click") and mouse1click then
-            if pcall(mouse1click) then return "mouse1click" end
-        end
-        if m == "Auto" or m == "VirtualInput" then
-            local ok = pcall(function()
-                local vim = game:GetService("VirtualInputManager")
-                local vp = workspace.CurrentCamera.ViewportSize
-                vim:SendMouseButtonEvent(vp.X / 2, vp.Y / 2, 0, true, game, 0)
-                vim:SendMouseButtonEvent(vp.X / 2, vp.Y / 2, 0, false, game, 0)
-            end)
-            if ok then return "VirtualInput" end
-        end
-        return nil
-    end
-
-    task.spawn(function()
-        while running do
-            task.wait(0.1)
-            local aa = X.aa
-            if aa.on and myRole() == "killer" and os.clock() - aa.last >= aa.cd then
-                local ch, hum, hrp = myChar()
-                if hrp then
-                    local look = hrp.CFrame.LookVector
-                    local tgt, tgtD = nil, math.huge
-                    for _, pl in ipairs(Players:GetPlayers()) do
-                        if pl ~= lp and pl.Character and not isSpectator(pl) and roleOf(pl) ~= "killer" then
-                            local th = pl.Character:FindFirstChild("HumanoidRootPart")
-                            local thum = pl.Character:FindFirstChildOfClass("Humanoid")
-                            if th and thum and thum.Health > 0 then
-                                local off = th.Position - hrp.Position
-                                local d = off.Magnitude
-                                if d > 0.1 and d <= aa.range and d < tgtD and off.Unit:Dot(look) > 0.2 then
-                                    aaRP.FilterDescendantsInstances = {ch, pl.Character}
-                                    if not workspace:Raycast(hrp.Position, off, aaRP) then
-                                        tgt, tgtD = pl, d
-                                    end
-                                end
-                            end
-                        end
-                    end
-                    if tgt then
-                        aa.last = os.clock()
-                        local used = nil
-                        for i = 1, aa.count do
-                            if not (running and aa.on) then break end
-                            used = clickOnce() or used
-                            if i < aa.count then task.wait(aa.delay) end
-                        end
-                        setLbl(aaLbl, used and ("Status: serang via " .. used) or "Status: ga ada metode input yang jalan")
-                    end
-                end
-            end
-        end
-    end)
 
     -- ===== Auto Play (Survivor): generator terdekat -> repair -> exit gate, menghindar kalau Killer dekat =====
     local ap = X.ap
@@ -6082,21 +5909,6 @@ xpcall(function()
     X.mw.btn = true
     mwBtnBuild()
 
-    local cBP = tKl:Group("Auto break pallet", 1)
-    bpLbl = cBP:Label("Status: mati")
-    cBP:Toggle("BP_On", "Auto break pallet", false, function(v) X.bp.on = v end)
-    cBP:Slider("BP_Radius", "Radius (maks jarak prompt)", 3, 20, 8, 1, function(v) X.bp.radius = v end, "m")
-    cBP:Slider("BP_CD", "Cooldown", 0.5, 3, 1.2, 0.1, function(v) X.bp.cd = v end, "s")
-
-    local cAA = tKl:Group("Auto attack", 2)
-    aaLbl = cAA:Label("Status: mati")
-    cAA:Toggle("AA_On", "Auto attack", false, function(v) X.aa.on = v end)
-    cAA:Slider("AA_Range", "Jarak serang", 5, 30, 10, 1, function(v) X.aa.range = v end, "m")
-    cAA:Slider("AA_Count", "Jumlah serang per pemicu", 1, 3, 1, 1, function(v) X.aa.count = v end)
-    cAA:Slider("AA_Delay", "Jeda antar serang", 0.05, 1, 0.1, 0.05, function(v) X.aa.delay = v end, "s")
-    cAA:Slider("AA_CD", "Cooldown", 0.3, 3, 0.8, 0.1, function(v) X.aa.cd = v end, "s")
-    cAA:Dropdown("AA_Method", "Metode input", {"Auto", "Tombol HP", "Tool", "mouse1click", "VirtualInput"}, "Auto", function(v) X.aa.method = v end)
-
     local cSB = tMs:Group("Speed boost", 1)
     cSB:Toggle("SB_On", "Speed Boost", false, function(v) X.sb.on = v end)
     cSB:Slider("SB_Pct", "Tambahan kecepatan", 5, 100, 15, 5, function(v) X.sb.pct = v end, "%")
@@ -6114,12 +5926,12 @@ xpcall(function()
 
     mwReg = Reg["MW_On"]
     -- toggle yang menghasilkan input / gerak tidak ikut disimpan di config
-    for _, id in ipairs({"AP_On", "MW_On", "MW_Move", "BP_On", "AA_On", "SB_On"}) do
+    for _, id in ipairs({"AP_On", "MW_On", "MW_Move", "SB_On"}) do
         Reg[id] = nil
     end
 
     S.xRestore = function()
-        X.sb.on, X.mw.latch, X.mw.held, X.bp.on, X.aa.on = false, false, false, false, false
+        X.sb.on, X.mw.latch, X.mw.held = false, false, false
         apSet(false)
         chClear()
         mwBtnClear()
@@ -6523,5 +6335,5 @@ loadConfig()
 loading = false
 pcall(refreshDash)
 setOpen(true)
-notify("Jìn Script", "Loaded v4.8")
-warn("[jin] v4.8 loaded (esp anti lag)")
+notify("Jìn Script", "Loaded v1 Beta")
+warn("[jin] v1 Beta loaded")
