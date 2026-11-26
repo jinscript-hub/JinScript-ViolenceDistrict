@@ -4896,6 +4896,12 @@ do
             return rs:WaitForChild("Remotes", 15):WaitForChild("Killers", 15):WaitForChild("Veil", 15):WaitForChild("SpearState", 15)
         end)
         if not (ok and re) then return end
+        -- Log spy 2026-11-26 (2 lemparan asli): "stop" payload punya field Impact (boolean, true=kena), BUKAN "Reason" kayak yang
+        -- ditebak sebelumnya (Reason ga kelihatan sama sekali di log, kemungkinan field itu ga ada di build ini). Payload "stop" juga
+        -- ga nunjukin field Source di log (beda sama "launch"/"cooldown" yang jelas-jelas punya Source) -- jadi cek
+        -- "data.Source == lp.Character" di bawah kemungkinan BIKIN LABEL HASIL GA PERNAH KEUPDATE kalau Source emang ga ada di "stop".
+        -- Difilter longgarin: Sequence udah match lastSeq (dicek di atas) = udah cukup buat mastiin ini lemparan kita sendiri, jadi
+        -- Source cuma dipake kalau ADA, bukan syarat wajib. Field Reason tetep dipake sebagai fallback kalau ternyata ada.
         track(re.OnClientEvent:Connect(function(kind, data)
             if type(data) ~= "table" or not lastSeq or data.Sequence ~= lastSeq then return end
             if kind == "reject" then
@@ -4905,10 +4911,17 @@ do
                 else
                     svResult("Hasil lemparan: DITOLAK server (arah beda dari kamera?)")
                 end
-            elseif kind == "stop" and data.Source == lp.Character then
-                local why = data.Reason
-                local txt = why == "hit" and "KENA survivor" or why == "wall" and "kena TEMBOK" or why == "expired" and "kadaluarsa" or tostring(why)
-                if why ~= "hit" and typeof(data.Position) == "Vector3" and lastTarget and lastTarget.Parent then
+            elseif kind == "stop" and (data.Source == nil or data.Source == lp.Character) then
+                local hit = data.Impact == true
+                local txt
+                if hit then
+                    txt = "KENA survivor"
+                elseif type(data.Reason) == "string" then
+                    txt = data.Reason == "wall" and "kena TEMBOK" or data.Reason == "expired" and "kadaluarsa" or data.Reason
+                else
+                    txt = "meleset"
+                end
+                if not hit and typeof(data.Position) == "Vector3" and lastTarget and lastTarget.Parent then
                     txt = txt .. (", %d stud dari target"):format(math.floor((data.Position - lastTarget.Position).Magnitude))
                 end
                 svResult(("Hasil lemparan #%s: %s"):format(tostring(data.Sequence), txt))
@@ -4962,7 +4975,7 @@ xpcall(function()
     -- ===== Killer Extras (diadaptasi dari HANX) =====
     -- Remote StartStalking ada & anim counter parry kebaca (scan 2026-11-25). Argumen asli StartStalking dan efek counter parry ke server belum diverifikasi.
     local KE = {
-        stalk = false, stalkRange = 150, stalkLast = 0,
+        stalk = false, stalkRange = 150, stalkLast = 0, stalkHold = false, stalkWarnT = 0,
         cp = false, cpDist = 15, cpThread = nil, cpTrack = nil,
         cpAnim = "rbxassetid://117042998468241",
         nsd = false,
@@ -4970,11 +4983,26 @@ xpcall(function()
     S.ke = KE
     local cKE = tKill:Group("Killer extras", 1)
 
-    local function stalkRemote()
+    -- Log spy 2026-11-26 (Stalker asli, 61 entri): client TIDAK PERNAH ngirim StartStalking/UpdateStalking. Yang asli:
+    --   tahan M2 -> StalkHold(true) diulang tiap ~0.52 detik, SATU argumen boolean, TANPA target.
+    --   lepas sebelum selesai -> StalkHold(false) lalu StopStalking() (no-arg), sekali.
+    --   grab/consume -> BasicAttack(true) + ConsumeReady() (no-arg) bareng, dibales server GrabResult(true, char).
+    -- Syarat server buat ConsumeReady belum ketahuan (stalk meter / EvolveStage?), jadi auto-consume BELUM diimplementasi -- berisiko nembak di waktu yang salah. Konsumsi tetap manual (tombol serang/ability2 di game).
+    local function stalkerFolder()
         local r = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
         local k = r and r:FindFirstChild("Killers")
-        local st = k and k:FindFirstChild("Stalker")
-        return st and st:FindFirstChild("StartStalking")
+        return k and k:FindFirstChild("Stalker")
+    end
+    local function stalkRemote(name)
+        local st = stalkerFolder()
+        return st and st:FindFirstChild(name)
+    end
+    local function stalkRelease()
+        if not KE.stalkHold then return end
+        KE.stalkHold = false
+        local hold, stop = stalkRemote("StalkHold"), stalkRemote("StopStalking")
+        pcall(function() if hold then hold:FireServer(false) end end)
+        pcall(function() if stop then stop:FireServer() end end)
     end
 
     local function nearestSurvivor(origin, range, minHp)
@@ -4992,19 +5020,48 @@ xpcall(function()
         return best
     end
 
-    -- Auto Stalk: kirim StartStalking ke survivor terdekat (HP > 30) selagi role kita Killer.
+    -- Killer yang kepilih dibaca dari MorphedKiller/SelectedKiller (char atau player), sama kayak killerKey() di Parry.
+    -- PENTING: remote Stalker.* ADA terus di ReplicatedStorage apapun killer-nya (folder statis per killer), jadi StartStalking
+    -- tetep bisa "terkirim" walau yang kepilih killer lain -> server kemungkinan nolak diam-diam. Makanya Auto Stalk WAJIB cek ini dulu.
+    local function isStalkerKiller()
+        local ch = lp.Character
+        if not ch then return false end
+        for _, a in ipairs({"MorphedKiller", "SelectedKiller"}) do
+            local v = ch:GetAttribute(a) or lp:GetAttribute(a)
+            if type(v) == "string" and v:lower():find("stalk", 1, true) then return true end
+        end
+        return false
+    end
+
+    -- Auto Stalk: tahan StalkHold(true) selagi ada survivor (HP > 30) dalam jarak, role Killer, DAN killer yang kepilih = Stalker.
+    -- Lepas (StalkHold(false)+StopStalking) begitu target ilang atau toggle dimatiin. Interval ~0.52d niru tempo asli di log.
     track(RS.Heartbeat:Connect(function()
-        if not KE.stalk or roleOf(lp) ~= "killer" then return end
+        if not KE.stalk or roleOf(lp) ~= "killer" or not isStalkerKiller() then
+            if KE.stalk and os.clock() - KE.stalkLast > 4 and roleOf(lp) == "killer" then
+                KE.stalkLast = os.clock()
+                notify("Auto Stalk", "killer yang kepilih bukan Stalker, remote ga dikirim")
+            end
+            stalkRelease()
+            return
+        end
         local now = os.clock()
-        if now - KE.stalkLast < 0.35 then return end
         local hrp = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
-        if not hrp then return end
-        local target = nearestSurvivor(hrp.Position, KE.stalkRange, 30)
-        if not target then return end
-        local rem = stalkRemote()
-        if not rem then return end
-        KE.stalkLast = now
-        pcall(function() rem:FireServer(target) end)
+        local target = hrp and nearestSurvivor(hrp.Position, KE.stalkRange, 30)
+        if not target then
+            stalkRelease()
+            return
+        end
+        if now - KE.stalkLast < 0.5 then return end
+        local hold = stalkRemote("StalkHold")
+        if not hold then
+            if now - (KE.stalkWarnT or 0) > 5 then
+                KE.stalkWarnT = now
+                notify("Auto Stalk", "remote StalkHold ga ketemu di build ini")
+            end
+            return
+        end
+        KE.stalkLast, KE.stalkHold = now, true
+        pcall(function() hold:FireServer(true) end)
     end))
 
     -- Counter Auto Parry: mainkan animasi pendek kalau ada survivor dalam jarak.
@@ -5061,7 +5118,8 @@ xpcall(function()
 
     cKE:Toggle("KE_Stalk", "Auto Stalk", false, function(v)
         KE.stalk = v
-        if v and not stalkRemote() then notify("Auto Stalk", "remote StartStalking ga ada di build ini") end
+        if v and not stalkRemote("StalkHold") then notify("Auto Stalk", "remote StalkHold ga ada di build ini") end
+        if not v then stalkRelease() end
     end)
     cKE:Slider("KE_StalkRange", "Jarak stalk", 50, 400, 150, 10, function(v) KE.stalkRange = v end, "m")
     cKE:Toggle("KE_CP", "Counter Auto Parry", false, function(v)
@@ -5074,6 +5132,7 @@ xpcall(function()
 
     S.keRestore = function()
         KE.stalk, KE.nsd = false, false
+        stalkRelease()
         cpStop()
     end
 end, function(e) warn("[jin] Killer Extras gagal dipasang: " .. tostring(e)) end)
@@ -5089,7 +5148,7 @@ xpcall(function()
         mw = {latch = false, held = false, rot = false, btn = true, pos = nil, move = false, yaw = nil, t = 0, swing = 28, freq = 8, smooth = 14},
         bp = {on = false, radius = 8, cd = 1.2, last = 0},
         aa = {on = false, range = 10, count = 1, delay = 0.1, cd = 0.8, last = 0, method = "Auto"},
-        ap = {on = false, active = false, sprint = true, sprT = 0, sprN = 0, walkAt = 0, dest = nil, computing = false, wpsGoal = nil, btn = nil, btnWho = nil, mode = "work", btnT = 0, btnProg = 0, faced = nil, gateT = nil, fleeUntil = 0, fleePt = nil, fleeAt = 0, fleeVec = nil, goalInst = nil, goalKind = nil, flee = 45, goal = nil, wps = nil, wi = 2, pathAt = 0, held = nil, thread = nil, lastPos = nil, lastCheck = 0},
+        ap = {on = false, active = false, sprint = true, sprT = 0, sprN = 0, walkAt = 0, dest = nil, computing = false, wpsGoal = nil, btn = nil, btnWho = nil, mode = "work", btnT = 0, btnProg = 0, faced = nil, gateT = nil, fleeUntil = 0, fleePt = nil, fleeAt = 0, fleeVec = nil, goalInst = nil, goalKind = nil, flee = 45, goal = nil, wps = nil, wi = 2, pathAt = 0, held = nil, thread = nil, lastPos = nil, lastCheck = 0, heal = false},
         ch = {on = false, style = "Plus", size = 12, thick = 2, gap = 4, ox = 0, oy = 0, color = "Putih"},
     }
     S.x = X
@@ -5735,9 +5794,38 @@ xpcall(function()
         local function safe(p)
             return not k or (p - k.hrp.Position).Magnitude > ap.flee * 1.1
         end
+        -- survivor lain yang kena hit (bukan jatuh/digantung -> itu butuh pickup, bukan heal), dipilih kalau lebih deket dari generator
+        local function nearestInjured(pos)
+            local best, bestD
+            for _, pl in ipairs(Players:GetPlayers()) do
+                if pl ~= lp then
+                    local c = pl.Character
+                    local h = c and c:FindFirstChildOfClass("Humanoid")
+                    local hp = c and c:FindFirstChild("HumanoidRootPart")
+                    if c and h and hp and h.Health > 0 then
+                        local okS, key = pcall(survivorState, pl, c, h, hp, ks)
+                        if okS and key == "injured" and safe(hp.Position) then
+                            local d = (hp.Position - pos).Magnitude
+                            if not bestD or d < bestD then best, bestD = hp, d end
+                        end
+                    end
+                end
+            end
+            return best, bestD
+        end
         local goalInst, goalKind, goalD
         local sticky = ap.goalInst
-        if sticky and sticky.Parent and ap.goalKind == "gen" then
+        if ap.heal and sticky and sticky.Parent and ap.goalKind == "heal" then
+            local okS, key = pcall(survivorState, nil, sticky.Parent, sticky.Parent:FindFirstChildOfClass("Humanoid"), sticky, ks)
+            if okS and key == "injured" and safe(sticky.Position) then
+                goalInst, goalKind, goalD = sticky, "heal", (sticky.Position - hrp.Position).Magnitude
+            end
+        end
+        if not goalInst and ap.heal then
+            local hp, d = nearestInjured(hrp.Position)
+            if hp then goalInst, goalKind, goalD = hp, "heal", d end
+        end
+        if not goalInst and sticky and sticky.Parent and ap.goalKind == "gen" then
             local okG, _, done = pcall(genProgress, sticky)
             local sp = posOf(sticky)
             if okG and not done and sp and safe(sp) then
@@ -5795,7 +5883,9 @@ xpcall(function()
             ap.faced = nil
             apGoTo(hum, hrp, pos)
             apSprint(ch, hrp)
-            setLbl(apLbl, goalKind == "gen" and "Status: menuju generator" or "Status: menuju exit gate")
+            setLbl(apLbl, goalKind == "gen" and "Status: menuju generator"
+                or goalKind == "heal" and ("Status: menuju " .. (goalInst.Parent and goalInst.Parent.Name or "teman"))
+                or "Status: menuju exit gate")
             return
         end
         ap.lastPos = nil
@@ -5821,7 +5911,10 @@ xpcall(function()
                 ap.held = nil
                 pcall(function() p:InputHoldEnd() end)
             end
-            p = pickPrompt(goalInst, goalKind == "gen" and {"repair", "fix", "perbaik"} or {"open", "exit", "buka"})
+            local pwords = goalKind == "gen" and {"repair", "fix", "perbaik"}
+                or goalKind == "heal" and {"heal", "bandage", "rawat"}
+                or {"open", "exit", "buka"}
+            p = pickPrompt(goalInst, pwords)
             if p then
                 ap.held = p
                 if not pcall(function() p:InputHoldBegin() end) then
@@ -5833,6 +5926,8 @@ xpcall(function()
         if not ap.held then
             -- tombol action HP -> handler SurvivorController. Ditekan sekali; ditekan lagi HANYA kalo gen ga lagi diperbaiki
             -- (PlayersRepairingCount = 0, atau progress mandek 3 detik), biar ga ke-toggle bolak-balik.
+            -- heal: BELUM ADA atribut progress yang terverifikasi di scan, jadi cuma ditekan 1x lalu dibiarkan
+            -- sampai target sembuh/ganti/keluar jangkauan. Kalau ternyata harus ditekan ulang, kasih tau buat disesuaikan.
             local b = findMobBtn({"action"})
             if b then
                 local need = ap.btn ~= b
@@ -5854,10 +5949,14 @@ xpcall(function()
         end
         if ap.held or ap.btn then
             local via = ap.btn and (" via tombol " .. ap.btn.Name .. " [" .. tostring(ap.btnWho) .. "]") or ""
-            setLbl(apLbl, (goalKind == "gen" and "Status: memperbaiki generator" or "Status: membuka exit gate") .. via)
+            local base = goalKind == "gen" and "Status: memperbaiki generator"
+                or goalKind == "heal" and ("Status: menyembuhkan " .. (goalInst.Parent and goalInst.Parent.Name or "teman"))
+                or "Status: membuka exit gate"
+            setLbl(apLbl, base .. via)
         else
             hum:MoveTo(hrp.Position)
-            setLbl(apLbl, "Status: tombol action ga kepencet di " .. goalInst.Name .. "")
+            local nm = goalKind == "heal" and (goalInst.Parent and goalInst.Parent.Name or "teman") or goalInst.Name
+            setLbl(apLbl, "Status: tombol action ga kepencet di " .. nm .. "")
         end
     end
 
@@ -5968,8 +6067,9 @@ xpcall(function()
     apLbl = cAP:Label("Status: mati")
     cAP:Toggle("AP_On", "Auto Play", false, function(v) apSet(v) end)
     cAP:Toggle("AP_Sprint", "Lari otomatis (sprint)", true, function(v) ap.sprint = v end)
+    cAP:Toggle("AP_Heal", "Heal teman kena hit (BELUM diverifikasi)", false, function(v) ap.heal = v end)
     cAP:Slider("AP_Flee", "Jarak menghindar Killer", 15, 90, 45, 5, function(v) ap.flee = v end, "m")
-    cAP:Label("Biarkan Skill check (F6) tetap ON supaya repair jalan. Belum ada heal teman.")
+    cAP:Label("Biarkan Skill check (F6) tetap ON supaya repair & heal jalan. Heal: default OFF, baru dites via tombol action + prompt heal/bandage/rawat, belum dikonfirmasi di game.")
 
     local cMW = tMs:Group("Fun menu", 1)
     cMW:Toggle("MW_On", "Moonwalk (nyala terus)", false, function(v) X.mw.latch = v mwSync() end)
