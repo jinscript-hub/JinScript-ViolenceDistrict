@@ -4073,6 +4073,17 @@ xpcall(function()
             if self.isSlidingPallet ~= nil then self.isSlidingPallet = false end
             if self.character then
                 pcall(function() self.character:SetAttribute("vaultspeed", FV.perfect and 1 or 2.0) end)
+                -- EKSPERIMEN (tes 2026-11-26: hook facing 0x, vault 7x): wrapF ga pernah kepanggil, jadi spoof speed=30 ga pernah jalan.
+                -- Di mode perfect, set speed=30 di sini (sebelum animasi vault asli) lalu balikin ke nilai awal. Belum terbukti memperbaiki.
+                if FV.perfect then
+                    local ch, prev = self.character, self.character:GetAttribute("speed")
+                    pcall(function() ch:SetAttribute("speed", 30) end)
+                    task.delay(1.0, function()
+                        if ch and ch.Parent and ch:GetAttribute("speed") == 30 then
+                            pcall(function() ch:SetAttribute("speed", prev) end)
+                        end
+                    end)
+                end
             end
             local res = table.pack(pcall(FV.origV, self, part, true, arg))
             if not res[1] then
