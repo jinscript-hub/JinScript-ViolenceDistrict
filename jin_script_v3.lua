@@ -4014,9 +4014,12 @@ do
 end
 xpcall(function()
     -- ===== Fast Vault (diadaptasi dari HANX) =====
-    -- Hook SurvivorAnimationsController: skip cek arah & animasi vault, lalu kirim remote fastvault.
-    -- Modul SurvivorAnimationsController (2 fungsi yang di-hook) dan remote Window.fastvault TERVERIFIKASI ada lewat scan 2026-11-25. Efek ke server (ada _validateFastVault + VaultCommit/VaultReject) belum dites. Perfect Vault dilaporkan user ga jalan di game (2026-11-26), penyebab belum ketemu; label "Hook vault" di menu nunjukin hook kepanggil atau nggak.
-    local FV = {on = false, perfect = false, hooked = false, nF = 0, nV = 0, mod = nil, remote = nil, wrapF = nil, wrapV = nil, origF = nil, origV = nil}
+    -- Hook SurvivorAnimationsController: _onVaultAnimation (Fast Vault) dan _validateFastVault (Perfect Vault).
+    -- Hasil decompile modul (2026-11-26): _onVaultAnimation manggil _validateFastVault(part, sprinting) -> kalau true, tier "fast" dan animasi
+    -- RunningVaultAnimation/RunningVaultAnimation2 (lompat parkour) + fastvault:FireServer; kalau false, WalkingVaultAnimation. Keputusan dihitung di client
+    -- dari kecepatan/arah/riwayat lari. _isFacingStraightEnough ga pernah dipanggil siapa pun di modul itu, jadi hook-nya dibuang.
+    -- Remote Window.fastvault ada (scan 2026-11-25). Server punya jalur VaultReject, jadi server bisa nolak; Perfect Vault versi _validateFastVault belum dites di game.
+    local FV = {on = false, perfect = false, hooked = false, mod = nil, remote = nil, wrapV = nil, origV = nil, wrapVal = nil, origVal = nil}
     S.fv = FV
     -- tSurv bisa nil di sebagian executor (limit local/upvalue), jadi cari ulang lewat tabList
     local svTab = tSurv
@@ -4026,17 +4029,8 @@ xpcall(function()
     if not svTab then error("tab Survivor ga ketemu") end
     local cFV = svTab:Group("Movement", 2)
     local fvLbl = cFV:Label("Status: nunggu modul vault...")
-    local fvDbg = cFV:Label("Hook vault: belum dipanggil")
-    task.spawn(function()
-        local last
-        while running do
-            task.wait(0.5)
-            local t = ("Hook vault: facing %dx, vault %dx"):format(FV.nF, FV.nV)
-            if t ~= last then last = t fvDbg.Text = t end
-        end
-    end)
     cFV:Toggle("FV_On", "Fast Vault", false, function(v) FV.on = v end)
-    -- Perfect Vault: spoof lari (speed + arah) biar karakter selalu lompat kayak perfect vault, animasi asli dibiarin jalan
+    -- Perfect Vault: paksa _validateFastVault = true ("ready") biar game sendiri milih tier fast + animasi lompat parkour, walau lagi diem/jalan
     cFV:Toggle("FV_Perfect", "Perfect Vault (lompat)", false, function(v) FV.perfect = v end)
 
     task.spawn(function()
@@ -4045,7 +4039,7 @@ xpcall(function()
             return require(rs:WaitForChild("Modules", 10):WaitForChild("Survivors", 10):WaitForChild("SurvivorAnimationsController", 10))
         end)
         if not running then return end
-        if not ok or type(mod) ~= "table" or type(mod._isFacingStraightEnough) ~= "function" or type(mod._onVaultAnimation) ~= "function" then
+        if not ok or type(mod) ~= "table" or type(mod._onVaultAnimation) ~= "function" then
             fvLbl.Text = "Status: modul vault ga ketemu"
             return
         end
@@ -4054,36 +4048,22 @@ xpcall(function()
             rem = rs:WaitForChild("Remotes", 10):WaitForChild("Window", 5):WaitForChild("fastvault", 5)
         end)
         FV.mod, FV.remote = mod, rem
-        FV.origF, FV.origV = mod._isFacingStraightEnough, mod._onVaultAnimation
-
-        FV.wrapF = function(...)
-            local self = (...)
-            if not (FV.on or FV.perfect) then return FV.origF(...) end
-            FV.nF = FV.nF + 1
-            pcall(function()
-                if self.character then self.character:SetAttribute("speed", 30) end
-            end)
-            return true, 0
+        FV.origV = mod._onVaultAnimation
+        if type(mod._validateFastVault) == "function" then
+            FV.origVal = mod._validateFastVault
+            FV.wrapVal = function(self, ...)
+                local ok, reason, extra = FV.origVal(self, ...)
+                if FV.perfect and not ok then return true, "ready", extra end
+                return ok, reason, extra
+            end
         end
 
         FV.wrapV = function(self, part, flag, arg)
             if not (FV.on or FV.perfect) then return FV.origV(self, part, flag, arg) end
-            FV.nV = FV.nV + 1
             if self.isVaulting then return end
             if self.isSlidingPallet ~= nil then self.isSlidingPallet = false end
             if self.character then
                 pcall(function() self.character:SetAttribute("vaultspeed", FV.perfect and 1 or 2.0) end)
-                -- EKSPERIMEN (tes 2026-11-26: hook facing 0x, vault 7x): wrapF ga pernah kepanggil, jadi spoof speed=30 ga pernah jalan.
-                -- Di mode perfect, set speed=30 di sini (sebelum animasi vault asli) lalu balikin ke nilai awal. Belum terbukti memperbaiki.
-                if FV.perfect then
-                    local ch, prev = self.character, self.character:GetAttribute("speed")
-                    pcall(function() ch:SetAttribute("speed", 30) end)
-                    task.delay(1.0, function()
-                        if ch and ch.Parent and ch:GetAttribute("speed") == 30 then
-                            pcall(function() ch:SetAttribute("speed", prev) end)
-                        end
-                    end)
-                end
             end
             local res = table.pack(pcall(FV.origV, self, part, true, arg))
             if not res[1] then
@@ -4123,10 +4103,11 @@ xpcall(function()
             return table.unpack(res, 2, res.n)
         end
 
-        mod._isFacingStraightEnough = FV.wrapF
         mod._onVaultAnimation = FV.wrapV
+        if FV.wrapVal then mod._validateFastVault = FV.wrapVal end
         FV.hooked = true
         fvLbl.Text = rem and "Status: siap" or "Status: siap, tapi remote fastvault ga ketemu"
+        if not FV.wrapVal then fvLbl.Text = "Status: siap, tapi _validateFastVault ga ketemu (Perfect Vault ga jalan)" end
         -- server punya jalur Commit/Reject buat vault (Remotes.Window.VaultReject). Hitung penolakan pas Fast Vault nyala biar user tau kalau server nolak
         pcall(function()
             local rej = rs.Remotes.Window:FindFirstChild("VaultReject")
@@ -4151,7 +4132,7 @@ xpcall(function()
     S.fvRestore = function()
         FV.on, FV.perfect = false, false
         if FV.mod then
-            if FV.mod._isFacingStraightEnough == FV.wrapF then FV.mod._isFacingStraightEnough = FV.origF end
+            if FV.wrapVal and FV.mod._validateFastVault == FV.wrapVal then FV.mod._validateFastVault = FV.origVal end
             if FV.mod._onVaultAnimation == FV.wrapV then FV.mod._onVaultAnimation = FV.origV end
         end
     end
