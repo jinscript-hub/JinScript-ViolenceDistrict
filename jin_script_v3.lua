@@ -4015,8 +4015,8 @@ end
 xpcall(function()
     -- ===== Fast Vault (diadaptasi dari HANX) =====
     -- Hook SurvivorAnimationsController: skip cek arah & animasi vault, lalu kirim remote fastvault.
-    -- Modul SurvivorAnimationsController (2 fungsi yang di-hook) dan remote Window.fastvault TERVERIFIKASI ada lewat scan 2026-11-25. Efek ke server (ada _validateFastVault + VaultCommit/VaultReject) belum dites.
-    local FV = {on = false, perfect = false, hooked = false, mod = nil, remote = nil, wrapF = nil, wrapV = nil, origF = nil, origV = nil}
+    -- Modul SurvivorAnimationsController (2 fungsi yang di-hook) dan remote Window.fastvault TERVERIFIKASI ada lewat scan 2026-11-25. Efek ke server (ada _validateFastVault + VaultCommit/VaultReject) belum dites. Perfect Vault dilaporkan user ga jalan di game (2026-11-26), penyebab belum ketemu; label "Hook vault" di menu nunjukin hook kepanggil atau nggak.
+    local FV = {on = false, perfect = false, hooked = false, nF = 0, nV = 0, mod = nil, remote = nil, wrapF = nil, wrapV = nil, origF = nil, origV = nil}
     S.fv = FV
     -- tSurv bisa nil di sebagian executor (limit local/upvalue), jadi cari ulang lewat tabList
     local svTab = tSurv
@@ -4026,6 +4026,15 @@ xpcall(function()
     if not svTab then error("tab Survivor ga ketemu") end
     local cFV = svTab:Group("Movement", 2)
     local fvLbl = cFV:Label("Status: nunggu modul vault...")
+    local fvDbg = cFV:Label("Hook vault: belum dipanggil")
+    task.spawn(function()
+        local last
+        while running do
+            task.wait(0.5)
+            local t = ("Hook vault: facing %dx, vault %dx"):format(FV.nF, FV.nV)
+            if t ~= last then last = t fvDbg.Text = t end
+        end
+    end)
     cFV:Toggle("FV_On", "Fast Vault", false, function(v) FV.on = v end)
     -- Perfect Vault: spoof lari (speed + arah) biar karakter selalu lompat kayak perfect vault, animasi asli dibiarin jalan
     cFV:Toggle("FV_Perfect", "Perfect Vault (lompat)", false, function(v) FV.perfect = v end)
@@ -4050,6 +4059,7 @@ xpcall(function()
         FV.wrapF = function(...)
             local self = (...)
             if not (FV.on or FV.perfect) then return FV.origF(...) end
+            FV.nF = FV.nF + 1
             pcall(function()
                 if self.character then self.character:SetAttribute("speed", 30) end
             end)
@@ -4058,6 +4068,7 @@ xpcall(function()
 
         FV.wrapV = function(self, part, flag, arg)
             if not (FV.on or FV.perfect) then return FV.origV(self, part, flag, arg) end
+            FV.nV = FV.nV + 1
             if self.isVaulting then return end
             if self.isSlidingPallet ~= nil then self.isSlidingPallet = false end
             if self.character then
